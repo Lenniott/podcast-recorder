@@ -10,8 +10,11 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=3000
+      - NODE_ENV=production
       - DB_PATH=/app/data/rooms.db
       - SECRET=${SECRET}
+      - SITE_PASSWORD=${SITE_PASSWORD}
+      - HTTPS=${HTTPS:-false}   # set to "true" once Nginx + SSL is live
 
 volumes:
   podcast-recorder-data:
