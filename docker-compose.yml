@@ -1,0 +1,16 @@
+services:
+  podcast-recorder:
+    build: .
+    container_name: podcast-recorder
+    restart: unless-stopped
+    ports:
+      - "7799:3000"
+    volumes:
+      - podcast-recorder-data:/app/data
+    environment:
+      - PORT=3000
+      - DB_PATH=/app/data/rooms.db
+      - SECRET=${SECRET}
+
+volumes:
+  podcast-recorder-data:

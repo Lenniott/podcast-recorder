@@ -1,0 +1,19 @@
+# env — never commit secrets
+.env
+
+# SvelteKit build output
+build/
+.svelte-kit/
+
+# Dependencies
+node_modules/
+
+# SQLite database
+data/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
