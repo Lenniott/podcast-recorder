@@ -23,9 +23,8 @@ export async function load({ params, cookies }) {
     throw redirect(303, '/?notfound=1')
   }
 
-  const secret = env.SECRET || 'dev-secret-change-me'
   const token = cookies.get(COOKIE(slug))
-  const authenticated = verifySessionToken(token, slug, room.password_hash, secret)
+  const authenticated = verifySessionToken(token, slug, room.password_hash, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
   return {
@@ -54,13 +53,11 @@ export const actions = {
     }
 
     const valid = await verifyPassword(password, room.password_hash)
-    console.log('[action enter] slug=%s valid=%s', slug, valid)
     if (!valid) {
       return fail(403, { error: 'Wrong password. Try again.', values: { name } })
     }
 
-    const secret = env.SECRET || 'dev-secret-change-me'
-    const token = makeSessionToken(slug, room.password_hash, secret)
+    const token = makeSessionToken(slug, room.password_hash, env.SECRET)
     cookies.set(COOKIE(slug), token, {
       path: '/',
       httpOnly: true,

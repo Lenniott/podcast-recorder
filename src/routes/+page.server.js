@@ -13,7 +13,7 @@ function isSecure() {
 }
 
 function makeSiteToken() {
-  const secret   = env.SECRET        || 'dev-secret-change-me'
+  const secret   = env.SECRET
   const password = env.SITE_PASSWORD || ''
   return createHmac('sha256', secret).update('site:' + password).digest('hex')
 }
@@ -39,9 +39,13 @@ export const actions = {
     const data     = await request.formData()
     const password = String(data.get('password') || '').trim()
 
-    if (password !== env.SITE_PASSWORD) {
-      console.log('[action site_enter] MISMATCH — typed len=%d env len=%d',
-        password.length, (env.SITE_PASSWORD || '').length)
+    const provided = createHmac('sha256', env.SECRET).update('site:' + password).digest('hex')
+    const expected = makeSiteToken()
+    let match = false
+    try {
+      match = timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))
+    } catch { match = false }
+    if (!match) {
       return fail(403, { siteError: 'Wrong password.' })
     }
 

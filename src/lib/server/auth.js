@@ -6,7 +6,9 @@ import { hash as bcryptHash, compare as bcryptCompare } from 'bcryptjs'
 // - Vite dev SSR context (process.env may be set by Vite from .env)
 // Route files that need it pass it in explicitly via $env/dynamic/private.
 function getSecret() {
-  return process.env.SECRET || 'dev-secret-change-me'
+  const secret = process.env.SECRET
+  if (!secret) throw new Error('SECRET environment variable is not set')
+  return secret
 }
 
 export async function hashPassword(password) {
