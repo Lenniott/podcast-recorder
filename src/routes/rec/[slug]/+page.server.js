@@ -4,6 +4,7 @@ import { getRoomBySlug } from '$lib/server/db.js'
 import { verifyPassword, makeSessionToken, verifySessionToken } from '$lib/server/auth.js'
 
 const COOKIE = (slug) => `pr_auth_${slug}`
+const NAME_COOKIE = (slug) => `pr_name_${slug}`
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 
 // Only mark cookies secure when HTTPS is explicitly confirmed.
@@ -31,6 +32,7 @@ export async function load({ params, cookies }) {
     slug,
     roomName: room.name,
     authenticated,
+    participantName: cookies.get(NAME_COOKIE(slug)) || '',
     createdAt: room.created_at
   }
 }
@@ -45,11 +47,16 @@ export const actions = {
 
     const data = await request.formData()
     const password = String(data.get('password') || '')
+    const name = String(data.get('name') || '').trim().slice(0, 50)
+
+    if (!name) {
+      return fail(400, { error: 'Please enter your name.', values: { name } })
+    }
 
     const valid = await verifyPassword(password, room.password_hash)
     console.log('[action enter] slug=%s valid=%s', slug, valid)
     if (!valid) {
-      return fail(403, { error: 'Wrong password. Try again.' })
+      return fail(403, { error: 'Wrong password. Try again.', values: { name } })
     }
 
     const secret = env.SECRET || 'dev-secret-change-me'
@@ -57,6 +64,13 @@ export const actions = {
     cookies.set(COOKIE(slug), token, {
       path: '/',
       httpOnly: true,
+      sameSite: 'lax',
+      maxAge: COOKIE_MAX_AGE,
+      secure: isSecure()
+    })
+    cookies.set(NAME_COOKIE(slug), name, {
+      path: '/',
+      httpOnly: false,
       sameSite: 'lax',
       maxAge: COOKIE_MAX_AGE,
       secure: isSecure()

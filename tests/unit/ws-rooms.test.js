@@ -120,6 +120,7 @@ describe('setupWss — connection handling', () => {
   })
 
   it('clap message includes timestamp and sender name', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
     const ws1 = mockWs()
     wss.connect(ws1, 'room1'); join(ws1, 'Alice', 'c1')
     ws1.emit('message', JSON.stringify({ type: 'clap' }))
@@ -127,6 +128,8 @@ describe('setupWss — connection handling', () => {
     expect(clap.from).toBe('Alice')
     expect(clap.timestamp).toMatch(/^\d{4}-/)
     expect(typeof clap.triggerAtMs).toBe('number')
+    expect(clap.triggerAtMs).toBeGreaterThan(1000)
+    nowSpy.mockRestore()
   })
 
   it('recording_state updates peer and broadcasts to others (not sender)', () => {

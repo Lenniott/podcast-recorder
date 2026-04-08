@@ -7,7 +7,7 @@
 
   function focus(el) { el.focus() }
 
-  export let data   // { slug, roomName, authenticated, createdAt }
+  export let data   // { slug, roomName, authenticated, participantName, createdAt }
   export let form   // action result
 
   // ─── WebSocket state ────────────────────────────────────────────────
@@ -51,8 +51,8 @@
 
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
-  let nameSet = false
   let micLevel = 0
+  const participantNameStorageKey = browser ? `pr_name_${data.slug}` : ''
 
   // Browser capability check — File System Access API is Blink only
   // Check for the actual API rather than sniffing the UA string
@@ -112,6 +112,18 @@
     if (b < 1024) return `${b} B`
     if (b < 1024 * 1024) return `${(b/1024).toFixed(1)} KB`
     return `${(b/1024/1024).toFixed(1)} MB`
+  }
+
+  function getJoinName() {
+    const n = (myName || '').trim()
+    return n || 'Guest'
+  }
+
+  function persistParticipantName() {
+    if (!browser) return
+    const n = (myName || '').trim()
+    if (!n) return
+    sessionStorage.setItem(participantNameStorageKey, n)
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -323,6 +335,10 @@
     }
 
     await connectMic()
+    while (pendingClaps.length > 0) {
+      const ev = pendingClaps.shift()
+      injectClap(ev.from, ev.triggerAtMs)
+    }
     startWaveformLoop()
   }
 
@@ -403,9 +419,10 @@
     // Prompt user to pick save location
     let fileHandle
     try {
+      const safeParticipant = (myName || 'guest').replace(/[^a-z0-9]/gi, '-').toLowerCase()
       const safeName = data.roomName.replace(/[^a-z0-9]/gi, '-').toLowerCase()
       fileHandle = await window.showSaveFilePicker({
-        suggestedName: `${safeName}-${new Date().toISOString().slice(0,10)}.wav`,
+        suggestedName: `${safeParticipant}-${safeName}-${new Date().toISOString().slice(0,10)}.wav`,
         types: [{ description: 'WAV Audio File', accept: { 'audio/wav': ['.wav'] } }]
       })
     } catch (e) {
@@ -496,6 +513,8 @@
     ws.send(JSON.stringify({ type: 'recording_state', state }))
   }
 
+  const pendingClaps = []
+
   function connectWs() {
     if (!data.authenticated) return
 
@@ -505,7 +524,7 @@
 
     ws.onopen = () => {
       wsStatus = 'connected'
-      ws.send(JSON.stringify({ type: 'join', name: myName || 'Host', clientId }))
+      ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
     }
 
     ws.onmessage = (e) => {
@@ -513,7 +532,10 @@
       try { msg = JSON.parse(e.data) } catch { return }
 
       if (msg.type === 'presence')  peers = msg.peers
-      if (msg.type === 'clap')      injectClap(msg.from, msg.triggerAtMs)
+      if (msg.type === 'clap') {
+        if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
+        else injectClap(msg.from, msg.triggerAtMs)
+      }
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 
@@ -525,14 +547,6 @@
 
     ws.onerror = () => {
       wsStatus = 'disconnected'
-    }
-  }
-
-  function setName() {
-    if (!myName.trim()) return
-    nameSet = true
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'join', name: myName.trim(), clientId }))
     }
   }
 
@@ -564,7 +578,12 @@
 
       await requestMicPermission()
       if (micPermission === 'granted') {
-        audioInitError = 'Audio will initialize when you click Start Recording.'
+        try {
+          await initAudio()
+        } catch (err) {
+          console.error('Audio init on join failed', err)
+          audioInitError = 'Could not initialize microphone meter. You can still try recording.'
+        }
       }
 
       // Presence/sync should still work even if local audio init fails.
@@ -577,6 +596,10 @@
   }
 
   onMount(async () => {
+    if (browser) {
+      myName = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
+      if (myName) persistParticipantName()
+    }
     await startSession()
   })
 
@@ -622,6 +645,10 @@
     {/if}
 
     <form method="POST" action="?/enter" use:enhance>
+      <div class="field">
+        <label for="name">Your name</label>
+        <input id="name" name="name" type="text" maxlength="50" bind:value={myName} required />
+      </div>
       <div class="field">
         <label for="pw">Password</label>
         <input id="pw" name="password" type="password" use:focus required />
@@ -701,19 +728,6 @@
     </div>
   </header>
 
-  <!-- Name setup (shown once) -->
-  {#if !nameSet}
-  <div class="name-bar">
-    <input
-      bind:value={myName}
-      placeholder="Your name (visible to guest)"
-      maxlength="50"
-      on:keydown={(e) => e.key === 'Enter' && setName()}
-    />
-    <button class="btn-ghost" on:click={setName}>Set Name</button>
-  </div>
-  {/if}
-
   <!-- Mic selector -->
   <div class="mic-bar">
     <label for="mic-select">Microphone</label>
@@ -731,7 +745,7 @@
       <p class="perm-warn">⚠️ Mic access denied. Check browser permissions.</p>
     {/if}
     {#if audioInitError}
-      <p class="perm-warn">⚠️ {audioInitError}</p>
+      <p class="muted-text">{audioInitError}</p>
     {/if}
 
     {#if micFallback}
@@ -769,7 +783,7 @@
     <div class="db-meter-wrap">
       <div class="db-meter-track">
         <!-- Coloured fill (gradient clipped by width) -->
-        <div class="db-meter-fill" style="width: {meterPct}%"></div>
+        <div class="db-meter-fill" style="--meter-pct: {meterPct}%"></div>
         <!-- Peak-hold marker -->
         {#if peakHoldDb > METER_MIN}
           <div class="db-peak-hold" style="left: {peakPct}%"></div>
@@ -985,17 +999,6 @@
 
   .muted-text { color: var(--muted); font-size: 12px; }
 
-  /* ── Name bar ── */
-  .name-bar {
-    display: flex; gap: 10px;
-    background: var(--surface);
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    padding: 12px 16px;
-  }
-  .name-bar input { flex: 1; }
-  .name-bar button { white-space: nowrap; }
-
   /* ── Mic bar ── */
   .mic-bar {
     background: var(--surface);
@@ -1054,9 +1057,10 @@
   }
 
   .db-meter-fill {
+    width: 100%;
     height: 100%;
     border-radius: 2px;
-    /* Gradient spans the full track; width clips it to show current level */
+    /* Gradient spans full track; clip-path reveals current level */
     background: linear-gradient(to right,
       #16a34a   0%,   /* -60 → -24: dark green */
       #22c55e  60%,   /* -24: green */
@@ -1067,7 +1071,8 @@
       #dc2626 100%    /*  0: deep red */
     );
     background-size: 100% 100%;
-    transition: width 0.04s linear;
+    clip-path: inset(0 calc(100% - var(--meter-pct, 0%)) 0 0);
+    transition: clip-path 0.04s linear;
   }
 
   .db-peak-hold {

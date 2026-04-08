@@ -22,6 +22,7 @@ const CLAP_FREQ   = 1200       // Hz — sync marker tone
 const CLAP_AMP    = 0.7        // amplitude of injected tone (loud but not clipping)
 const CLAP_MS     = 35         // short marker for easier visual alignment
 const CLAP_FADE_MS = 4         // tiny fade in/out to avoid hard clicks
+// TEMP DEBUG MARKER: remove once mic-switch sync debugging is complete.
 const DEBUG_MARKER_FREQ = 1800
 const DEBUG_MARKER_AMP = 0.8
 const DEBUG_MARKER_MS = 20
