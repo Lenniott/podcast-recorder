@@ -28,6 +28,7 @@
   let micSource = null
   let micStream = null
   let analyserNode = null
+  let silentSink = null
   let fileWritable = null      // FileSystemWritableFileStream
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
@@ -77,11 +78,13 @@
   let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   let clipTimer    = null
+  let sessionStarted = false
+  let audioInitError = ''
 
   // ─── Derived ────────────────────────────────────────────────────────
   $: myPeerIsRecording = peers.find(p => p.name !== myName)?.recording ?? false
   $: recordingLabel = recordingState === 'recording' ? 'Stop Recording' : 'Start Recording'
-  $: canRecord = audioCtx !== null && workletNode !== null && recordingState !== 'stopping'
+  $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((dbLevel - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -238,16 +241,23 @@
 
   async function initAudio() {
     audioCtx = new AudioContext({ sampleRate: 48000 })
-    if (audioCtx.state === 'suspended') await audioCtx.resume()
+    if (audioCtx.state === 'suspended') {
+      try { await audioCtx.resume() } catch {}
+    }
 
     await audioCtx.audioWorklet.addModule('/worklet/recorder-processor.js')
 
     workletNode = new AudioWorkletNode(audioCtx, 'recorder-processor')
     analyserNode = audioCtx.createAnalyser()
+    silentSink = audioCtx.createGain()
+    silentSink.gain.value = 0
     analyserNode.fftSize = 2048
     analyserData = new Float32Array(analyserNode.fftSize)
     gainNode = audioCtx.createGain()
     gainNode.gain.value = gainValue
+    // Keep the worklet graph "live" without sending audible audio to speakers.
+    workletNode.connect(silentSink)
+    silentSink.connect(audioCtx.destination)
 
     workletNode.port.onmessage = async (e) => {
       if (e.data.type === 'level') {
@@ -282,6 +292,13 @@
 
     await connectMic()
     startWaveformLoop()
+  }
+
+  async function ensureAudioRunning() {
+    if (!audioCtx) return
+    if (audioCtx.state !== 'running') {
+      try { await audioCtx.resume() } catch {}
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -336,6 +353,16 @@
   // ───────────────────────────────────────────────────────────────────
 
   async function startRecording() {
+    if (!audioCtx || !workletNode) {
+      try {
+        await initAudio()
+      } catch (err) {
+        console.error('Audio init on record failed', err)
+        alert('Could not start audio engine. Please refresh and try again.')
+        return
+      }
+    }
+    await ensureAudioRunning()
     if (!('showSaveFilePicker' in window)) {
       alert('Your browser does not support the File System Access API.\nPlease use Chrome or Edge.')
       return
@@ -478,26 +505,43 @@
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────
 
+  async function startSession() {
+    if (!browser || !data.authenticated || sessionStarted) return
+    sessionStarted = true
+    audioInitError = ''
+    try {
+      // Init canvas
+      await tick()
+      if (canvas) {
+        canvasCtx = canvas.getContext('2d')
+        canvas.width  = canvas.offsetWidth
+        canvas.height = canvas.offsetHeight
+      }
+
+      await requestMicPermission()
+      if (micPermission === 'granted') {
+        audioInitError = 'Audio will initialize when you click Start Recording.'
+      }
+
+      // Presence/sync should still work even if local audio init fails.
+      connectWs()
+      navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
+    } catch (err) {
+      sessionStarted = false
+      console.error('startSession failed', err)
+    }
+  }
+
   onMount(async () => {
-    if (!data.authenticated) return
-
-    // Init canvas
-    await tick()
-    if (canvas) {
-      canvasCtx = canvas.getContext('2d')
-      canvas.width  = canvas.offsetWidth
-      canvas.height = canvas.offsetHeight
-    }
-
-    await requestMicPermission()
-    if (micPermission === 'granted') {
-      await initAudio()
-    }
-
-    connectWs()
-
-    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
+    await startSession()
   })
+
+  $: if (data.authenticated && !sessionStarted) {
+    startSession().catch((err) => {
+      console.error('Failed to start session', err)
+      sessionStarted = false
+    })
+  }
 
   onDestroy(() => {
     if (!browser) return
@@ -508,6 +552,7 @@
     clearTimeout(clipTimer)
     ws?.close()
     micStream?.getTracks().forEach(t => t.stop())
+    silentSink?.disconnect()
     audioCtx?.close()
     navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange)
   })
@@ -640,6 +685,9 @@
 
     {#if micPermission === 'denied'}
       <p class="perm-warn">⚠️ Mic access denied. Check browser permissions.</p>
+    {/if}
+    {#if audioInitError}
+      <p class="perm-warn">⚠️ {audioInitError}</p>
     {/if}
 
     {#if micFallback}

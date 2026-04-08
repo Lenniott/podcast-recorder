@@ -40,7 +40,8 @@ export const actions = {
     const password = String(data.get('password') || '').trim()
 
     if (password !== env.SITE_PASSWORD) {
-      console.log('[action site_enter] wrong password')
+      console.log('[action site_enter] MISMATCH — typed len=%d env len=%d',
+        password.length, (env.SITE_PASSWORD || '').length)
       return fail(403, { siteError: 'Wrong password.' })
     }
 
