@@ -126,6 +126,7 @@ describe('setupWss — connection handling', () => {
     const clap = ws1.sent.find(m => m.type === 'clap')
     expect(clap.from).toBe('Alice')
     expect(clap.timestamp).toMatch(/^\d{4}-/)
+    expect(typeof clap.triggerAtMs).toBe('number')
   })
 
   it('recording_state updates peer and broadcasts to others (not sender)', () => {

@@ -25,6 +25,7 @@
 import { roomExists } from './db.js'
 
 const MAX_PEERS = 2
+const CLAP_LEAD_MS = 250
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug }
@@ -117,7 +118,13 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'clap' && clientId) {
-        const event = { type: 'clap', timestamp: new Date().toISOString(), from: peer.name }
+        // Broadcast a shared future trigger time to reduce per-client WS jitter.
+        const event = {
+          type: 'clap',
+          timestamp: new Date().toISOString(),
+          triggerAtMs: Date.now() + CLAP_LEAD_MS,
+          from: peer.name
+        }
         for (const p of room.values()) send(p.ws, event)
       }
 

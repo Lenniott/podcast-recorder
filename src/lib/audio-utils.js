@@ -2,7 +2,7 @@
  * Pure audio utility functions — no browser APIs, fully testable in Node.
  */
 
-const SAMPLE_RATE = 48000
+const DEFAULT_SAMPLE_RATE = 48000
 const CHANNELS    = 1
 const BIT_DEPTH   = 16
 
@@ -11,8 +11,11 @@ const BIT_DEPTH   = 16
  * Pass dataBytes=0 as a placeholder at recording start,
  * then seek(0) and rewrite with the real count at the end.
  */
-export function buildWavHeader(dataBytes) {
-  const byteRate   = SAMPLE_RATE * CHANNELS * (BIT_DEPTH / 8)
+export function buildWavHeader(dataBytes, sampleRate = DEFAULT_SAMPLE_RATE) {
+  const sr = Number.isFinite(sampleRate) && sampleRate > 0
+    ? Math.round(sampleRate)
+    : DEFAULT_SAMPLE_RATE
+  const byteRate   = sr * CHANNELS * (BIT_DEPTH / 8)
   const blockAlign = CHANNELS * (BIT_DEPTH / 8)
 
   const buf  = new ArrayBuffer(44)
@@ -26,7 +29,7 @@ export function buildWavHeader(dataBytes) {
   view.setUint32(16, 16, true)          // chunk size (PCM)
   view.setUint16(20,  1, true)          // format: PCM
   view.setUint16(22, CHANNELS, true)
-  view.setUint32(24, SAMPLE_RATE, true)
+  view.setUint32(24, sr, true)
   view.setUint32(28, byteRate, true)
   view.setUint16(32, blockAlign, true)
   view.setUint16(34, BIT_DEPTH, true)

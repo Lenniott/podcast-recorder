@@ -35,6 +35,9 @@
   let recordingTimer = null
   let bytesWritten = 0
   let dataByteCount = 0        // PCM bytes written (for WAV header patch)
+  let recordingSampleRate = 48000
+  let recordingStartAudioTime = 0
+  let samplesWritten = 0
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
@@ -54,6 +57,10 @@
   // Browser capability check — File System Access API is Blink only
   // Check for the actual API rather than sniffing the UA string
   const browserSupported = browser ? ('showSaveFilePicker' in window) : true
+  // TEMP DEBUG FLAG: append ?debugReconnectMarker=1 while diagnosing mic-switch sync.
+  const debugReconnectMarker = browser
+    ? new URLSearchParams(window.location.search).get('debugReconnectMarker') === '1'
+    : false
 
   // ─── Stable tab ID ────────────────────────────────────────────────────
   // Stable ID for this browser tab — survives HMR, persists for the session
@@ -141,7 +148,15 @@
   /** User manually picked a new mic from the dropdown */
   async function changeMic() {
     micFallback = false
-    await connectMic(selectedDeviceId)
+    if (!audioCtx) {
+      try {
+        await initAudio()
+      } catch (err) {
+        console.error('Audio init for mic change failed', err)
+        return
+      }
+    }
+    await connectMic(selectedDeviceId, { strictDevice: true })
   }
 
   /**
@@ -150,7 +165,7 @@
    * is momentarily unavailable rather than hard-throwing.
    * Attaches track.onended so we react the instant the mic is yanked.
    */
-  async function connectMic(deviceId = selectedDeviceId) {
+  async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
     if (!audioCtx) return
 
     micSource?.disconnect()
@@ -158,11 +173,14 @@
 
     const constraints = {
       audio: {
-        deviceId: deviceId ? { ideal: deviceId } : undefined,
+        // For manual user picks, require that exact device.
+        // For automatic reconnect/fallback, allow browser flexibility.
+        deviceId: deviceId
+          ? (strictDevice ? { exact: deviceId } : { ideal: deviceId })
+          : undefined,
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl:  false,
-        sampleRate: 48000,
         channelCount: 1
       }
     }
@@ -178,6 +196,7 @@
     micSource.connect(gainNode)
     gainNode.connect(workletNode)
     gainNode.connect(analyserNode)
+    injectReconnectMarker()
   }
 
   /**
@@ -192,7 +211,7 @@
     const stillAvailable = devices.some(d => d.deviceId === selectedDeviceId)
     if (stillAvailable) {
       try {
-        await connectMic(selectedDeviceId)
+        await connectMic(selectedDeviceId, { strictDevice: true })
         micFallback = false
         return
       } catch { /* fall through */ }
@@ -215,13 +234,14 @@
       micSource?.disconnect()
       micStream?.getTracks().forEach(t => t.stop())
       micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000, channelCount: 1 }
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
       })
       micStream.getAudioTracks().forEach(track => { track.onended = () => connectMicWithFallback() })
       micSource = audioCtx.createMediaStreamSource(micStream)
       micSource.connect(gainNode)
       gainNode.connect(workletNode)
       gainNode.connect(analyserNode)
+      injectReconnectMarker()
 
       // Figure out what we actually got
       await loadDevices()
@@ -284,7 +304,19 @@
       }
       if (e.data.type === 'data' && fileWritable && recordingState === 'recording') {
         const i16 = float32ToInt16(e.data.buffer)
+        // Keep timeline continuous across reconnects/device swaps by
+        // backfilling missing wall-clock capture time as digital silence.
+        const elapsedSec = (audioCtx?.currentTime || 0) - recordingStartAudioTime
+        const expectedSamples = Math.max(0, Math.round(elapsedSec * recordingSampleRate))
+        const gapSamples = expectedSamples - (samplesWritten + i16.length)
+        if (gapSamples > 0) {
+          const silence = new Int16Array(gapSamples)
+          await fileWritable.write(silence.buffer)
+          samplesWritten += gapSamples
+          dataByteCount += silence.byteLength
+        }
         await fileWritable.write(i16.buffer)
+        samplesWritten += i16.length
         dataByteCount += i16.buffer.byteLength
         bytesWritten = dataByteCount + 44
       }
@@ -383,11 +415,14 @@
     }
 
     fileWritable = await fileHandle.createWritable()
+    recordingSampleRate = Math.round(audioCtx?.sampleRate || 48000)
 
     // Write placeholder WAV header (will patch at end with real size)
-    await fileWritable.write(buildWavHeader(0))
+    await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     dataByteCount = 0
+    samplesWritten = 0
     bytesWritten = 44
+    recordingStartAudioTime = audioCtx?.currentTime || 0
 
     recordingState = 'recording'
     recordingSeconds = 0
@@ -407,7 +442,7 @@
 
     // Patch the WAV header with the real data size
     await fileWritable.seek(0)
-    await fileWritable.write(buildWavHeader(dataByteCount))
+    await fileWritable.write(buildWavHeader(dataByteCount, recordingSampleRate))
     await fileWritable.close()
 
     fileWritable = null
@@ -436,11 +471,20 @@
     // Server echoes back to all (including sender) which triggers tone injection
   }
 
-  function injectClap(from) {
-    workletNode?.port.postMessage({ type: 'clap' })
+  function injectClap(from, triggerAtMs = null) {
+    const delayMs = Number.isFinite(triggerAtMs) ? Math.max(0, triggerAtMs - Date.now()) : 0
+    setTimeout(() => {
+      workletNode?.port.postMessage({ type: 'clap' })
+    }, delayMs)
     lastClapFrom = from
     clearTimeout(clapTimeout)
     clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
+  }
+
+  function injectReconnectMarker() {
+    if (!debugReconnectMarker) return
+    if (recordingState !== 'recording') return
+    workletNode?.port.postMessage({ type: 'debug_marker' })
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -469,7 +513,7 @@
       try { msg = JSON.parse(e.data) } catch { return }
 
       if (msg.type === 'presence')  peers = msg.peers
-      if (msg.type === 'clap')      injectClap(msg.from)
+      if (msg.type === 'clap')      injectClap(msg.from, msg.triggerAtMs)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 

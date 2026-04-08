@@ -48,9 +48,14 @@ describe('buildWavHeader', () => {
     expect(view.getUint16(22, true)).toBe(1)
   })
 
-  it('encodes 48000 Hz sample rate at offset 24', () => {
+  it('encodes 48000 Hz sample rate at offset 24 by default', () => {
     const view = new DataView(buildWavHeader(0))
     expect(view.getUint32(24, true)).toBe(48000)
+  })
+
+  it('encodes a provided sample rate at offset 24', () => {
+    const view = new DataView(buildWavHeader(0, 44100))
+    expect(view.getUint32(24, true)).toBe(44100)
   })
 
   it('encodes 16-bit depth at offset 34', () => {
