@@ -54,7 +54,7 @@ export const actions = {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 30,
+      maxAge: 60 * 60 * 24 * 3,
       secure: isSecure()
     })
 
