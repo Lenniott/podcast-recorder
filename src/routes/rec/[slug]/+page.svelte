@@ -3,11 +3,11 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16, gainToDb, dbToMeterPct } from '$lib/audio-utils.js'
+  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
 
   function focus(el) { el.focus() }
 
-  export let data   // { slug, roomName, authenticated, participantName, createdAt }
+  export let data   // { slug, roomName, authenticated, participantName, uploadSectionEnabled, isHostClaim, ... }
   export let form   // action result
 
   // ─── WebSocket state ────────────────────────────────────────────────
@@ -57,6 +57,9 @@
   let micLevel = 0
   let uploadState = 'idle' // idle | ready | uploading | success | error
   let uploadMessage = ''
+  let copyLinkDone = false
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let copyLinkTimer = null
   const participantNameStorageKey = browser ? `pr_name_${data.slug}` : ''
 
   // Browser capability check — File System Access API is Blink only
@@ -85,13 +88,17 @@
   // ─── dBFS meter ──────────────────────────────────────────────────────
   const METER_MIN  = -60
   const METER_MAX  =   0
-  let dbLevel      = METER_MIN  // current RMS in dBFS
+  let dbLevel      = METER_MIN  // current RMS in dBFS (numeric readout)
+  /** Smoothed level for the green bar — tracks max(rms, peak) with attack/release */
+  let meterFillDb  = METER_MIN
   let peakHoldDb   = METER_MIN  // peak-hold value (resets after 2s)
   let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   let clipTimer    = null
   let sessionStarted = false
   let audioInitError = ''
+  /** False once we have a display name from cookie, sessionStorage, or form. */
+  let nameGateShow = !data.participantName?.trim()
 
   // ─── Derived ────────────────────────────────────────────────────────
   $: me = peers.find((p) => p.clientId === clientId)
@@ -101,10 +108,12 @@
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: recordingLabel = recordingState === 'recording' ? 'Stop Recording' : 'Start Recording'
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
-  $: guestUploadReady = recordingState === 'idle' && isGuest && !!lastRecordingFileHandle
-  $: showGuestUploadCard = data.n8nWebhookConfigured && (isGuest || isHost) && (guestUploadReady || uploadState === 'uploading' || uploadState === 'success' || uploadState === 'error')
+  $: guestUploadReady =
+    recordingState === 'idle' && !data.isHostClaim && !!lastRecordingFileHandle
+  /** Only guests see the upload card; hosts never upload so hide the section entirely. */
+  $: showGuestUploadCard = data.uploadSectionEnabled && !data.isHostClaim
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
-  $: meterPct  = Math.max(0, Math.min(100, ((dbLevel - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
+  $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
 
   // ───────────────────────────────────────────────────────────────────
@@ -135,6 +144,37 @@
     const n = (myName || '').trim()
     if (!n) return
     sessionStorage.setItem(participantNameStorageKey, n)
+  }
+
+  function copyRoomLink() {
+    if (!browser) return
+    const url = `${location.origin}/rec/${data.slug}`
+    const done = () => {
+      copyLinkDone = true
+      if (copyLinkTimer) clearTimeout(copyLinkTimer)
+      copyLinkTimer = setTimeout(() => { copyLinkDone = false }, 2000)
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(done).catch(() => fallbackCopy(url, done))
+    } else {
+      fallbackCopy(url, done)
+    }
+  }
+
+  function fallbackCopy(url, onDone) {
+    const ta = document.createElement('textarea')
+    ta.value = url
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+      onDone()
+    } finally {
+      document.body.removeChild(ta)
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -307,11 +347,20 @@
         const { rms, peak } = e.data
         micLevel = rms
 
-        // RMS → dBFS for the meter bar
+        // RMS → dBFS for numeric readout
         dbLevel = rms > 0.00001 ? Math.max(METER_MIN, 20 * Math.log10(rms)) : METER_MIN
 
         // Peak → dBFS for peak-hold indicator
         const peakDbNow = peak > 0.00001 ? 20 * Math.log10(peak) : METER_MIN
+        const target = Math.max(dbLevel, peakDbNow)
+        const attack = 0.42
+        const release = 0.12
+        if (target > meterFillDb) {
+          meterFillDb += (target - meterFillDb) * attack
+        } else {
+          meterFillDb += (target - meterFillDb) * release
+        }
+
         if (peakDbNow > peakHoldDb) {
           peakHoldDb = peakDbNow
           clearTimeout(peakHoldTimer)
@@ -483,7 +532,7 @@
     activeFileHandle = null
     fileWritable = null
     recordingState = 'idle'
-    if (isGuest && lastRecordingFileHandle) {
+    if (!data.isHostClaim && lastRecordingFileHandle) {
       uploadState = 'ready'
       uploadMessage = 'Recording stopped. Ready to upload to Drive workflow.'
     }
@@ -497,14 +546,13 @@
     }
   }
 
-  async function uploadLastRecording() {
-    if (!guestUploadReady || !lastRecordingFileHandle) return
+  async function uploadWavToWebhook(file) {
+    if (!file || data.isHostClaim) return
     uploadState = 'uploading'
     uploadMessage = 'Sending to Drive workflow...'
     try {
-      const file = await lastRecordingFileHandle.getFile()
       const fd = new FormData()
-      fd.set('audio_file', file, file.name || lastRecordingFileName || 'recording.wav')
+      fd.set('audio_file', file, file.name || 'recording.wav')
       fd.set('client_id', clientId || '')
 
       const response = await fetch('?/upload_guest_audio', {
@@ -525,6 +573,27 @@
       uploadState = 'error'
       uploadMessage = 'Upload failed. Please try again.'
     }
+  }
+
+  async function uploadLastRecording() {
+    if (!guestUploadReady || !lastRecordingFileHandle) return
+    const file = await lastRecordingFileHandle.getFile()
+    await uploadWavToWebhook(file)
+  }
+
+  /** @param {Event} e */
+  function onPickWavForUpload(e) {
+    const input = e.target
+    const file = input instanceof HTMLInputElement && input.files?.[0] ? input.files[0] : null
+    if (input instanceof HTMLInputElement) input.value = ''
+    if (!file) return
+    const lower = file.name.toLowerCase()
+    if (!lower.endsWith('.wav')) {
+      uploadState = 'error'
+      uploadMessage = 'Please choose a WAV file.'
+      return
+    }
+    uploadWavToWebhook(file)
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -617,7 +686,7 @@
   // ───────────────────────────────────────────────────────────────────
 
   async function startSession() {
-    if (!browser || !data.authenticated || sessionStarted) return
+    if (!browser || !data.authenticated || sessionStarted || nameGateShow) return
     sessionStarted = true
     audioInitError = ''
     try {
@@ -651,17 +720,21 @@
   onMount(async () => {
     if (browser) {
       myName = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
-      if (myName) persistParticipantName()
+      if (myName) {
+        nameGateShow = false
+        persistParticipantName()
+      }
     }
-    await startSession()
   })
 
-  $: if (data.authenticated && !sessionStarted) {
+  $: if (data.authenticated && !nameGateShow && !sessionStarted) {
     startSession().catch((err) => {
       console.error('Failed to start session', err)
       sessionStarted = false
     })
   }
+
+  $: if (data.participantName?.trim()) nameGateShow = false
 
   onDestroy(() => {
     if (!browser) return
@@ -670,6 +743,7 @@
     clearTimeout(clapTimeout)
     clearTimeout(peakHoldTimer)
     clearTimeout(clipTimer)
+    if (copyLinkTimer) clearTimeout(copyLinkTimer)
     ws?.close()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
@@ -741,6 +815,33 @@
 </main>
 
 <!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- DISPLAY NAME (authenticated but no name cookie yet)             -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+{:else if nameGateShow}
+<main class="gate-wrap">
+  <div class="card gate-card">
+    <div class="gate-icon">👤</div>
+    <h2>{data.roomName}</h2>
+    <p class="sub">How should we show you to others in this room?</p>
+
+    {#if form?.error}
+      <div class="error-banner">{form.error}</div>
+    {/if}
+
+    <form method="POST" action="?/set_display_name" use:enhance={() => {
+      return async ({ update }) => { await update() }
+    }}>
+      <div class="field">
+        <label for="display-name">Your name</label>
+        <input id="display-name" name="name" type="text" maxlength="50" bind:value={myName} required use:focus />
+      </div>
+      <button type="submit" class="btn-primary">Continue</button>
+    </form>
+  </div>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
 <!-- RECORDING ROOM                                                   -->
 <!-- ═══════════════════════════════════════════════════════════════ -->
 
@@ -753,9 +854,23 @@
       <span class="mic-icon">🎙️</span>
       <div>
         <div class="ep-name">{data.roomName}</div>
-        <div class="ep-slug">/rec/{data.slug}</div>
+        <div class="ep-slug-row">
+          <span class="ep-slug">/rec/{data.slug}</span>
+          <button type="button" class="btn-copy-link" on:click={copyRoomLink}>
+            {copyLinkDone ? 'Copied!' : 'Copy link'}
+          </button>
+        </div>
         {#if myRole}
-          <div class="role-hint">You are <strong>{myRole === 'host' ? 'Host' : 'Guest'}</strong></div>
+          <div class="role-hint" aria-live="polite">
+            <span class="role-hint-label">You are</span>
+            <span
+              class="role-chip role-chip-you"
+              class:role-chip-host={myRole === 'host'}
+              class:role-chip-guest={myRole === 'guest'}
+            >
+              {myRole === 'host' ? 'Host' : 'Guest'}
+            </span>
+          </div>
         {/if}
       </div>
     </div>
@@ -770,9 +885,14 @@
       <!-- Peer presence -->
       <div class="presence">
         {#each peers as p}
-          <div class="peer" title={p.name}>
+          <div class="peer" class:peer-you={p.clientId === clientId} title={p.name}>
             <span class="peer-name">{p.name}</span>
-            <span class="role-tag" class:role-host={p.role === 'host'} class:role-guest={p.role === 'guest'}>
+            <span
+              class="role-tag"
+              class:role-host={p.role === 'host'}
+              class:role-guest={p.role === 'guest'}
+              class:role-tag-you={p.clientId === clientId}
+            >
               {p.role === 'host' ? 'Host' : 'Guest'}
             </span>
             {#if p.recording}
@@ -927,31 +1047,44 @@
     <div class="upload-card">
       <div class="upload-header">
         <h3>Send recording to Drive</h3>
-        {#if isHost}
-          <span class="role-pill-host">Host view</span>
-        {:else if isGuest}
-          <span class="role-pill-guest">Guest uploader</span>
-        {/if}
+        <span class="role-pill-guest role-pill-you">Guest uploader</span>
       </div>
 
-      {#if isHost}
-        <p class="upload-copy">Host does not upload. The guest (second participant) handles file handoff.</p>
-      {:else if guestUploadReady || uploadState === 'uploading' || uploadState === 'success' || uploadState === 'error'}
+      {#if lastRecordingFileHandle || lastRecordingFileName}
         <p class="upload-copy">
-          Ready file: <strong>{lastRecordingFileName || 'Latest recording'}</strong>
+          Last saved file: <strong>{lastRecordingFileName || 'Latest recording'}</strong>
         </p>
-        <div class="upload-actions">
-          <button class="btn-primary upload-btn" on:click={uploadLastRecording} disabled={!guestUploadReady || uploadState === 'uploading'}>
-            {uploadState === 'uploading' ? 'Uploading...' : 'Upload to Drive'}
-          </button>
-        </div>
+      {:else}
+        <p class="upload-copy">
+          Record here and stop to attach your saved WAV, or choose a WAV file below to upload without recording.
+        </p>
+      {/if}
 
-        {#if uploadMessage}
-          <p class="upload-status" class:upload-ok={uploadState === 'success'} class:upload-error={uploadState === 'error'}>
-            {uploadMessage}
-          </p>
-        {/if}
+      <div class="upload-actions">
+        <button
+          type="button"
+          class="btn-primary upload-btn"
+          on:click={uploadLastRecording}
+          disabled={!guestUploadReady || uploadState === 'uploading'}
+        >
+          {uploadState === 'uploading' ? 'Uploading…' : 'Upload last recording'}
+        </button>
+        <label class="btn-secondary upload-pick" class:upload-pick-disabled={uploadState === 'uploading'}>
+          <input
+            type="file"
+            accept=".wav,audio/wav,audio/x-wav,audio/wave"
+            class="upload-file-input"
+            disabled={uploadState === 'uploading'}
+            on:change={onPickWavForUpload}
+          />
+          Choose WAV…
+        </label>
+      </div>
 
+      {#if uploadMessage}
+        <p class="upload-status" class:upload-ok={uploadState === 'success'} class:upload-error={uploadState === 'error'}>
+          {uploadMessage}
+        </p>
       {/if}
     </div>
   {/if}
@@ -1057,13 +1190,63 @@
   .header-left { display: flex; align-items: center; gap: 12px; }
   .mic-icon { font-size: 24px; }
   .ep-name { font-size: 15px; font-weight: 600; }
+  .ep-slug-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
   .ep-slug { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+  .btn-copy-link {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .btn-copy-link:hover {
+    background: var(--border);
+  }
   .role-hint {
-    margin-top: 3px;
+    margin-top: 6px;
     font-size: 11px;
     color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
-  .role-hint strong { color: var(--text); }
+  .role-hint-label {
+    color: var(--muted);
+  }
+  .role-chip {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+  .role-chip-you.role-chip-host {
+    border-color: rgba(168, 85, 247, 0.75);
+    color: #f5f3ff;
+    background: rgba(168, 85, 247, 0.22);
+    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.35);
+  }
+  .role-chip-you.role-chip-guest {
+    border-color: rgba(34, 197, 94, 0.6);
+    color: #dcfce7;
+    background: rgba(34, 197, 94, 0.18);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.32);
+  }
 
   .header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 
@@ -1085,6 +1268,11 @@
     background: var(--border);
     padding: 3px 10px;
     border-radius: 100px;
+    border: 1px solid transparent;
+  }
+  .peer.peer-you {
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
   }
   .peer-name { font-size: 12px; }
   .role-tag {
@@ -1105,6 +1293,15 @@
     border-color: rgba(34,197,94,.35);
     color: #86efac;
     background: rgba(34,197,94,.1);
+  }
+  .role-tag.role-tag-you {
+    font-weight: 700;
+  }
+  .role-tag.role-host.role-tag-you {
+    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.55);
+  }
+  .role-tag.role-guest.role-tag-you {
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.45);
   }
   .rec-dot {
     width: 7px; height: 7px;
@@ -1189,7 +1386,7 @@
     );
     background-size: 100% 100%;
     clip-path: inset(0 calc(100% - var(--meter-pct, 0%)) 0 0);
-    transition: clip-path 0.04s linear;
+    transition: clip-path 0.02s linear;
   }
 
   .db-peak-hold {
@@ -1402,21 +1599,17 @@
     font-size: 15px;
     font-weight: 600;
   }
-  .role-pill-host,
   .role-pill-guest {
     font-size: 11px;
     border-radius: 999px;
     padding: 4px 10px;
-  }
-  .role-pill-host {
-    color: #d8b4fe;
-    border: 1px solid rgba(168,85,247,.45);
-    background: rgba(168,85,247,.12);
-  }
-  .role-pill-guest {
     color: #86efac;
     border: 1px solid rgba(34,197,94,.35);
     background: rgba(34,197,94,.1);
+  }
+  .role-pill-guest.role-pill-you {
+    font-weight: 700;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
   }
   .upload-copy {
     font-size: 12px;
@@ -1426,13 +1619,48 @@
   .upload-copy strong { color: var(--text); }
   .upload-actions {
     display: flex;
-    align-items: center;
-    gap: 12px;
+    align-items: stretch;
+    gap: 10px;
     flex-wrap: wrap;
   }
   .upload-btn {
+    flex: 1;
+    min-width: 140px;
     width: auto;
-    min-width: 180px;
+  }
+  .btn-secondary.upload-pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-width: 140px;
+    margin: 0;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    font-family: var(--font);
+  }
+  .btn-secondary.upload-pick:hover:not(.upload-pick-disabled) {
+    background: var(--border);
+  }
+  .upload-pick-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .upload-file-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+    font-size: 0;
   }
   .upload-status {
     font-size: 12px;

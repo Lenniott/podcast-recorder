@@ -25,6 +25,12 @@ function getDb() {
     )
   `)
 
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN show_upload INTEGER NOT NULL DEFAULT 1`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
   return _db
 }
 
@@ -34,11 +40,12 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash }) {
+export function createRoom({ slug, name, passwordHash, showUpload = true }) {
+  const su = showUpload ? 1 : 0
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(slug, name, passwordHash, Date.now())
+    INSERT INTO rooms (slug, name, password_hash, created_at, show_upload)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, Date.now(), su)
 }
 
 export function getRoomBySlug(slug) {

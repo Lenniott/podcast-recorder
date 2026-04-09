@@ -1,3 +1,5 @@
+# Stack env in Portainer: set these names (or use a compose .env file). Only keys listed
+# under `environment` are passed into the container.
 services:
   podcast-recorder:
     build: .
@@ -12,9 +14,18 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - DB_PATH=/app/data/rooms.db
+      # Required for session / room tokens
       - SECRET=${SECRET}
+      # Optional — leave empty for open “create episode” page
       - SITE_PASSWORD=${SITE_PASSWORD}
-      - HTTPS=${HTTPS}          # set to "true" in Portainer env vars once Nginx + SSL is live
+      # Cookie flags for HTTPS (set true behind TLS / reverse proxy)
+      - HTTPS=${HTTPS:-false}
+      - FORCE_HTTPS=${FORCE_HTTPS:-false}
+      # Guest upload → n8n (optional)
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL:-}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
+      - N8N_BASIC_AUTH_PASS=${N8N_BASIC_AUTH_PASS:-}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-400}
 
 volumes:
   podcast-recorder-data:

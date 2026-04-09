@@ -81,6 +81,21 @@
         <span class="hint">Your guest needs this to join. Not stored in plain text.</span>
       </div>
 
+      <div class="field field-checkbox">
+        <span class="checkbox-heading">Drive upload in room</span>
+        <label class="checkbox-row">
+          <input
+            id="show_upload"
+            type="checkbox"
+            name="show_upload"
+            value="1"
+            checked
+          />
+          <span class="checkbox-copy">Show Drive upload section in the room</span>
+        </label>
+        <span class="hint">Requires N8N webhook env on the server. Uncheck to hide upload UI for this episode.</span>
+      </div>
+
       <button type="submit" class="btn-primary" disabled={loading}>
         {loading ? 'Creating…' : 'Create Room & Get Link'}
       </button>
@@ -158,4 +173,50 @@
   }
 
   .footer-note strong { color: var(--text); }
+
+  /* Match other .field blocks: heading row + control; override global input { width:100% } for checkboxes */
+  .field-checkbox {
+    margin-bottom: 16px;
+  }
+
+  .checkbox-heading {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--text);
+    line-height: 1.45;
+  }
+
+  .checkbox-row input[type='checkbox'] {
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    margin: 2px 0 0 0;
+    padding: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .checkbox-copy {
+    flex: 1;
+    min-width: 0;
+  }
 </style>

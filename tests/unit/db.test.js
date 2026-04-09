@@ -18,6 +18,13 @@ describe('createRoom / getRoomBySlug', () => {
     expect(found.name).toBe(ROOM.name)
     expect(found.password_hash).toBe(ROOM.passwordHash)
     expect(found.created_at).toBeGreaterThan(0)
+    expect(found.show_upload).toBe(1)
+  })
+
+  it('can disable show_upload for a new room', () => {
+    createRoom({ ...ROOM, slug: 'noup02', showUpload: false })
+    const found = getRoomBySlug('noup02')
+    expect(found.show_upload).toBe(0)
   })
 
   it('returns null for an unknown slug', () => {

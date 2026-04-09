@@ -89,7 +89,10 @@ export const actions = {
         if (!getRoomBySlug(slug)) break
       }
       const passwordHash = await hashPassword(password)
-      createRoom({ slug, name, passwordHash })
+      const showUploadRaw = data.get('show_upload')
+      const showUpload =
+        showUploadRaw === 'on' || showUploadRaw === '1' || showUploadRaw === 'true'
+      createRoom({ slug, name, passwordHash, showUpload })
       const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
       const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
       cookies.set(ROOM_COOKIE(slug), roomToken, {

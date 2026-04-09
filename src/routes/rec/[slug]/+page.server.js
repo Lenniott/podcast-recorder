@@ -56,12 +56,17 @@ export async function load({ params, cookies }) {
   const isHostClaim = verifyHostClaimToken(cookies.get(HOST_COOKIE(slug)), slug, room.password_hash, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
+  const n8nConfigured = !!env.N8N_WEBHOOK_URL
+  const showUploadRoom = Number(room.show_upload) !== 0
+  const uploadSectionEnabled = n8nConfigured && showUploadRoom
+
   return {
     slug,
     roomName: room.name,
     authenticated,
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
-    n8nWebhookConfigured: !!env.N8N_WEBHOOK_URL,
+    n8nWebhookConfigured: n8nConfigured,
+    uploadSectionEnabled,
     isHostClaim,
     createdAt: room.created_at
   }
@@ -104,6 +109,33 @@ export const actions = {
       secure: isSecure()
     })
     console.log('[action enter] cookie set (secure=%s) → redirect', isSecure())
+
+    throw redirect(303, `/rec/${slug}`)
+  },
+
+  set_display_name: async ({ params, request, cookies }) => {
+    const { slug } = params
+    const room = getRoomBySlug(slug)
+    if (!room) throw redirect(303, '/')
+
+    if (!isAuthenticatedForRoom(cookies, slug, room)) {
+      return fail(401, { error: 'Not signed in to this room.', name: '' })
+    }
+
+    const data = await request.formData()
+    const name = String(data.get('name') || '').trim().slice(0, 50)
+
+    if (!name) {
+      return fail(400, { error: 'Please enter your name.', name })
+    }
+
+    cookies.set(NAME_COOKIE(slug), name, {
+      path: '/',
+      httpOnly: false,
+      sameSite: 'lax',
+      maxAge: COOKIE_MAX_AGE,
+      secure: isSecure()
+    })
 
     throw redirect(303, `/rec/${slug}`)
   },
