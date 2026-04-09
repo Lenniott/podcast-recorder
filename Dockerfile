@@ -17,6 +17,7 @@ COPY --from=builder /app/build         ./build
 COPY --from=builder /app/node_modules  ./node_modules
 COPY --from=builder /app/server.js     ./server.js
 COPY --from=builder /app/src/lib/server ./src/lib/server
+COPY --from=builder /app/scripts       ./scripts
 COPY --from=builder /app/package.json  ./package.json
 
 # Persist database outside the container

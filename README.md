@@ -81,6 +81,24 @@ server {
 
 The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence + clap) won't work.
 
+### Managing rooms in Portainer/Docker
+
+Portainer console often defaults to `bash`, but this image is Alpine-based and only has `sh`.
+
+Use one of these:
+
+```bash
+# From host
+docker exec -it podcast-recorder sh
+
+# Then inside container
+npm run rooms
+npm run rooms:delete 1,2,4-6
+npm run rooms:delete all
+```
+
+Or in Portainer "Container console", change command from `bash` to `sh`.
+
 ---
 
 ## Resilience
