@@ -1,5 +1,5 @@
 <script>
-  import { enhance } from '$app/forms'
+  import { enhance, deserialize } from '$app/forms'
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
@@ -13,7 +13,7 @@
   // ─── WebSocket state ────────────────────────────────────────────────
   let ws = null
   let wsStatus = 'disconnected' // connected | connecting | disconnected
-  let peers = []               // [{ name, recording }]
+  let peers = []               // [{ clientId, name, recording, role, isHost }]
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -30,6 +30,9 @@
   let analyserNode = null
   let silentSink = null
   let fileWritable = null      // FileSystemWritableFileStream
+  let activeFileHandle = null
+  let lastRecordingFileHandle = null
+  let lastRecordingFileName = ''
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
   let recordingTimer = null
@@ -52,6 +55,8 @@
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
   let micLevel = 0
+  let uploadState = 'idle' // idle | ready | uploading | success | error
+  let uploadMessage = ''
   const participantNameStorageKey = browser ? `pr_name_${data.slug}` : ''
 
   // Browser capability check — File System Access API is Blink only
@@ -89,9 +94,15 @@
   let audioInitError = ''
 
   // ─── Derived ────────────────────────────────────────────────────────
-  $: myPeerIsRecording = peers.find(p => p.name !== myName)?.recording ?? false
+  $: me = peers.find((p) => p.clientId === clientId)
+  $: myRole = me?.role || null
+  $: isHost = myRole === 'host'
+  $: isGuest = myRole === 'guest'
+  $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: recordingLabel = recordingState === 'recording' ? 'Stop Recording' : 'Start Recording'
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
+  $: guestUploadReady = recordingState === 'idle' && isGuest && !!lastRecordingFileHandle
+  $: showGuestUploadCard = data.n8nWebhookConfigured && (isGuest || isHost) && (guestUploadReady || uploadState === 'uploading' || uploadState === 'success' || uploadState === 'error')
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((dbLevel - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -432,6 +443,11 @@
     }
 
     fileWritable = await fileHandle.createWritable()
+    activeFileHandle = fileHandle
+    lastRecordingFileHandle = null
+    lastRecordingFileName = ''
+    uploadState = 'idle'
+    uploadMessage = ''
     recordingSampleRate = Math.round(audioCtx?.sampleRate || 48000)
 
     // Write placeholder WAV header (will patch at end with real size)
@@ -462,8 +478,15 @@
     await fileWritable.write(buildWavHeader(dataByteCount, recordingSampleRate))
     await fileWritable.close()
 
+    lastRecordingFileHandle = activeFileHandle
+    lastRecordingFileName = activeFileHandle?.name || ''
+    activeFileHandle = null
     fileWritable = null
     recordingState = 'idle'
+    if (isGuest && lastRecordingFileHandle) {
+      uploadState = 'ready'
+      uploadMessage = 'Recording stopped. Ready to upload to Drive workflow.'
+    }
   }
 
   async function toggleRecording() {
@@ -471,6 +494,36 @@
       await startRecording()
     } else if (recordingState === 'recording') {
       await stopRecording()
+    }
+  }
+
+  async function uploadLastRecording() {
+    if (!guestUploadReady || !lastRecordingFileHandle) return
+    uploadState = 'uploading'
+    uploadMessage = 'Sending to Drive workflow...'
+    try {
+      const file = await lastRecordingFileHandle.getFile()
+      const fd = new FormData()
+      fd.set('audio_file', file, file.name || lastRecordingFileName || 'recording.wav')
+      fd.set('client_id', clientId || '')
+
+      const response = await fetch('?/upload_guest_audio', {
+        method: 'POST',
+        body: fd,
+        headers: { accept: 'application/json' }
+      })
+      const result = deserialize(await response.text())
+      const payload = result?.data?.upload
+      if (result.type === 'success' && payload?.ok) {
+        uploadState = 'success'
+        uploadMessage = payload.message || 'Successfully sent to Drive workflow.'
+        return
+      }
+      uploadState = 'error'
+      uploadMessage = payload?.message || 'Upload failed. Please try again.'
+    } catch (err) {
+      uploadState = 'error'
+      uploadMessage = 'Upload failed. Please try again.'
     }
   }
 
@@ -701,6 +754,9 @@
       <div>
         <div class="ep-name">{data.roomName}</div>
         <div class="ep-slug">/rec/{data.slug}</div>
+        {#if myRole}
+          <div class="role-hint">You are <strong>{myRole === 'host' ? 'Host' : 'Guest'}</strong></div>
+        {/if}
       </div>
     </div>
 
@@ -716,6 +772,9 @@
         {#each peers as p}
           <div class="peer" title={p.name}>
             <span class="peer-name">{p.name}</span>
+            <span class="role-tag" class:role-host={p.role === 'host'} class:role-guest={p.role === 'guest'}>
+              {p.role === 'host' ? 'Host' : 'Guest'}
+            </span>
             {#if p.recording}
               <span class="rec-dot"></span>
             {/if}
@@ -864,6 +923,39 @@
     {/if}
   </div>
 
+  {#if showGuestUploadCard}
+    <div class="upload-card">
+      <div class="upload-header">
+        <h3>Send recording to Drive</h3>
+        {#if isHost}
+          <span class="role-pill-host">Host view</span>
+        {:else if isGuest}
+          <span class="role-pill-guest">Guest uploader</span>
+        {/if}
+      </div>
+
+      {#if isHost}
+        <p class="upload-copy">Host does not upload. The guest (second participant) handles file handoff.</p>
+      {:else if guestUploadReady || uploadState === 'uploading' || uploadState === 'success' || uploadState === 'error'}
+        <p class="upload-copy">
+          Ready file: <strong>{lastRecordingFileName || 'Latest recording'}</strong>
+        </p>
+        <div class="upload-actions">
+          <button class="btn-primary upload-btn" on:click={uploadLastRecording} disabled={!guestUploadReady || uploadState === 'uploading'}>
+            {uploadState === 'uploading' ? 'Uploading...' : 'Upload to Drive'}
+          </button>
+        </div>
+
+        {#if uploadMessage}
+          <p class="upload-status" class:upload-ok={uploadState === 'success'} class:upload-error={uploadState === 'error'}>
+            {uploadMessage}
+          </p>
+        {/if}
+
+      {/if}
+    </div>
+  {/if}
+
   <!-- Instructions -->
   <div class="instructions">
     <details>
@@ -873,7 +965,7 @@
         <li>Both of you choose your microphone above.</li>
         <li>Hit <strong>Start Recording</strong> — your browser will ask where to save the WAV file.</li>
         <li>Press <strong>👏 Clap</strong> to inject a sync tone into both recordings. Use this in your editor to line up the tracks.</li>
-        <li>When done, hit <strong>Stop Recording</strong>. The WAV is already on your disk — no upload needed.</li>
+        <li>When done, hit <strong>Stop Recording</strong>. Guest can optionally upload the WAV to Drive.</li>
       </ol>
       <p class="note">Audio never leaves your computer. The server only carries clap events and presence info.</p>
       <p class="note">If you lose internet, recording continues. Re-connect when back online — just re-load the page.</p>
@@ -966,6 +1058,12 @@
   .mic-icon { font-size: 24px; }
   .ep-name { font-size: 15px; font-weight: 600; }
   .ep-slug { font-size: 11px; color: var(--muted); font-family: monospace; }
+  .role-hint {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .role-hint strong { color: var(--text); }
 
   .header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 
@@ -989,6 +1087,25 @@
     border-radius: 100px;
   }
   .peer-name { font-size: 12px; }
+  .role-tag {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .role-tag.role-host {
+    border-color: rgba(168,85,247,.45);
+    color: #d8b4fe;
+    background: rgba(168,85,247,.12);
+  }
+  .role-tag.role-guest {
+    border-color: rgba(34,197,94,.35);
+    color: #86efac;
+    background: rgba(34,197,94,.1);
+  }
   .rec-dot {
     width: 7px; height: 7px;
     background: var(--danger);
@@ -1264,6 +1381,65 @@
     flex-shrink: 0;
   }
   .warn-stat { color: var(--warn); }
+
+  /* ── Upload card ── */
+  .upload-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .upload-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .upload-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .role-pill-host,
+  .role-pill-guest {
+    font-size: 11px;
+    border-radius: 999px;
+    padding: 4px 10px;
+  }
+  .role-pill-host {
+    color: #d8b4fe;
+    border: 1px solid rgba(168,85,247,.45);
+    background: rgba(168,85,247,.12);
+  }
+  .role-pill-guest {
+    color: #86efac;
+    border: 1px solid rgba(34,197,94,.35);
+    background: rgba(34,197,94,.1);
+  }
+  .upload-copy {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .upload-copy strong { color: var(--text); }
+  .upload-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .upload-btn {
+    width: auto;
+    min-width: 180px;
+  }
+  .upload-status {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .upload-status.upload-ok { color: #86efac; }
+  .upload-status.upload-error { color: #fca5a5; }
 
   /* ── Instructions ── */
   .instructions {

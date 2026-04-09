@@ -18,6 +18,9 @@ The server only carries:
 
 **No audio ever goes to the server.**
 
+If you enable the optional guest upload handoff, the guest can explicitly
+upload a finished WAV file to your n8n workflow after recording stops.
+
 ---
 
 ## Requirements
@@ -39,6 +42,23 @@ npm run dev
 ```
 
 Open `http://localhost:5173`
+
+### Optional: guest upload to n8n (Drive handoff)
+
+Add these to `.env` when you want the room to show the post-recording upload UI:
+
+```bash
+N8N_WEBHOOK_URL=https://your-n8n-host/webhook/your-webhook-id
+N8N_BASIC_AUTH_USER=your-user
+N8N_BASIC_AUTH_PASS=your-pass
+MAX_UPLOAD_MB=400
+```
+
+Notes:
+- `N8N_WEBHOOK_URL` is called by your server-side upload action.
+- Basic Auth secrets stay server-side; they are **not** exposed to the browser.
+- Uploads are validated as WAV before forward: extension + MIME + RIFF/WAVE header.
+- Upload guard defaults to `400` MB (1-hour mono 48kHz/16-bit WAV is ~345.6 MB).
 
 ---
 

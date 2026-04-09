@@ -35,6 +35,22 @@ export function verifySessionToken(token, slug, passwordHash, secret = getSecret
   }
 }
 
+export function makeHostClaimToken(slug, passwordHash, secret = getSecret()) {
+  return createHmac('sha256', secret)
+    .update(`host:${slug}:${passwordHash}`)
+    .digest('hex')
+}
+
+export function verifyHostClaimToken(token, slug, passwordHash, secret = getSecret()) {
+  if (!token || !slug || !passwordHash) return false
+  const expected = makeHostClaimToken(slug, passwordHash, secret)
+  try {
+    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))
+  } catch {
+    return false
+  }
+}
+
 export function generateSlug() {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789'
   const bytes = randomBytes(10)

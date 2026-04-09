@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"vite dev\" \"node --env-file=.env server-ws-dev.js\"",
+    "dev": "concurrently --kill-others-on-fail \"vite dev\" \"node --env-file=.env server-ws-dev.js\"",
     "build": "vite build",
     "start": "node --env-file=.env server.js",
     "preview": "vite preview",

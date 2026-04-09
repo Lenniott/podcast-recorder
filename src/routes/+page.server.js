@@ -1,10 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createRoom, getRoomBySlug } from '$lib/server/db.js'
-import { hashPassword, generateSlug } from '$lib/server/auth.js'
+import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
 const SITE_COOKIE = 'pr_site_auth'
+const ROOM_COOKIE = (slug) => `pr_auth_${slug}`
+const HOST_COOKIE = (slug) => `pr_host_${slug}`
 
 // Cookie is only marked secure if we're explicitly told HTTPS is in use.
 // Avoids cookie being silently rejected during HTTP-only LAN/Docker testing.
@@ -88,6 +90,22 @@ export const actions = {
       }
       const passwordHash = await hashPassword(password)
       createRoom({ slug, name, passwordHash })
+      const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
+      const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
+      cookies.set(ROOM_COOKIE(slug), roomToken, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        secure: isSecure()
+      })
+      cookies.set(HOST_COOKIE(slug), hostToken, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        secure: isSecure()
+      })
       console.log('[action create] room created slug=%s', slug)
     } catch (err) {
       console.error('[action create] DB error:', err)
