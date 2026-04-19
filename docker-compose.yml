@@ -26,6 +26,8 @@ services:
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
       - N8N_BASIC_AUTH_PASS=${N8N_BASIC_AUTH_PASS:-}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-400}
+      # Must match MAX_UPLOAD_MB × 1048576 — adapter-node rejects requests before app code runs
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-419430400}
 
 volumes:
   podcast-recorder-data:
