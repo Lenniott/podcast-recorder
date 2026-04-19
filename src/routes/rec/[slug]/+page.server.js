@@ -20,6 +20,21 @@ function parseMaxUploadMb() {
   return Number.isFinite(raw) && raw > 0 ? raw : 400
 }
 
+function parseMaxUploadsPerClient() {
+  const raw = Number.parseInt(String(env.MAX_UPLOADS_PER_CLIENT || ''), 10)
+  return Number.isFinite(raw) && raw > 0 ? raw : 3
+}
+
+// slug:clientId → upload count. In-memory is fine — resets with the server,
+// and rooms expire anyway. No persistence needed.
+const uploadCounts = new Map()
+
+function parseRoomMaxAgeMs() {
+  const raw = Number.parseFloat(String(env.ROOM_MAX_AGE_HOURS || ''))
+  const hours = Number.isFinite(raw) && raw > 0 ? raw : 12
+  return hours * 60 * 60 * 1000
+}
+
 function isWav(file) {
   const name = String(file?.name || '').toLowerCase()
   return name.endsWith('.wav') || WAV_MIME_TYPES.has(String(file?.type || '').toLowerCase())
@@ -51,6 +66,11 @@ export async function load({ params, cookies }) {
     throw redirect(303, '/?notfound=1')
   }
 
+  if (Date.now() - room.created_at > parseRoomMaxAgeMs()) {
+    console.log('[load /rec/%s] room expired → redirect /', slug)
+    throw redirect(303, '/?expired=1')
+  }
+
   const token = cookies.get(COOKIE(slug))
   const authenticated = verifySessionToken(token, slug, room.password_hash, env.SECRET)
   const isHostClaim = verifyHostClaimToken(cookies.get(HOST_COOKIE(slug)), slug, room.password_hash, env.SECRET)
@@ -68,7 +88,8 @@ export async function load({ params, cookies }) {
     n8nWebhookConfigured: n8nConfigured,
     uploadSectionEnabled,
     isHostClaim,
-    createdAt: room.created_at
+    createdAt: room.created_at,
+    roomPassword: isHostClaim ? (room.password_plain || null) : null
   }
 }
 
@@ -174,6 +195,19 @@ export const actions = {
       })
     }
 
+    const uploadKey = `${slug}:${clientId}`
+    const uploadCount = uploadCounts.get(uploadKey) ?? 0
+    const maxUploads = parseMaxUploadsPerClient()
+    if (uploadCount >= maxUploads) {
+      return fail(429, {
+        upload: {
+          ok: false,
+          state: 'error',
+          message: `Upload limit reached (${maxUploads} per session). Contact your host if you need to re-upload.`
+        }
+      })
+    }
+
     if (!(file instanceof File)) {
       return fail(400, {
         upload: { ok: false, state: 'error', message: 'Please choose a WAV file to upload.' }
@@ -247,6 +281,7 @@ export const actions = {
         })
       }
 
+      uploadCounts.set(uploadKey, uploadCount + 1)
       return {
         upload: {
           ok: true,

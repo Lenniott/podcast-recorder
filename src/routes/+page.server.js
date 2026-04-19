@@ -29,10 +29,15 @@ function verifySiteToken(token) {
   } catch { return false }
 }
 
-export async function load({ cookies }) {
+export async function load({ cookies, url }) {
   const siteAuthed = verifySiteToken(cookies.get(SITE_COOKIE))
   console.log('[load /] siteProtected=%s siteAuthed=%s', !!env.SITE_PASSWORD, siteAuthed)
-  return { siteAuthed, siteProtected: !!env.SITE_PASSWORD }
+  return {
+    siteAuthed,
+    siteProtected: !!env.SITE_PASSWORD,
+    notFound: url.searchParams.has('notfound'),
+    expired: url.searchParams.has('expired')
+  }
 }
 
 export const actions = {
@@ -92,7 +97,7 @@ export const actions = {
       const showUploadRaw = data.get('show_upload')
       const showUpload =
         showUploadRaw === 'on' || showUploadRaw === '1' || showUploadRaw === 'true'
-      createRoom({ slug, name, passwordHash, showUpload })
+      createRoom({ slug, name, passwordHash, passwordPlain: password, showUpload })
       const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
       const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
       cookies.set(ROOM_COOKIE(slug), roomToken, {

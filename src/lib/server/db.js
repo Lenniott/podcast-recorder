@@ -31,6 +31,12 @@ function getDb() {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
 
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN password_plain TEXT`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
   return _db
 }
 
@@ -40,12 +46,12 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash, showUpload = true }) {
+export function createRoom({ slug, name, passwordHash, passwordPlain = null, showUpload = true }) {
   const su = showUpload ? 1 : 0
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, created_at, show_upload)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, Date.now(), su)
+    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at, show_upload)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, Date.now(), su)
 }
 
 export function getRoomBySlug(slug) {

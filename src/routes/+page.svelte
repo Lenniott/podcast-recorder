@@ -42,6 +42,12 @@
   <!-- ── Create episode form ──────────────────────────────────────── -->
   {:else}
 
+  {#if data.expired}
+    <div class="notice-banner notice-warn">That room has expired and is no longer available.</div>
+  {:else if data.notFound}
+    <div class="notice-banner notice-warn">Room not found — it may have been deleted.</div>
+  {/if}
+
   <div class="card form-card">
     <h2>New Episode</h2>
     <p class="sub">Audio stays on your machine. We just keep you in sync.</p>
@@ -161,6 +167,18 @@
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 16px;
+  }
+  .notice-banner {
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .notice-warn {
+    background: rgba(250,204,21,.1);
+    border: 1px solid rgba(250,204,21,.25);
+    color: #fde047;
   }
 
   .footer-note {

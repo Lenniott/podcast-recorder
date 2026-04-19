@@ -57,6 +57,11 @@
   let micLevel = 0
   let uploadState = 'idle' // idle | ready | uploading | success | error
   let uploadMessage = ''
+  let uploadProgress = 0   // 0-100
+  let uploadSpeed = 0      // bytes/sec
+  let uploadTimeLeft = 0   // seconds
+  let uploadLoaded = 0     // bytes
+  let uploadTotal = 0      // bytes
   let copyLinkDone = false
   /** @type {ReturnType<typeof setTimeout> | null} */
   let copyLinkTimer = null
@@ -546,33 +551,75 @@
     }
   }
 
+  function fmtBytes(b) {
+    if (b >= 1_048_576) return (b / 1_048_576).toFixed(1) + ' MB'
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB'
+    return b + ' B'
+  }
+  function fmtTime(s) {
+    if (!isFinite(s) || s <= 0) return '—'
+    if (s >= 3600) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'
+    if (s >= 60) return Math.floor(s / 60) + 'm ' + Math.floor(s % 60) + 's'
+    return Math.ceil(s) + 's'
+  }
+
   async function uploadWavToWebhook(file) {
     if (!file || data.isHostClaim) return
     uploadState = 'uploading'
-    uploadMessage = 'Sending to Drive workflow...'
-    try {
-      const fd = new FormData()
-      fd.set('audio_file', file, file.name || 'recording.wav')
-      fd.set('client_id', clientId || '')
+    uploadMessage = ''
+    uploadProgress = 0
+    uploadSpeed = 0
+    uploadTimeLeft = 0
+    uploadLoaded = 0
+    uploadTotal = file.size
 
-      const response = await fetch('?/upload_guest_audio', {
-        method: 'POST',
-        body: fd,
-        headers: { accept: 'application/json' }
-      })
-      const result = deserialize(await response.text())
-      const payload = result?.data?.upload
-      if (result.type === 'success' && payload?.ok) {
-        uploadState = 'success'
-        uploadMessage = payload.message || 'Successfully sent to Drive workflow.'
-        return
+    const fd = new FormData()
+    fd.set('audio_file', file, file.name || 'recording.wav')
+    fd.set('client_id', clientId || '')
+
+    await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest()
+      const startTime = Date.now()
+
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return
+        const elapsed = (Date.now() - startTime) / 1000
+        uploadLoaded = e.loaded
+        uploadTotal = e.total
+        uploadProgress = Math.round((e.loaded / e.total) * 100)
+        uploadSpeed = elapsed > 0 ? e.loaded / elapsed : 0
+        uploadTimeLeft = uploadSpeed > 0 ? (e.total - e.loaded) / uploadSpeed : 0
       }
-      uploadState = 'error'
-      uploadMessage = payload?.message || 'Upload failed. Please try again.'
-    } catch (err) {
-      uploadState = 'error'
-      uploadMessage = 'Upload failed. Please try again.'
-    }
+
+      xhr.onload = () => {
+        try {
+          const result = deserialize(xhr.responseText)
+          const payload = result?.data?.upload
+          if (result.type === 'success' && payload?.ok) {
+            uploadState = 'success'
+            uploadProgress = 100
+            uploadMessage = payload.message || 'Successfully sent to Drive workflow.'
+          } else {
+            uploadState = 'error'
+            uploadMessage = payload?.message || 'Upload failed. Please try again.'
+          }
+        } catch {
+          uploadState = 'error'
+          uploadMessage = 'Upload failed. Please try again.'
+        }
+        resolve()
+      }
+
+      xhr.onerror = () => {
+        uploadState = 'error'
+        uploadMessage = 'Upload failed. Please try again.'
+        resolve()
+      }
+
+      xhr.open('POST', '?/upload_guest_audio')
+      xhr.setRequestHeader('accept', 'application/json')
+      xhr.send(fd)
+    })
   }
 
   async function uploadLastRecording() {
@@ -860,6 +907,12 @@
             {copyLinkDone ? 'Copied!' : 'Copy link'}
           </button>
         </div>
+        {#if data.isHostClaim && data.roomPassword}
+          <div class="room-password-row">
+            <span class="room-password-label">Password:</span>
+            <span class="room-password-value">{data.roomPassword}</span>
+          </div>
+        {/if}
         {#if myRole}
           <div class="role-hint" aria-live="polite">
             <span class="role-hint-label">You are</span>
@@ -1081,6 +1134,18 @@
         </label>
       </div>
 
+      {#if uploadState === 'uploading'}
+        <div class="upload-progress-wrap">
+          <div class="upload-progress-bar" style="width: {uploadProgress}%"></div>
+        </div>
+        <div class="upload-progress-stats">
+          <span>{uploadProgress}%</span>
+          <span>{fmtBytes(uploadLoaded)} / {fmtBytes(uploadTotal)}</span>
+          <span>{fmtBytes(uploadSpeed)}/s</span>
+          <span>~{fmtTime(uploadTimeLeft)} left</span>
+        </div>
+      {/if}
+
       {#if uploadMessage}
         <p class="upload-status" class:upload-ok={uploadState === 'success'} class:upload-error={uploadState === 'error'}>
           {uploadMessage}
@@ -1199,6 +1264,24 @@
   }
 
   .ep-slug { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+  .room-password-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 11px;
+  }
+  .room-password-label { color: var(--muted); }
+  .room-password-value {
+    font-family: monospace;
+    background: rgba(250,204,21,.12);
+    border: 1px solid rgba(250,204,21,.25);
+    color: #fde047;
+    padding: 2px 7px;
+    border-radius: 5px;
+    letter-spacing: 0.03em;
+  }
 
   .btn-copy-link {
     font-size: 11px;
@@ -1668,6 +1751,25 @@
   }
   .upload-status.upload-ok { color: #86efac; }
   .upload-status.upload-error { color: #fca5a5; }
+  .upload-progress-wrap {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .upload-progress-bar {
+    height: 100%;
+    background: #22c55e;
+    border-radius: 999px;
+    transition: width 0.3s ease;
+  }
+  .upload-progress-stats {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
 
   /* ── Instructions ── */
   .instructions {
