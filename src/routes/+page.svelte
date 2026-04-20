@@ -9,14 +9,13 @@
 </script>
 
 <svelte:head>
-  <title>Podpatch — Podcast Recorder</title>
+  <title>RecinPod Podcast Recorder</title>
 </svelte:head>
 
 <main>
   <div class="hero">
-    <div class="logo">🎙️</div>
-    <h1>Podpatch</h1>
-    <p class="tagline">Lossless local recording. No cloud. No fuss.</p>
+    <h1>Home Reccer</h1>
+    <p class="tagline">Lossless local recording</p>
   </div>
 
   <!-- ── Site password gate ───────────────────────────────────────── -->
@@ -127,11 +126,10 @@
   }
 
   .hero {
-    text-align: center;
+    text-align: left;
     margin-bottom: 32px;
   }
 
-  .logo { font-size: 48px; margin-bottom: 12px; }
 
   h1 {
     font-size: 32px;
