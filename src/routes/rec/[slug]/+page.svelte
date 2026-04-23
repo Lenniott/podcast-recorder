@@ -52,6 +52,15 @@
   let lastClapFrom = null
   let clapTimeout = null
 
+  // ─── Clock sync ──────────────────────────────────────────────────────
+  // Offset between this client's Date.now() and the server's Date.now().
+  // clockOffset = serverTime - clientTime at the same physical moment.
+  // Used to correct triggerAtMs (which is in server time) into local time.
+  let clockOffset = 0
+  let _clockSamples = []
+  let _pingSeq = 0
+  const _pendingPings = new Map() // seq → sentAt (client time)
+
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
   let micLevel = 0
@@ -657,8 +666,20 @@
     // Server echoes back to all (including sender) which triggers tone injection
   }
 
+  function syncClock() {
+    _clockSamples = []
+    for (let i = 0; i < 3; i++) {
+      const seq = ++_pingSeq
+      const sentAt = Date.now()
+      _pendingPings.set(seq, sentAt)
+      ws.send(JSON.stringify({ type: 'ping', seq, sentAt }))
+    }
+  }
+
   function injectClap(from, triggerAtMs = null) {
-    const delayMs = Number.isFinite(triggerAtMs) ? Math.max(0, triggerAtMs - Date.now()) : 0
+    const delayMs = Number.isFinite(triggerAtMs)
+      ? Math.max(0, triggerAtMs - (Date.now() + clockOffset))
+      : 0
     setTimeout(() => {
       workletNode?.port.postMessage({ type: 'clap' })
     }, delayMs)
@@ -694,6 +715,7 @@
     ws.onopen = () => {
       wsStatus = 'connected'
       ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
+      syncClock()
     }
 
     ws.onmessage = (e) => {
@@ -701,6 +723,15 @@
       try { msg = JSON.parse(e.data) } catch { return }
 
       if (msg.type === 'presence')  peers = msg.peers
+      if (msg.type === 'pong') {
+        const sentAt = _pendingPings.get(msg.seq)
+        if (sentAt !== undefined) {
+          _pendingPings.delete(msg.seq)
+          _clockSamples.push(msg.serverReceivedAt - (sentAt + Date.now()) / 2)
+          if (_clockSamples.length >= 3)
+            clockOffset = _clockSamples.reduce((a, b) => a + b) / _clockSamples.length
+        }
+      }
       if (msg.type === 'clap') {
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)

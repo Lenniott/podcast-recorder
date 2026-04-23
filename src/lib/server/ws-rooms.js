@@ -11,11 +11,13 @@
  *
  * Protocol (client → server):
  *   { type: 'join', name, clientId }     — announce on connect
+ *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
+ *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
  *   { type: 'error',           message }
@@ -176,6 +178,10 @@ export function setupWss(wss) {
 
         recomputeRoles(room)
         sendPresence(slug)
+      }
+
+      if (msg.type === 'ping') {
+        send(ws, { type: 'pong', seq: msg.seq, clientSentAt: msg.sentAt, serverReceivedAt: Date.now() })
       }
 
       if (msg.type === 'clap' && clientId) {
