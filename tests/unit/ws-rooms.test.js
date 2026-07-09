@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// ─── Mock roomExists so ws-rooms doesn't need a real DB ─────────────────────
+// ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
   roomExists: vi.fn(() => true),  // default: room exists
+  getRoomBySlug: vi.fn(() => ({
+    slug: 'room1',
+    password_hash: 'mock-hash',
+    show_upload: 1
+  })),
   default: {}
 }))
 
@@ -31,7 +36,7 @@ function mockWss() {
   return {
     on(event, fn) { handlers[event] = fn },
     connect(ws, slug) {
-      const req = { url: `/ws?slug=${slug}` }
+      const req = { url: `/ws?slug=${slug}`, headers: {} }
       handlers.connection?.(ws, req)
     }
   }
