@@ -4,6 +4,7 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import WatchTogether from '$lib/WatchTogether.svelte'
 
   function focus(el) { el.focus() }
@@ -65,7 +66,6 @@
 
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
-  let micLevel = 0
   let uploadState = 'idle' // idle | ready | uploading | success | error
   let uploadMessage = ''
   let uploadProgress = 0   // 0-100
@@ -102,11 +102,11 @@
   let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
 
   // ─── dBFS meter ──────────────────────────────────────────────────────
-  const METER_MIN  = -60
-  const METER_MAX  =   0
   let dbLevel      = METER_MIN  // current RMS in dBFS (numeric readout)
-  /** Smoothed level for the green bar — tracks max(rms, peak) with attack/release */
+  /** Smoothed RMS for the green bar — same quantity as the readout, so the
+   *  gradient color always matches the numbers. Peak only drives the hold line. */
   let meterFillDb  = METER_MIN
+  let lastLevelAt  = 0          // performance.now() of the previous level message
   let peakHoldDb   = METER_MIN  // peak-hold value (resets after 2s)
   let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
@@ -361,21 +361,15 @@
     workletNode.port.onmessage = async (e) => {
       if (e.data.type === 'level') {
         const { rms, peak } = e.data
-        micLevel = rms
 
-        // RMS → dBFS for numeric readout
-        dbLevel = rms > 0.00001 ? Math.max(METER_MIN, 20 * Math.log10(rms)) : METER_MIN
+        // Bar + readout are both RMS; only the hold line shows peak
+        dbLevel = dbfs(rms)
+        const peakDbNow = dbfs(peak)
 
-        // Peak → dBFS for peak-hold indicator
-        const peakDbNow = peak > 0.00001 ? 20 * Math.log10(peak) : METER_MIN
-        const target = Math.max(dbLevel, peakDbNow)
-        const attack = 0.42
-        const release = 0.12
-        if (target > meterFillDb) {
-          meterFillDb += (target - meterFillDb) * attack
-        } else {
-          meterFillDb += (target - meterFillDb) * release
-        }
+        const now = performance.now()
+        const dtSec = lastLevelAt ? Math.min(0.25, (now - lastLevelAt) / 1000) : 0.05
+        lastLevelAt = now
+        meterFillDb = nextFillDb(meterFillDb, dbLevel, dtSec)
 
         if (peakDbNow > peakHoldDb) {
           peakHoldDb = peakDbNow

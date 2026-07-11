@@ -13,11 +13,14 @@
  *   { type: 'debug_marker' }  — temporary reconnect marker tone
  *
  * Messages OUT (to main thread):
- *   { type: 'data',   buffer: Float32Array }  — audio chunk ready to write
- *   { type: 'level',  rms: number }           — current RMS level (0-1) for waveform
+ *   { type: 'data',   buffer: Float32Array }         — audio chunk ready to write
+ *   { type: 'level',  rms: number, peak: number }    — levels (0-1) for the dBFS meter,
+ *                                                      aggregated over LEVEL_WINDOW samples
  */
 
 const BUFFER_SIZE = 8192       // samples per chunk posted to main thread
+const LEVEL_WINDOW = 2048      // samples per level message (~23/s at 48kHz) — keeps
+                               // main-thread reactive updates cheap and the meter readable
 const CLAP_FREQ   = 1200       // Hz — sync marker tone
 const CLAP_AMP    = 0.7        // amplitude of injected tone (loud but not clipping)
 const CLAP_MS     = 35         // short marker for easier visual alignment
@@ -31,6 +34,9 @@ class RecorderProcessor extends AudioWorkletProcessor {
   constructor () {
     super()
     this._buffer       = []
+    this._levelSumSq   = 0   // Σ s² over the current level window
+    this._levelPeak    = 0   // max |s| over the current level window
+    this._levelCount   = 0   // samples accumulated in the current level window
     this._clapRemaining = 0  // samples left to inject
     this._clapTotal     = 0  // total clap length in samples
     this._clapPhase    = 0   // phase accumulator for sine
@@ -60,8 +66,6 @@ class RecorderProcessor extends AudioWorkletProcessor {
     if (!channelData) return true
 
     const len = channelData.length
-    let sumSq = 0
-    let peak  = 0
 
     for (let i = 0; i < len; i++) {
       let s = channelData[i]
@@ -84,13 +88,24 @@ class RecorderProcessor extends AudioWorkletProcessor {
       }
 
       this._buffer.push(s)
-      sumSq += s * s
+      this._levelSumSq += s * s
       const abs = s < 0 ? -s : s
-      if (abs > peak) peak = abs
+      if (abs > this._levelPeak) this._levelPeak = abs
     }
+    this._levelCount += len
 
-    // Post RMS + peak for the dBFS meter
-    this.port.postMessage({ type: 'level', rms: Math.sqrt(sumSq / len), peak })
+    // Post RMS + peak for the dBFS meter, aggregated so the main thread
+    // isn't hit with a reactive update every 128-sample render quantum
+    if (this._levelCount >= LEVEL_WINDOW) {
+      this.port.postMessage({
+        type: 'level',
+        rms: Math.sqrt(this._levelSumSq / this._levelCount),
+        peak: this._levelPeak
+      })
+      this._levelSumSq = 0
+      this._levelPeak  = 0
+      this._levelCount = 0
+    }
 
     // When buffer is full, post to main thread for writing
     if (this._buffer.length >= BUFFER_SIZE) {
