@@ -17,3 +17,6 @@ Thumbs.db
 
 # Logs
 *.log
+.cursor/
+.github/
+.playwright-mcp/

@@ -10,10 +10,12 @@ Record lossless audio together, remotely. Audio never leaves your machine.
 - Browser writes WAV directly to local disk via File System Access API
 - Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
 - Load both WAVs in any editor, line up the clap spike, done
+- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV)
 
 The server only carries:
 - WebSocket presence (who's in the room)
 - Clap sync events
+- Shared YouTube playback state (video id + position — never the video itself)
 - Room metadata (name, password hash) in SQLite
 
 **No audio ever goes to the server.**

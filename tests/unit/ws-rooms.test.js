@@ -11,6 +11,11 @@ vi.mock('../../src/lib/server/db.js', () => ({
   default: {}
 }))
 
+// ─── Mock auth so a known cookie value grants the host claim ────────────────
+vi.mock('../../src/lib/server/auth.js', () => ({
+  verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
+}))
+
 import { roomExists } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 
@@ -35,8 +40,9 @@ function mockWss() {
   const handlers = {}
   return {
     on(event, fn) { handlers[event] = fn },
-    connect(ws, slug) {
-      const req = { url: `/ws?slug=${slug}`, headers: {} }
+    connect(ws, slug, { asHost = false } = {}) {
+      const headers = asHost ? { cookie: `pr_host_${slug}=valid-host-token` } : {}
+      const req = { url: `/ws?slug=${slug}`, headers }
       handlers.connection?.(ws, req)
     }
   }
@@ -163,5 +169,110 @@ describe('setupWss — connection handling', () => {
     const lastPresence = ws2.sent.filter(m => m.type === 'presence').at(-1)
     expect(lastPresence.peers.length).toBe(1)
     expect(lastPresence.peers[0].name).toBe('Guest')
+  })
+})
+
+describe('setupWss — yt_state (watch together)', () => {
+  let wss, host, guest
+
+  function sendYt(ws, videoId = 'dQw4w9WgXcQ', playing = true, positionSec = 42.5) {
+    ws.emit('message', JSON.stringify({ type: 'yt_state', videoId, playing, positionSec }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    roomExists.mockReturnValue(true)
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+  })
+
+  it('host command broadcasts stamped state to all peers including host', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(5000)
+    sendYt(host)
+    for (const ws of [host, guest]) {
+      const msg = ws.sent.find(m => m.type === 'yt_state')
+      expect(msg).toMatchObject({
+        videoId: 'dQw4w9WgXcQ',
+        playing: true,
+        positionSec: 42.5,
+        positionAtMs: 5250,   // Date.now() + YT_LEAD_MS
+        triggerAtMs: 5250
+      })
+    }
+    nowSpy.mockRestore()
+  })
+
+  it('rejects yt_state from non-host with error and no broadcast', () => {
+    sendYt(guest)
+    expect(guest.sent.some(m => m.type === 'error')).toBe(true)
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('rejects malformed video ids', () => {
+    sendYt(host, 'javascript:alert(1)')
+    expect(host.sent.some(m => m.type === 'error')).toBe(true)
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('coerces bad positionSec to 0', () => {
+    sendYt(host, 'dQw4w9WgXcQ', false, 'garbage')
+    const msg = host.sent.find(m => m.type === 'yt_state')
+    expect(msg.positionSec).toBe(0)
+    expect(msg.playing).toBe(false)
+  })
+
+  it('replays stored state to a late joiner with a fresh triggerAtMs', () => {
+    const nowSpy = vi.spyOn(Date, 'now')
+    nowSpy.mockReturnValue(5000)
+    guest.emit('close')                       // room back to host only
+    sendYt(host, 'dQw4w9WgXcQ', true, 10)
+
+    nowSpy.mockReturnValue(9000)              // guest arrives 4s later
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+
+    const replay = late.sent.find(m => m.type === 'yt_state')
+    expect(replay).toMatchObject({
+      videoId: 'dQw4w9WgXcQ',
+      playing: true,
+      positionSec: 10,
+      positionAtMs: 5250,   // original stamp — lets the client compute catch-up
+      triggerAtMs: 9250     // fresh trigger
+    })
+    nowSpy.mockRestore()
+  })
+
+  it('does not replay on a name-update join', () => {
+    sendYt(host)
+    host.sent.length = 0
+    join(host, 'Renamed Host', 'c1')          // same clientId → name update
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('empty videoId clears state and broadcasts the clear', () => {
+    sendYt(host)
+    sendYt(host, '')
+    const clear = guest.sent.filter(m => m.type === 'yt_state').at(-1)
+    expect(clear.videoId).toBe('')
+
+    // a new joiner gets no replay
+    guest.emit('close')
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('state is dropped when the room empties', () => {
+    sendYt(host)
+    guest.emit('close')
+    host.emit('close')
+
+    const again = mockWs()
+    wss.connect(again, 'room1'); join(again, 'Back', 'c9')
+    expect(again.sent.some(m => m.type === 'yt_state')).toBe(false)
   })
 })

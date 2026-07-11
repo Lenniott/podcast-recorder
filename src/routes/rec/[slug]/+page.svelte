@@ -4,6 +4,7 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import WatchTogether from '$lib/WatchTogether.svelte'
 
   function focus(el) { el.focus() }
 
@@ -14,6 +15,7 @@
   let ws = null
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost }]
+  let watchTogether = null     // WatchTogether component instance
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -703,6 +705,11 @@
     ws.send(JSON.stringify({ type: 'recording_state', state }))
   }
 
+  function wsSend(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify(payload))
+  }
+
   const pendingClaps = []
 
   function connectWs() {
@@ -736,6 +743,7 @@
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
+      if (msg.type === 'yt_state')  watchTogether?.applyState(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 
@@ -1127,6 +1135,9 @@
     {/if}
   </div>
 
+  <!-- Watch together (synced YouTube) -->
+  <WatchTogether {isHost} {clockOffset} send={wsSend} bind:this={watchTogether} />
+
   {#if showGuestUploadCard}
     <div class="upload-card">
       <div class="upload-header">
@@ -1184,23 +1195,6 @@
       {/if}
     </div>
   {/if}
-
-  <!-- Instructions -->
-  <div class="instructions">
-    <details>
-      <summary>How to use</summary>
-      <ol>
-        <li>Share this URL and the room password with your guest.</li>
-        <li>Both of you choose your microphone above.</li>
-        <li>Hit <strong>Start Recording</strong> — your browser will ask where to save the WAV file.</li>
-        <li>Press <strong>👏 Clap</strong> to inject a sync tone into both recordings. Use this in your editor to line up the tracks.</li>
-        <li>When done, hit <strong>Stop Recording</strong>. Guest can optionally upload the WAV to Drive.</li>
-      </ol>
-      <p class="note">Audio never leaves your computer. The server only carries clap events and presence info.</p>
-      <p class="note">If you lose internet, recording continues. Re-connect when back online — just re-load the page.</p>
-      <p class="note">File System Access API required — <strong>Chrome or Edge only</strong>.</p>
-    </details>
-  </div>
 
 </div>
 {/if}

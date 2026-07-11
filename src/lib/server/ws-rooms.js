@@ -14,12 +14,19 @@
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
+ *   { type: 'yt_state', videoId, playing, positionSec }
+ *                                        — host only; full desired shared-video
+ *                                          state; videoId '' clears the video
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
+ *   { type: 'yt_state',        videoId, playing, positionSec,
+ *                              positionAtMs, triggerAtMs }
+ *                                        — broadcast on host command and replayed
+ *                                          to late joiners with a fresh triggerAtMs
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -29,10 +36,16 @@ import { verifyHostClaimToken } from './auth.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250
+const YT_LEAD_MS = 250
+const YT_VIDEO_ID = /^[\w-]{11}$/
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt }
 const rooms = new Map()
+
+// ytStates: Map<slug, { videoId, playing, positionSec, positionAtMs }>
+// The room's shared YouTube video, kept so late joiners can catch up.
+const ytStates = new Map()
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg))
@@ -92,6 +105,7 @@ function broadcast(slug, msg, excludeClientId = null) {
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
+  ytStates.clear()
 }
 
 export function getPeerRole(slug, clientId) {
@@ -146,6 +160,7 @@ export function setupWss(wss) {
       try { msg = JSON.parse(raw) } catch { return }
 
       if (msg.type === 'join') {
+        const firstJoin    = !clientId
         const incomingId   = String(msg.clientId || '').slice(0, 64) || null
         const incomingName = String(msg.name || 'Guest').slice(0, 50).trim() || 'Guest'
 
@@ -178,6 +193,15 @@ export function setupWss(wss) {
 
         recomputeRoles(room)
         sendPresence(slug)
+
+        // Catch a late joiner (or reconnect) up on the shared video
+        if (firstJoin && clientId && ytStates.has(slug)) {
+          send(ws, {
+            type: 'yt_state',
+            ...ytStates.get(slug),
+            triggerAtMs: Date.now() + YT_LEAD_MS
+          })
+        }
       }
 
       if (msg.type === 'ping') {
@@ -201,13 +225,49 @@ export function setupWss(wss) {
         sendPresence(slug)
         broadcast(slug, { type: 'recording_state', name: peer.name, state: msg.state }, clientId)
       }
+
+      if (msg.type === 'yt_state' && clientId) {
+        if (peer.role !== 'host') {
+          send(ws, { type: 'error', message: 'Only the host can control playback' })
+          return
+        }
+
+        const videoId = String(msg.videoId || '')
+        if (videoId !== '' && !YT_VIDEO_ID.test(videoId)) {
+          send(ws, { type: 'error', message: 'Invalid YouTube video id' })
+          return
+        }
+
+        if (videoId === '') {
+          ytStates.delete(slug)
+          for (const p of room.values()) {
+            send(p.ws, { type: 'yt_state', videoId: '', playing: false, positionSec: 0, positionAtMs: 0, triggerAtMs: 0 })
+          }
+          return
+        }
+
+        const positionSec = Number(msg.positionSec)
+        const applyAtMs = Date.now() + YT_LEAD_MS
+        const state = {
+          videoId,
+          playing: !!msg.playing,
+          positionSec: Number.isFinite(positionSec) && positionSec > 0 ? positionSec : 0,
+          positionAtMs: applyAtMs
+        }
+        ytStates.set(slug, state)
+        for (const p of room.values()) {
+          send(p.ws, { type: 'yt_state', ...state, triggerAtMs: applyAtMs })
+        }
+      }
     })
 
     ws.on('close', () => {
       if (clientId) {
         room.delete(clientId)
-        if (room.size === 0) rooms.delete(slug)
-        else {
+        if (room.size === 0) {
+          rooms.delete(slug)
+          ytStates.delete(slug)
+        } else {
           recomputeRoles(room)
           sendPresence(slug)
         }
