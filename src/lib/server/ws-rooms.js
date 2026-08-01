@@ -14,9 +14,11 @@
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
- *   { type: 'yt_state', videoId, playing, positionSec }
- *                                        — host only; full desired shared-video
- *                                          state; videoId '' clears the video
+ *   { type: 'yt_state', action, videoId, playing, positionSec }
+ *                                        — action: 'load' | 'clear' (host only) or
+ *                                          'control' (host, or guest if the room has
+ *                                          guest_can_control_playback set); full desired
+ *                                          shared-video state; videoId '' clears the video
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
@@ -227,7 +229,13 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'yt_state' && clientId) {
-        if (peer.role !== 'host') {
+        const action = msg.action === 'load' || msg.action === 'clear' || msg.action === 'control'
+          ? msg.action
+          : (String(msg.videoId || '') === '' ? 'clear' : 'load')
+
+        const guestCanControl = !!roomRow?.guest_can_control_playback
+        const allowed = peer.role === 'host' || (action === 'control' && peer.role === 'guest' && guestCanControl)
+        if (!allowed) {
           send(ws, { type: 'error', message: 'Only the host can control playback' })
           return
         }
@@ -235,6 +243,12 @@ export function setupWss(wss) {
         const videoId = String(msg.videoId || '')
         if (videoId !== '' && !YT_VIDEO_ID.test(videoId)) {
           send(ws, { type: 'error', message: 'Invalid YouTube video id' })
+          return
+        }
+
+        if (action === 'control' && videoId !== (ytStates.get(slug)?.videoId || '')) {
+          // A guest control message must target the video already playing —
+          // it can never be used to smuggle in a load/clear.
           return
         }
 

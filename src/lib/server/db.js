@@ -37,6 +37,12 @@ function getDb() {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
 
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_can_control_playback INTEGER NOT NULL DEFAULT 0`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
   return _db
 }
 
@@ -46,12 +52,13 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash, passwordPlain = null, showUpload = true }) {
+export function createRoom({ slug, name, passwordHash, passwordPlain = null, showUpload = true, guestCanControlPlayback = false }) {
   const su = showUpload ? 1 : 0
+  const gc = guestCanControlPlayback ? 1 : 0
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at, show_upload)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, passwordPlain, Date.now(), su)
+    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at, show_upload, guest_can_control_playback)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, Date.now(), su, gc)
 }
 
 export function getRoomBySlug(slug) {

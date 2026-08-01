@@ -101,6 +101,20 @@
         <span class="hint">Requires N8N webhook env on the server. Uncheck to hide upload UI for this episode.</span>
       </div>
 
+      <div class="field field-checkbox">
+        <span class="checkbox-heading">Guest playback control</span>
+        <label class="checkbox-row">
+          <input
+            id="guest_can_control_playback"
+            type="checkbox"
+            name="guest_can_control_playback"
+            value="1"
+          />
+          <span class="checkbox-copy">Let your guest play/pause and seek the shared video</span>
+        </label>
+        <span class="hint">Guests can never load a new video or clear it — only the host can do that.</span>
+      </div>
+
       <button type="submit" class="btn-primary" disabled={loading}>
         {loading ? 'Creating…' : 'Create Room & Get Link'}
       </button>

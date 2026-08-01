@@ -111,6 +111,13 @@
   let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   let clipTimer    = null
+
+  // ─── Voice-activity (drives Watch Together auto-ducking) ──────────────
+  const SPEAKING_THRESHOLD_DB = -45
+  const SPEAKING_HANGOVER_MS  = 400
+  let speaking     = false      // true while (recently) talking, per SPEAKING_HANGOVER_MS
+  let lastSpeechAt = 0          // performance.now() of the last above-threshold level
+
   let sessionStarted = false
   let audioInitError = ''
   /** False once we have a display name from cookie, sessionStorage, or form. */
@@ -370,6 +377,9 @@
         const dtSec = lastLevelAt ? Math.min(0.25, (now - lastLevelAt) / 1000) : 0.05
         lastLevelAt = now
         meterFillDb = nextFillDb(meterFillDb, dbLevel, dtSec)
+
+        if (dbLevel > SPEAKING_THRESHOLD_DB) lastSpeechAt = now
+        speaking = (now - lastSpeechAt) < SPEAKING_HANGOVER_MS
 
         if (peakDbNow > peakHoldDb) {
           peakHoldDb = peakDbNow
@@ -1130,7 +1140,14 @@
   </div>
 
   <!-- Watch together (synced YouTube) -->
-  <WatchTogether {isHost} {clockOffset} send={wsSend} bind:this={watchTogether} />
+  <WatchTogether
+    {isHost}
+    guestCanControl={data.guestPlaybackControlEnabled}
+    {speaking}
+    {clockOffset}
+    send={wsSend}
+    bind:this={watchTogether}
+  />
 
   {#if showGuestUploadCard}
     <div class="upload-card">

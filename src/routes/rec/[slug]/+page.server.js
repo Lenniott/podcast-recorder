@@ -79,6 +79,7 @@ export async function load({ params, cookies }) {
   const n8nConfigured = !!env.N8N_WEBHOOK_URL
   const showUploadRoom = Number(room.show_upload) !== 0
   const uploadSectionEnabled = n8nConfigured && showUploadRoom
+  const guestPlaybackControlEnabled = Number(room.guest_can_control_playback) !== 0
 
   return {
     slug,
@@ -87,6 +88,7 @@ export async function load({ params, cookies }) {
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
     n8nWebhookConfigured: n8nConfigured,
     uploadSectionEnabled,
+    guestPlaybackControlEnabled,
     isHostClaim,
     createdAt: room.created_at,
     roomPassword: isHostClaim ? (room.password_plain || null) : null

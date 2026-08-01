@@ -3,10 +3,16 @@
   import { parseYouTubeId, effectivePosition } from "./yt-sync.js";
 
   export let isHost = false;
+  export let guestCanControl = false; // room setting: can a guest play/pause/seek?
+  export let speaking = false; // is this browser's own mic currently picking up speech?
   export let send = () => {}; // (payload) => void — JSON-sends over the room WS
   export let clockOffset = 0; // serverTime - clientTime, from the page's clock sync
 
   const SEEK_TOLERANCE_SEC = 0.75;
+  const DRIFT_CHECK_MS = 20000;
+  const DUCK_FACTOR = 0.25;
+
+  $: canControl = isHost || guestCanControl;
 
   let container; // div the IFrame API replaces
   let player = null;
@@ -26,6 +32,16 @@
   let scrubbing = false;
   let scrubSec = 0;
   let uiTimer = null;
+  let driftTimer = null;
+
+  // Local-only playback volume — never synced over the WS.
+  let volume = 100;
+  let muted = false;
+  let duckingEnabled = true;
+
+  $: effectiveVolume = duckingEnabled && speaking ? Math.round(volume * DUCK_FACTOR) : volume;
+  $: if (playerReady && player) player.setVolume(effectiveVolume);
+  $: if (playerReady && player) muted ? player.mute() : player.unMute();
 
   // ── Shared state in (the component's single entry point) ──────────
 
@@ -120,7 +136,10 @@
               onReady: () => {
                 playerReady = true;
                 loadedVideoId = videoId;
+                volume = player.getVolume();
+                muted = player.isMuted();
                 startUiTimer();
+                startDriftTimer();
                 resolve();
               },
             },
@@ -131,6 +150,7 @@
 
   function clearPlayer() {
     stopUiTimer();
+    stopDriftTimer();
     player?.destroy();
     player = null;
     playerReady = false;
@@ -154,9 +174,30 @@
     uiTimer = null;
   }
 
+  // Periodically re-align this browser's player with the shared state even
+  // without a fresh host command, so drift (and the echo it can cause) can't
+  // silently build up between manual "resync" clicks.
+  function startDriftTimer() {
+    stopDriftTimer();
+    driftTimer = setInterval(() => {
+      if (!playerReady || !sharedState) return;
+      const target = effectivePosition(sharedState, Date.now() + clockOffset);
+      if (Math.abs(player.getCurrentTime() - target) > SEEK_TOLERANCE_SEC) {
+        reconcile(sharedState);
+      }
+    }, DRIFT_CHECK_MS);
+  }
+
+  function stopDriftTimer() {
+    clearInterval(driftTimer);
+    driftTimer = null;
+  }
+
   onDestroy(clearPlayer);
 
-  // ── Host controls out (always send full desired state) ────────────
+  // ── Controls out (always send full desired state) ──────────────────
+  // load/clear stay host-only; play/pause/scrub go out as "control" and
+  // are accepted from a guest when the room allows it (see `canControl`).
 
   function hostLoad() {
     const id = parseYouTubeId(inputUrl);
@@ -166,13 +207,14 @@
     }
     inputError = "";
     inputUrl = "";
-    send({ type: "yt_state", videoId: id, playing: false, positionSec: 0 });
+    send({ type: "yt_state", action: "load", videoId: id, playing: false, positionSec: 0 });
   }
 
   function hostTogglePlay() {
     if (!sharedState) return;
     send({
       type: "yt_state",
+      action: "control",
       videoId: sharedState.videoId,
       playing: !playing,
       positionSec: playerReady ? player.getCurrentTime() : 0,
@@ -184,6 +226,7 @@
     if (!sharedState) return;
     send({
       type: "yt_state",
+      action: "control",
       videoId: sharedState.videoId,
       playing,
       positionSec: scrubSec,
@@ -191,7 +234,11 @@
   }
 
   function hostClear() {
-    send({ type: "yt_state", videoId: "", playing: false, positionSec: 0 });
+    send({ type: "yt_state", action: "clear", videoId: "", playing: false, positionSec: 0 });
+  }
+
+  function toggleMute() {
+    muted = !muted;
   }
 
   function fmt(sec) {
@@ -248,7 +295,7 @@
       ></button>
     </div>
 
-    {#if isHost}
+    {#if canControl}
       <div class="watch-controls">
         <button type="button" class="watch-play-btn" on:click={hostTogglePlay}>
           {playing ? "⏸ Pause" : "▶ Play"}
@@ -276,6 +323,31 @@
         The host controls playback. Click the video if it falls out of sync.
       </p>
     {/if}
+
+    <div class="watch-volume-row">
+      <button
+        type="button"
+        class="watch-mute-btn"
+        on:click={toggleMute}
+        title={muted ? "Unmute" : "Mute"}
+        aria-label={muted ? "Unmute" : "Mute"}
+      >
+        {muted ? "🔇" : "🔊"}
+      </button>
+      <input
+        type="range"
+        class="watch-volume-slider"
+        min="0"
+        max="100"
+        step="1"
+        bind:value={volume}
+        title="Your local video volume"
+      />
+      <label class="watch-duck-toggle">
+        <input type="checkbox" bind:checked={duckingEnabled} />
+        Auto-lower while I'm talking
+      </label>
+    </div>
   {:else if !isHost}
     <p class="watch-guest-hint">Waiting for the host to share a video…</p>
   {/if}
@@ -409,5 +481,37 @@
     margin: 10px 0 0;
     font-size: 13px;
     color: var(--muted);
+  }
+
+  .watch-volume-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+
+  .watch-mute-btn {
+    border: 1px solid var(--border);
+    background: transparent;
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .watch-volume-slider {
+    width: 100px;
+  }
+
+  .watch-duck-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
   }
 </style>
