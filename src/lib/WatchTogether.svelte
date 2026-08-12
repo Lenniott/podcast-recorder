@@ -14,7 +14,7 @@
 
   $: canControl = isHost || guestCanControl;
 
-  let container; // div the IFrame API replaces
+  let container;
   let player = null;
   let playerReady = false;
   let loadedVideoId = null; // what the player currently has cued
@@ -124,8 +124,8 @@
           if (player) return resolve();
           player = new window.YT.Player(container, {
             videoId,
-            // No native controls for anyone — every action must go through the
-            // host buttons so both players stay on the server's timeline.
+            // No native controls — every action goes through room controls
+            // (`canControl`) so both players stay on the server's timeline.
             playerVars: {
               controls: 0,
               disablekb: 1,
@@ -199,7 +199,7 @@
   // load/clear stay host-only; play/pause/scrub go out as "control" and
   // are accepted from a guest when the room allows it (see `canControl`).
 
-  function hostLoad() {
+  function loadVideo() {
     const id = parseYouTubeId(inputUrl);
     if (!id) {
       inputError = "Could not find a YouTube video in that link.";
@@ -210,7 +210,7 @@
     send({ type: "yt_state", action: "load", videoId: id, playing: false, positionSec: 0 });
   }
 
-  function hostTogglePlay() {
+  function togglePlay() {
     if (!sharedState) return;
     send({
       type: "yt_state",
@@ -221,7 +221,7 @@
     });
   }
 
-  function hostScrub() {
+  function scrub() {
     scrubbing = false;
     if (!sharedState) return;
     send({
@@ -233,7 +233,7 @@
     });
   }
 
-  function hostClear() {
+  function clearVideo() {
     send({ type: "yt_state", action: "clear", videoId: "", playing: false, positionSec: 0 });
   }
 
@@ -251,7 +251,7 @@
   <div class="watch-header">
     <h3>📺 Watch together</h3>
     {#if isHost && sharedState}
-      <button type="button" class="watch-clear" on:click={hostClear}
+      <button type="button" class="watch-clear" on:click={clearVideo}
         >Clear video</button
       >
     {/if}
@@ -263,12 +263,12 @@
         type="text"
         placeholder="Paste a YouTube link or video id"
         bind:value={inputUrl}
-        on:keydown={(e) => e.key === "Enter" && hostLoad()}
+        on:keydown={(e) => e.key === "Enter" && loadVideo()}
       />
       <button
         type="button"
         class="btn-primary watch-load-btn"
-        on:click={hostLoad}>Watch</button
+        on:click={loadVideo}>Watch</button
       >
     </div>
     {#if inputError}
@@ -297,7 +297,7 @@
 
     {#if canControl}
       <div class="watch-controls">
-        <button type="button" class="watch-play-btn" on:click={hostTogglePlay}>
+        <button type="button" class="watch-play-btn" on:click={togglePlay}>
           {playing ? "⏸ Pause" : "▶ Play"}
         </button>
         <span class="watch-time"
@@ -314,7 +314,7 @@
             scrubbing = true;
             scrubSec = +e.currentTarget.value;
           }}
-          on:change={hostScrub}
+          on:change={scrub}
           disabled={!playerReady}
         />
       </div>

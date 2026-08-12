@@ -27,8 +27,18 @@
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_state',        videoId, playing, positionSec,
  *                              positionAtMs, triggerAtMs }
- *                                        — broadcast on host command and replayed
- *                                          to late joiners with a fresh triggerAtMs
+ *                                        — broadcast on command and replayed to late
+ *                                          joiners. Timing fields (all server clock):
+ *                                            triggerAtMs  — when every client should
+ *                                                           apply this state (~lead ms
+ *                                                           ahead, absorbs WS jitter)
+ *                                            positionAtMs — timeline origin for
+ *                                                           effectivePosition(); late
+ *                                                           join keeps the stored
+ *                                                           positionAtMs and gets a
+ *                                                           fresh triggerAtMs so the
+ *                                                           client can advance past
+ *                                                           elapsed play time
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -37,8 +47,8 @@ import { roomExists, getRoomBySlug } from './db.js'
 import { verifyHostClaimToken } from './auth.js'
 
 const MAX_PEERS = 2
-const CLAP_LEAD_MS = 250
-const YT_LEAD_MS = 250
+const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
+const YT_LEAD_MS = 250   // same idea as clap: schedule apply slightly in the future
 const YT_VIDEO_ID = /^[\w-]{11}$/
 
 // rooms: Map<slug, Map<clientId, peer>>
@@ -196,7 +206,9 @@ export function setupWss(wss) {
         recomputeRoles(room)
         sendPresence(slug)
 
-        // Catch a late joiner (or reconnect) up on the shared video
+        // Catch a late joiner (or reconnect) up on the shared video.
+        // Spread keeps the stored positionAtMs (so effectivePosition advances
+        // through elapsed play time); only triggerAtMs is freshened.
         if (firstJoin && clientId && ytStates.has(slug)) {
           send(ws, {
             type: 'yt_state',

@@ -10,7 +10,7 @@ Record lossless audio together, remotely. Audio never leaves your machine.
 - Browser writes WAV directly to local disk via File System Access API
 - Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
 - Load both WAVs in any editor, line up the clap spike, done
-- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV)
+- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV). Optionally allow the guest to play/pause/seek when creating the room.
 
 The server only carries:
 - WebSocket presence (who's in the room)
@@ -101,7 +101,7 @@ server {
 }
 ```
 
-The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence + clap) won't work.
+The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence, clap, and shared YouTube state) won't work.
 
 ### Managing rooms in Portainer/Docker
 
@@ -149,14 +149,17 @@ Or in Portainer "Container console", change command from `bash` to `sh`.
 
 ```
 src/
-  lib/server/
-    db.js          — SQLite room CRUD
-    auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
-    ws-rooms.js    — WebSocket room manager (shared by dev + prod servers)
+  lib/
+    WatchTogether.svelte — Synced YouTube panel (IFrame API + room controls)
+    yt-sync.js           — parseYouTubeId + effectivePosition helpers
+    server/
+      db.js          — SQLite room CRUD
+      auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
+      ws-rooms.js    — WebSocket room manager (presence, clap, yt_state)
   routes/
     +page.svelte        — Create episode home page
     rec/[slug]/
-      +page.svelte      — Recording room UI
+      +page.svelte      — Recording room UI (wires clockOffset into WatchTogether)
       +page.server.js   — Auth, load room data
 static/
   worklet/

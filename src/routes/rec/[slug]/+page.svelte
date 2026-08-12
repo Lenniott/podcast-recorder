@@ -58,7 +58,8 @@
   // ─── Clock sync ──────────────────────────────────────────────────────
   // Offset between this client's Date.now() and the server's Date.now().
   // clockOffset = serverTime - clientTime at the same physical moment.
-  // Used to correct triggerAtMs (which is in server time) into local time.
+  // Used to correct triggerAtMs (which is in server time) into local time
+  // for both clap tone injection and Watch Together playback.
   let clockOffset = 0
   let _clockSamples = []
   let _pingSeq = 0
@@ -673,6 +674,7 @@
   }
 
   function syncClock() {
+    // Ping burst → median RTT/2 estimate of clockOffset (clap + Watch Together).
     _clockSamples = []
     for (let i = 0; i < 3; i++) {
       const seq = ++_pingSeq
@@ -1139,7 +1141,7 @@
     {/if}
   </div>
 
-  <!-- Watch together (synced YouTube) -->
+  <!-- Watch together: implementation in WatchTogether.svelte + yt-sync.js -->
   <WatchTogether
     {isHost}
     guestCanControl={data.guestPlaybackControlEnabled}
