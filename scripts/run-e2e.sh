@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run Playwright e2e for Watch Together guest-control / volume / ducking.
+# Run Playwright e2e for Watch Together guest-control / volume / talk-to-duck.
 # Needs a free Chrome launch (not inside Cursor's command sandbox).
 set -euo pipefail
 cd "$(dirname "$0")/.."

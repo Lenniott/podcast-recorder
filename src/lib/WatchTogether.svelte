@@ -4,7 +4,6 @@
 
   export let isHost = false;
   export let guestCanControl = false; // room setting: can a guest play/pause/seek?
-  export let speaking = false; // is this browser's own mic currently picking up speech?
   export let send = () => {}; // (payload) => void — JSON-sends over the room WS
   export let clockOffset = 0; // serverTime - clientTime, from the page's clock sync
 
@@ -37,9 +36,9 @@
   // Local-only playback volume — never synced over the WS.
   let volume = 100;
   let muted = false;
-  let duckingEnabled = true;
+  let talking = false; // true while the Talk button is held
 
-  $: effectiveVolume = duckingEnabled && speaking ? Math.round(volume * DUCK_FACTOR) : volume;
+  $: effectiveVolume = talking ? Math.round(volume * DUCK_FACTOR) : volume;
   $: if (playerReady && player) player.setVolume(effectiveVolume);
   $: if (playerReady && player) muted ? player.mute() : player.unMute();
 
@@ -241,6 +240,15 @@
     muted = !muted;
   }
 
+  function startTalk(e) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    talking = true;
+  }
+
+  function endTalk() {
+    talking = false;
+  }
+
   function fmt(sec) {
     const s = Math.max(0, Math.floor(sec));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -343,10 +351,20 @@
         bind:value={volume}
         title="Your local video volume"
       />
-      <label class="watch-duck-toggle">
-        <input type="checkbox" bind:checked={duckingEnabled} />
-        Auto-lower while I'm talking
-      </label>
+      <button
+        type="button"
+        class="watch-talk-btn"
+        class:active={talking}
+        aria-pressed={talking}
+        title="Hold to lower your local video volume"
+        on:pointerdown={startTalk}
+        on:pointerup={endTalk}
+        on:pointercancel={endTalk}
+        on:lostpointercapture={endTalk}
+        on:contextmenu|preventDefault
+      >
+        Talk
+      </button>
     </div>
   {:else if !isHost}
     <p class="watch-guest-hint">Waiting for the host to share a video…</p>
@@ -473,6 +491,16 @@
     white-space: nowrap;
   }
 
+  .watch-scrubber,
+  .watch-volume-slider {
+    accent-color: var(--accent);
+    padding: 0;
+    height: 4px;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+
   .watch-scrubber {
     flex: 1;
   }
@@ -505,13 +533,29 @@
     width: 100px;
   }
 
-  .watch-duck-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--muted);
+  .watch-talk-btn {
+    margin-left: auto;
+    min-width: 88px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     cursor: pointer;
-    white-space: nowrap;
+    user-select: none;
+    touch-action: none;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  }
+  .watch-talk-btn:hover {
+    background: var(--accent-dim);
+  }
+  .watch-talk-btn.active {
+    background: var(--warn);
+    color: #111;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45);
   }
 </style>

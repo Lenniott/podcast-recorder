@@ -10,7 +10,7 @@ test.describe('Guest playback control', () => {
     await expect(page.getByText('Let your guest play/pause and seek the shared video')).toBeVisible()
   })
 
-  test('host with guest control enabled sees volume + ducking after loading a video', async ({
+  test('host with guest control enabled sees volume + talk button after loading a video', async ({
     page
   }) => {
     await stubYouTubeApi(page)
@@ -28,8 +28,14 @@ test.describe('Guest playback control', () => {
 
     await expect(page.locator('.watch-volume-slider')).toBeVisible()
     await expect(page.locator('.watch-mute-btn')).toBeVisible()
-    await expect(page.getByText('Auto-lower while I\'m talking')).toBeVisible()
-    await expect(page.locator('.watch-duck-toggle input')).toBeChecked()
+    const talkBtn = page.getByRole('button', { name: 'Talk' })
+    await expect(talkBtn).toBeVisible()
+    await expect(talkBtn).toHaveAttribute('aria-pressed', 'false')
+    await talkBtn.hover()
+    await page.mouse.down()
+    await expect(talkBtn).toHaveAttribute('aria-pressed', 'true')
+    await page.mouse.up()
+    await expect(talkBtn).toHaveAttribute('aria-pressed', 'false')
     await expect(page.locator('.watch-play-btn')).toBeVisible()
   })
 
@@ -86,8 +92,9 @@ test.describe('Guest playback control', () => {
       guest.getByText('The host controls playback. Click the video if it falls out of sync.')
     ).toBeVisible({ timeout: 15_000 })
     await expect(guest.locator('.watch-play-btn')).toHaveCount(0)
-    // Local volume/ducking still available — echo fix is per-browser, not a host privilege.
+    // Local volume / hold-to-talk duck still available — per-browser, not a host privilege.
     await expect(guest.locator('.watch-volume-slider')).toBeVisible()
+    await expect(guest.getByRole('button', { name: 'Talk' })).toBeVisible()
 
     await guest.close()
     await host.close()
