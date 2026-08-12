@@ -99,4 +99,37 @@ test.describe('Guest playback control', () => {
     await guest.close()
     await host.close()
   })
+
+  test('holding Talk ducks YouTube volume on both browsers', async ({ browser }) => {
+    const host = await browser.newPage()
+    await stubYouTubeApi(host)
+
+    const password = 'duck-both'
+    const roomUrl = await createRoom(host, {
+      name: `E2E DuckBoth ${Date.now()}`,
+      password,
+      guestCanControl: false
+    })
+
+    await host.getByPlaceholder('Paste a YouTube link or video id').fill('dQw4w9WgXcQ')
+    await host.getByRole('button', { name: 'Watch' }).click()
+    await expect(host.getByRole('button', { name: 'Talk' })).toBeVisible()
+
+    const guest = await browser.newPage()
+    await stubYouTubeApi(guest)
+    await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+    await expect(guest.getByRole('button', { name: 'Talk' })).toBeVisible({ timeout: 15_000 })
+
+    const talkBtn = host.getByRole('button', { name: 'Talk' })
+    await talkBtn.hover()
+    await host.mouse.down()
+    await expect.poll(() => host.evaluate(() => window.__ytVolume)).toBe(25)
+    await expect.poll(() => guest.evaluate(() => window.__ytVolume)).toBe(25)
+    await host.mouse.up()
+    await expect.poll(() => host.evaluate(() => window.__ytVolume)).toBe(100)
+    await expect.poll(() => guest.evaluate(() => window.__ytVolume)).toBe(100)
+
+    await guest.close()
+    await host.close()
+  })
 })

@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { parseYouTubeId, effectivePosition } from "./yt-sync.js";
 
   export let isHost = false;
@@ -33,13 +33,15 @@
   let uiTimer = null;
   let driftTimer = null;
 
-  // Local-only playback volume — never synced over the WS.
+  // Slider and mute stay local. Talk-duck is shared: either peer holding
+  // Talk drops both YouTube players to DUCK_FACTOR of their own slider.
   let volume = 100;
   let muted = false;
-  let talking = false; // true while the Talk button is held
+  let talking = false; // true while this browser's Talk button is held
+  let roomTalking = false; // true while any peer (including us) is holding Talk
 
-  $: effectiveVolume = talking ? Math.round(volume * DUCK_FACTOR) : volume;
-  $: if (playerReady && player) player.setVolume(effectiveVolume);
+  $: effectiveVolume = talking || roomTalking ? Math.round(volume * DUCK_FACTOR) : volume;
+  $: if (playerReady && player && Number.isFinite(effectiveVolume)) player.setVolume(effectiveVolume);
   $: if (playerReady && player) muted ? player.mute() : player.unMute();
 
   // ── Shared state in (the component's single entry point) ──────────
@@ -47,11 +49,14 @@
   export function applyState(msg) {
     const seq = ++applySeq;
 
-    if (!msg.videoId) {
+    // Only an explicit empty id is a clear. Ignore malformed payloads
+    // (e.g. a duck message routed here) so they can't unmount the player.
+    if (msg.videoId === "") {
       sharedState = null;
       clearPlayer();
       return;
     }
+    if (!msg.videoId) return;
 
     sharedState = msg;
     const delayMs = Math.max(0, msg.triggerAtMs - (Date.now() + clockOffset));
@@ -88,6 +93,15 @@
     playing = s.playing;
   }
 
+  export function applyDuck(msg) {
+    roomTalking = !!msg.talking;
+  }
+
+  /** Re-announce a held Talk after a WS reconnect. */
+  export function resyncDuck() {
+    if (talking) send({ type: "yt_duck", talking: true });
+  }
+
   // Clicking the shield re-applies the shared state. This is both a manual
   // re-sync and the escape hatch when the browser blocks autoplay until the
   // user interacts with the page.
@@ -117,34 +131,48 @@
 
   function ensurePlayer(videoId) {
     if (player) return Promise.resolve();
-    return loadIframeApi().then(
-      () =>
-        new Promise((resolve) => {
-          if (player) return resolve();
-          player = new window.YT.Player(container, {
-            videoId,
-            // No native controls — every action goes through room controls
-            // (`canControl`) so both players stay on the server's timeline.
-            playerVars: {
-              controls: 0,
-              disablekb: 1,
-              rel: 0,
-              modestbranding: 1,
-            },
-            events: {
-              onReady: () => {
-                playerReady = true;
-                loadedVideoId = videoId;
-                volume = player.getVolume();
-                muted = player.isMuted();
-                startUiTimer();
-                startDriftTimer();
-                resolve();
+    return loadIframeApi()
+      .then(() => tick())
+      .then(
+        () =>
+          new Promise((resolve) => {
+            if (player) return resolve();
+            if (!container) return resolve();
+            // YT.Player replaces its target node. Use a child Svelte doesn't
+            // own, otherwise the next reactive update (volume/duck) puts the
+            // empty div back and the iframe vanishes.
+            const target = document.createElement("div");
+            target.style.width = "100%";
+            target.style.height = "100%";
+            container.replaceChildren(target);
+            player = new window.YT.Player(target, {
+              videoId,
+              width: "100%",
+              height: "100%",
+              // No native controls — every action goes through room controls
+              // (`canControl`) so both players stay on the server's timeline.
+              playerVars: {
+                controls: 0,
+                disablekb: 1,
+                rel: 0,
+                modestbranding: 1,
+                origin: window.location.origin,
               },
-            },
-          });
-        }),
-    );
+              events: {
+                onReady: () => {
+                  playerReady = true;
+                  loadedVideoId = videoId;
+                  const v = player.getVolume();
+                  volume = Number.isFinite(v) ? v : 100;
+                  muted = !!player.isMuted();
+                  startUiTimer();
+                  startDriftTimer();
+                  resolve();
+                },
+              },
+            });
+          }),
+      );
   }
 
   function clearPlayer() {
@@ -242,11 +270,15 @@
 
   function startTalk(e) {
     e.currentTarget.setPointerCapture(e.pointerId);
+    if (talking) return;
     talking = true;
+    send({ type: "yt_duck", talking: true });
   }
 
   function endTalk() {
+    if (!talking) return;
     talking = false;
+    send({ type: "yt_duck", talking: false });
   }
 
   function fmt(sec) {
@@ -291,7 +323,7 @@
     </div>
 
     <div class="watch-player">
-      <div bind:this={container}></div>
+      <div class="watch-player-target" bind:this={container}></div>
       <!-- Swallows clicks so nobody play/pauses outside the sync protocol;
            a click re-applies shared state (fixes autoplay-blocked guests). -->
       <button
@@ -446,6 +478,11 @@
     border-radius: 8px;
     overflow: hidden;
     background: #000;
+  }
+
+  .watch-player-target {
+    position: absolute;
+    inset: 0;
   }
 
   .watch-player :global(iframe) {

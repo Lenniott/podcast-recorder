@@ -32,6 +32,7 @@ export async function stubYouTubeApi(page) {
       }
       setVolume(v) {
         this._volume = v
+        window.__ytVolume = v
       }
       mute() {
         this._muted = true

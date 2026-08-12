@@ -19,6 +19,7 @@
  *                                          'control' (host, or guest if the room has
  *                                          guest_can_control_playback set); full desired
  *                                          shared-video state; videoId '' clears the video
+ *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
@@ -39,6 +40,7 @@
  *                                                           fresh triggerAtMs so the
  *                                                           client can advance past
  *                                                           elapsed play time
+ *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -114,6 +116,22 @@ function broadcast(slug, msg, excludeClientId = null) {
   }
 }
 
+function anyoneTalking(slug) {
+  const room = rooms.get(slug)
+  if (!room) return false
+  for (const peer of room.values()) {
+    if (peer.talking) return true
+  }
+  return false
+}
+
+function sendDuck(slug) {
+  const room = rooms.get(slug)
+  if (!room) return
+  const msg = { type: 'yt_duck', talking: anyoneTalking(slug) }
+  for (const peer of room.values()) send(peer.ws, msg)
+}
+
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
@@ -164,7 +182,8 @@ export function setupWss(wss) {
       slug,
       role: 'guest',
       claimedHost: connectionHostClaim,
-      joinedAt: Date.now()
+      joinedAt: Date.now(),
+      talking: false
     }
 
     ws.on('message', (raw) => {
@@ -215,6 +234,9 @@ export function setupWss(wss) {
             ...ytStates.get(slug),
             triggerAtMs: Date.now() + YT_LEAD_MS
           })
+        }
+        if (firstJoin && clientId) {
+          send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
         }
       }
 
@@ -285,6 +307,11 @@ export function setupWss(wss) {
           send(p.ws, { type: 'yt_state', ...state, triggerAtMs: applyAtMs })
         }
       }
+
+      if (msg.type === 'yt_duck' && clientId) {
+        peer.talking = !!msg.talking
+        sendDuck(slug)
+      }
     })
 
     ws.on('close', () => {
@@ -296,6 +323,7 @@ export function setupWss(wss) {
         } else {
           recomputeRoles(room)
           sendPresence(slug)
+          sendDuck(slug)
         }
       }
     })

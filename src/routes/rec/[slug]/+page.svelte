@@ -604,6 +604,7 @@
     ws.onopen = () => {
       wsStatus = 'connected'
       ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
+      try { watchTogether?.resyncDuck?.() } catch {}
       syncClock()
     }
 
@@ -625,7 +626,8 @@
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
-      if (msg.type === 'yt_state')  watchTogether?.applyState(msg)
+      if (msg.type === 'yt_state')  watchTogether?.applyState?.(msg)
+      if (msg.type === 'yt_duck')   watchTogether?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 

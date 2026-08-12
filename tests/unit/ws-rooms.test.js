@@ -351,3 +351,62 @@ describe('setupWss — yt_state guest control permission', () => {
     expect(guest.sent.some(m => m.type === 'error')).toBe(true)
   })
 })
+
+describe('setupWss — yt_duck (hold-to-talk)', () => {
+  let wss, host, guest
+
+  function duck(ws, talking) {
+    ws.emit('message', JSON.stringify({ type: 'yt_duck', talking }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    roomExists.mockReturnValue(true)
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+    host.sent.length = 0
+    guest.sent.length = 0
+  })
+
+  it('broadcasts room-level talking to every peer, including guests', () => {
+    duck(guest, true)
+    for (const ws of [host, guest]) {
+      expect(ws.sent.at(-1)).toEqual({ type: 'yt_duck', talking: true })
+    }
+  })
+
+  it('stays ducked while either peer is holding, and clears when the last releases', () => {
+    duck(host, true)
+    duck(guest, true)
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    duck(host, false)
+    expect(guest.sent.at(-1)).toEqual({ type: 'yt_duck', talking: true })
+
+    duck(guest, false)
+    expect(host.sent.at(-1)).toEqual({ type: 'yt_duck', talking: false })
+  })
+
+  it('clears duck when the talking peer disconnects', () => {
+    duck(guest, true)
+    host.sent.length = 0
+    guest.emit('close')
+    expect(host.sent.some(m => m.type === 'yt_duck' && m.talking === false)).toBe(true)
+  })
+
+  it('replays current duck state to a late joiner', () => {
+    guest.emit('close')
+    duck(host, true)
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.sent.filter(m => m.type === 'yt_duck').at(-1)).toEqual({
+      type: 'yt_duck',
+      talking: true
+    })
+  })
+})
