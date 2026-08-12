@@ -491,14 +491,54 @@
     white-space: nowrap;
   }
 
+  /* Match gain-row: kill global `input` chrome so ranges use brand colors, not OS blue. */
   .watch-scrubber,
   .watch-volume-slider {
-    accent-color: var(--accent);
+    -webkit-appearance: none;
+    appearance: none;
+    accent-color: var(--accent-dim);
     padding: 0;
-    height: 4px;
+    height: 6px;
     border: none;
-    background: none;
+    border-radius: 999px;
+    background: var(--border);
     cursor: pointer;
+  }
+
+  .watch-scrubber::-webkit-slider-runnable-track,
+  .watch-volume-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--border);
+  }
+
+  .watch-scrubber::-webkit-slider-thumb,
+  .watch-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    border: 2px solid var(--text);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .watch-scrubber::-moz-range-track,
+  .watch-volume-slider::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--border);
+  }
+
+  .watch-scrubber::-moz-range-thumb,
+  .watch-volume-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--text);
+    border-radius: 50%;
+    background: var(--accent-dim);
   }
 
   .watch-scrubber {
