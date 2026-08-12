@@ -5,8 +5,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
   roomExists: vi.fn(() => true),  // default: room exists
   getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
-    password_hash: 'mock-hash',
-    show_upload: 1
+    password_hash: 'mock-hash'
   })),
   default: {}
 }))
@@ -292,7 +291,6 @@ describe('setupWss — yt_state guest control permission', () => {
     getRoomBySlug.mockReturnValue({
       slug: 'room1',
       password_hash: 'mock-hash',
-      show_upload: 1,
       guest_can_control_playback: 1
     })
     host  = mockWs()
@@ -303,7 +301,7 @@ describe('setupWss — yt_state guest control permission', () => {
 
   afterEach(() => {
     // Restore the default mock used by every other describe block.
-    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', show_upload: 1 })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
   })
 
   it('allows a guest "control" action on the currently loaded video when the room permits it', () => {
@@ -339,7 +337,7 @@ describe('setupWss — yt_state guest control permission', () => {
   })
 
   it('rejects a guest control action when the room does not permit it', () => {
-    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', show_upload: 1, guest_can_control_playback: 0 })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_can_control_playback: 0 })
     // Reconnect so the new peer picks up the freshly-mocked room row.
     _resetRooms()
     host  = mockWs()

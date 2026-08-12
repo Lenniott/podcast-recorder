@@ -94,13 +94,10 @@ export const actions = {
         if (!getRoomBySlug(slug)) break
       }
       const passwordHash = await hashPassword(password)
-      const showUploadRaw = data.get('show_upload')
-      const showUpload =
-        showUploadRaw === 'on' || showUploadRaw === '1' || showUploadRaw === 'true'
       const guestCanControlPlaybackRaw = data.get('guest_can_control_playback')
       const guestCanControlPlayback =
         guestCanControlPlaybackRaw === 'on' || guestCanControlPlaybackRaw === '1' || guestCanControlPlaybackRaw === 'true'
-      createRoom({ slug, name, passwordHash, passwordPlain: password, showUpload, guestCanControlPlayback })
+      createRoom({ slug, name, passwordHash, passwordPlain: password, guestCanControlPlayback })
       const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
       const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
       cookies.set(ROOM_COOKIE(slug), roomToken, {

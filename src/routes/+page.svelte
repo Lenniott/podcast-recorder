@@ -87,21 +87,6 @@
       </div>
 
       <div class="field field-checkbox">
-        <span class="checkbox-heading">Drive upload in room</span>
-        <label class="checkbox-row">
-          <input
-            id="show_upload"
-            type="checkbox"
-            name="show_upload"
-            value="1"
-            checked
-          />
-          <span class="checkbox-copy">Show Drive upload section in the room</span>
-        </label>
-        <span class="hint">Requires N8N webhook env on the server. Uncheck to hide upload UI for this episode.</span>
-      </div>
-
-      <div class="field field-checkbox">
         <span class="checkbox-heading">Guest playback control</span>
         <label class="checkbox-row">
           <input
