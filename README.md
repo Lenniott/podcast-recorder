@@ -10,7 +10,7 @@ Record lossless audio together, remotely. Audio never leaves your machine.
 - Browser writes WAV directly to local disk via File System Access API
 - Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
 - Load both WAVs in any editor, line up the clap spike, done
-- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV)
+- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV). Optionally allow the guest to play/pause/seek when creating the room.
 
 The server only carries:
 - WebSocket presence (who's in the room)
@@ -19,9 +19,6 @@ The server only carries:
 - Room metadata (name, password hash) in SQLite
 
 **No audio ever goes to the server.**
-
-If you enable the optional guest upload handoff, the guest can explicitly
-upload a finished WAV file to your n8n workflow after recording stops.
 
 ---
 
@@ -44,23 +41,6 @@ npm run dev
 ```
 
 Open `http://localhost:5173`
-
-### Optional: guest upload to n8n (Drive handoff)
-
-Add these to `.env` when you want the room to show the post-recording upload UI:
-
-```bash
-N8N_WEBHOOK_URL=https://your-n8n-host/webhook/your-webhook-id
-N8N_BASIC_AUTH_USER=your-user
-N8N_BASIC_AUTH_PASS=your-pass
-MAX_UPLOAD_MB=400
-```
-
-Notes:
-- `N8N_WEBHOOK_URL` is called by your server-side upload action.
-- Basic Auth secrets stay server-side; they are **not** exposed to the browser.
-- Uploads are validated as WAV before forward: extension + MIME + RIFF/WAVE header.
-- Upload guard defaults to `400` MB (1-hour mono 48kHz/16-bit WAV is ~345.6 MB).
 
 ---
 
@@ -101,7 +81,7 @@ server {
 }
 ```
 
-The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence + clap) won't work.
+The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence, clap, and shared YouTube state) won't work.
 
 ### Managing rooms in Portainer/Docker
 
@@ -149,14 +129,17 @@ Or in Portainer "Container console", change command from `bash` to `sh`.
 
 ```
 src/
-  lib/server/
-    db.js          — SQLite room CRUD
-    auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
-    ws-rooms.js    — WebSocket room manager (shared by dev + prod servers)
+  lib/
+    WatchTogether.svelte — Synced YouTube panel (IFrame API + room controls)
+    yt-sync.js           — parseYouTubeId + effectivePosition helpers
+    server/
+      db.js          — SQLite room CRUD
+      auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
+      ws-rooms.js    — WebSocket room manager (presence, clap, yt_state)
   routes/
     +page.svelte        — Create episode home page
     rec/[slug]/
-      +page.svelte      — Recording room UI
+      +page.svelte      — Recording room UI (wires clockOffset into WatchTogether)
       +page.server.js   — Auth, load room data
 static/
   worklet/

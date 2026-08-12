@@ -14,9 +14,12 @@
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
- *   { type: 'yt_state', videoId, playing, positionSec }
- *                                        — host only; full desired shared-video
- *                                          state; videoId '' clears the video
+ *   { type: 'yt_state', action, videoId, playing, positionSec }
+ *                                        — action: 'load' | 'clear' (host only) or
+ *                                          'control' (host, or guest if the room has
+ *                                          guest_can_control_playback set); full desired
+ *                                          shared-video state; videoId '' clears the video
+ *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
@@ -25,8 +28,19 @@
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_state',        videoId, playing, positionSec,
  *                              positionAtMs, triggerAtMs }
- *                                        — broadcast on host command and replayed
- *                                          to late joiners with a fresh triggerAtMs
+ *                                        — broadcast on command and replayed to late
+ *                                          joiners. Timing fields (all server clock):
+ *                                            triggerAtMs  — when every client should
+ *                                                           apply this state (~lead ms
+ *                                                           ahead, absorbs WS jitter)
+ *                                            positionAtMs — timeline origin for
+ *                                                           effectivePosition(); late
+ *                                                           join keeps the stored
+ *                                                           positionAtMs and gets a
+ *                                                           fresh triggerAtMs so the
+ *                                                           client can advance past
+ *                                                           elapsed play time
+ *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -35,8 +49,8 @@ import { roomExists, getRoomBySlug } from './db.js'
 import { verifyHostClaimToken } from './auth.js'
 
 const MAX_PEERS = 2
-const CLAP_LEAD_MS = 250
-const YT_LEAD_MS = 250
+const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
+const YT_LEAD_MS = 250   // same idea as clap: schedule apply slightly in the future
 const YT_VIDEO_ID = /^[\w-]{11}$/
 
 // rooms: Map<slug, Map<clientId, peer>>
@@ -102,6 +116,22 @@ function broadcast(slug, msg, excludeClientId = null) {
   }
 }
 
+function anyoneTalking(slug) {
+  const room = rooms.get(slug)
+  if (!room) return false
+  for (const peer of room.values()) {
+    if (peer.talking) return true
+  }
+  return false
+}
+
+function sendDuck(slug) {
+  const room = rooms.get(slug)
+  if (!room) return
+  const msg = { type: 'yt_duck', talking: anyoneTalking(slug) }
+  for (const peer of room.values()) send(peer.ws, msg)
+}
+
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
@@ -152,7 +182,8 @@ export function setupWss(wss) {
       slug,
       role: 'guest',
       claimedHost: connectionHostClaim,
-      joinedAt: Date.now()
+      joinedAt: Date.now(),
+      talking: false
     }
 
     ws.on('message', (raw) => {
@@ -194,13 +225,18 @@ export function setupWss(wss) {
         recomputeRoles(room)
         sendPresence(slug)
 
-        // Catch a late joiner (or reconnect) up on the shared video
+        // Catch a late joiner (or reconnect) up on the shared video.
+        // Spread keeps the stored positionAtMs (so effectivePosition advances
+        // through elapsed play time); only triggerAtMs is freshened.
         if (firstJoin && clientId && ytStates.has(slug)) {
           send(ws, {
             type: 'yt_state',
             ...ytStates.get(slug),
             triggerAtMs: Date.now() + YT_LEAD_MS
           })
+        }
+        if (firstJoin && clientId) {
+          send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
         }
       }
 
@@ -227,7 +263,13 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'yt_state' && clientId) {
-        if (peer.role !== 'host') {
+        const action = msg.action === 'load' || msg.action === 'clear' || msg.action === 'control'
+          ? msg.action
+          : (String(msg.videoId || '') === '' ? 'clear' : 'load')
+
+        const guestCanControl = !!roomRow?.guest_can_control_playback
+        const allowed = peer.role === 'host' || (action === 'control' && peer.role === 'guest' && guestCanControl)
+        if (!allowed) {
           send(ws, { type: 'error', message: 'Only the host can control playback' })
           return
         }
@@ -235,6 +277,12 @@ export function setupWss(wss) {
         const videoId = String(msg.videoId || '')
         if (videoId !== '' && !YT_VIDEO_ID.test(videoId)) {
           send(ws, { type: 'error', message: 'Invalid YouTube video id' })
+          return
+        }
+
+        if (action === 'control' && videoId !== (ytStates.get(slug)?.videoId || '')) {
+          // A guest control message must target the video already playing —
+          // it can never be used to smuggle in a load/clear.
           return
         }
 
@@ -259,6 +307,11 @@ export function setupWss(wss) {
           send(p.ws, { type: 'yt_state', ...state, triggerAtMs: applyAtMs })
         }
       }
+
+      if (msg.type === 'yt_duck' && clientId) {
+        peer.talking = !!msg.talking
+        sendDuck(slug)
+      }
     })
 
     ws.on('close', () => {
@@ -270,6 +323,7 @@ export function setupWss(wss) {
         } else {
           recomputeRoles(room)
           sendPresence(slug)
+          sendDuck(slug)
         }
       }
     })

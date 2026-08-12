@@ -20,3 +20,8 @@ Thumbs.db
 .cursor/
 .github/
 .playwright-mcp/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/

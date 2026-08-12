@@ -1,12 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
   roomExists: vi.fn(() => true),  // default: room exists
   getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
-    password_hash: 'mock-hash',
-    show_upload: 1
+    password_hash: 'mock-hash'
   })),
   default: {}
 }))
@@ -16,7 +15,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
 }))
 
-import { roomExists } from '../../src/lib/server/db.js'
+import { roomExists, getRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 
 // ─── Minimal WebSocket mock ──────────────────────────────────────────────────
@@ -274,5 +273,140 @@ describe('setupWss — yt_state (watch together)', () => {
     const again = mockWs()
     wss.connect(again, 'room1'); join(again, 'Back', 'c9')
     expect(again.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+})
+
+describe('setupWss — yt_state guest control permission', () => {
+  let wss, host, guest
+
+  function send(ws, payload) {
+    ws.emit('message', JSON.stringify({ type: 'yt_state', ...payload }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    roomExists.mockReturnValue(true)
+    getRoomBySlug.mockReturnValue({
+      slug: 'room1',
+      password_hash: 'mock-hash',
+      guest_can_control_playback: 1
+    })
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+  })
+
+  afterEach(() => {
+    // Restore the default mock used by every other describe block.
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+  })
+
+  it('allows a guest "control" action on the currently loaded video when the room permits it', () => {
+    send(host, { action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 })
+    send(guest, { action: 'control', videoId: 'dQw4w9WgXcQ', playing: true, positionSec: 12 })
+
+    const msg = host.sent.filter(m => m.type === 'yt_state').at(-1)
+    expect(msg).toMatchObject({ videoId: 'dQw4w9WgXcQ', playing: true, positionSec: 12 })
+  })
+
+  it('still rejects a guest "load" action even when the room permits control', () => {
+    send(guest, { action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 })
+    expect(guest.sent.some(m => m.type === 'error')).toBe(true)
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('still rejects a guest "clear" action even when the room permits control', () => {
+    send(host, { action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 })
+    host.sent.length = 0
+    guest.sent.length = 0
+    send(guest, { action: 'clear', videoId: '', playing: false, positionSec: 0 })
+    expect(guest.sent.some(m => m.type === 'error')).toBe(true)
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('ignores a guest "control" action whose videoId does not match the currently loaded video', () => {
+    send(host, { action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 })
+    host.sent.length = 0
+    guest.sent.length = 0
+    send(guest, { action: 'control', videoId: 'jNQXAC9IVRw', playing: true, positionSec: 5 })
+    expect(host.sent.some(m => m.type === 'yt_state')).toBe(false)
+    expect(guest.sent.some(m => m.type === 'yt_state')).toBe(false)
+  })
+
+  it('rejects a guest control action when the room does not permit it', () => {
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_can_control_playback: 0 })
+    // Reconnect so the new peer picks up the freshly-mocked room row.
+    _resetRooms()
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+
+    send(host, { action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 })
+    guest.sent.length = 0
+    send(guest, { action: 'control', videoId: 'dQw4w9WgXcQ', playing: true, positionSec: 5 })
+    expect(guest.sent.some(m => m.type === 'error')).toBe(true)
+  })
+})
+
+describe('setupWss — yt_duck (hold-to-talk)', () => {
+  let wss, host, guest
+
+  function duck(ws, talking) {
+    ws.emit('message', JSON.stringify({ type: 'yt_duck', talking }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    roomExists.mockReturnValue(true)
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+    host.sent.length = 0
+    guest.sent.length = 0
+  })
+
+  it('broadcasts room-level talking to every peer, including guests', () => {
+    duck(guest, true)
+    for (const ws of [host, guest]) {
+      expect(ws.sent.at(-1)).toEqual({ type: 'yt_duck', talking: true })
+    }
+  })
+
+  it('stays ducked while either peer is holding, and clears when the last releases', () => {
+    duck(host, true)
+    duck(guest, true)
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    duck(host, false)
+    expect(guest.sent.at(-1)).toEqual({ type: 'yt_duck', talking: true })
+
+    duck(guest, false)
+    expect(host.sent.at(-1)).toEqual({ type: 'yt_duck', talking: false })
+  })
+
+  it('clears duck when the talking peer disconnects', () => {
+    duck(guest, true)
+    host.sent.length = 0
+    guest.emit('close')
+    expect(host.sent.some(m => m.type === 'yt_duck' && m.talking === false)).toBe(true)
+  })
+
+  it('replays current duck state to a late joiner', () => {
+    guest.emit('close')
+    duck(host, true)
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.sent.filter(m => m.type === 'yt_duck').at(-1)).toEqual({
+      type: 'yt_duck',
+      talking: true
+    })
   })
 })

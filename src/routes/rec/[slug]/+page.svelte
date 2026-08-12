@@ -1,5 +1,5 @@
 <script>
-  import { enhance, deserialize } from '$app/forms'
+  import { enhance } from '$app/forms'
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
@@ -9,7 +9,7 @@
 
   function focus(el) { el.focus() }
 
-  export let data   // { slug, roomName, authenticated, participantName, uploadSectionEnabled, isHostClaim, ... }
+  export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
 
   // ─── WebSocket state ────────────────────────────────────────────────
@@ -34,8 +34,6 @@
   let silentSink = null
   let fileWritable = null      // FileSystemWritableFileStream
   let activeFileHandle = null
-  let lastRecordingFileHandle = null
-  let lastRecordingFileName = ''
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
   let recordingTimer = null
@@ -58,7 +56,8 @@
   // ─── Clock sync ──────────────────────────────────────────────────────
   // Offset between this client's Date.now() and the server's Date.now().
   // clockOffset = serverTime - clientTime at the same physical moment.
-  // Used to correct triggerAtMs (which is in server time) into local time.
+  // Used to correct triggerAtMs (which is in server time) into local time
+  // for both clap tone injection and Watch Together playback.
   let clockOffset = 0
   let _clockSamples = []
   let _pingSeq = 0
@@ -66,13 +65,6 @@
 
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
-  let uploadState = 'idle' // idle | ready | uploading | success | error
-  let uploadMessage = ''
-  let uploadProgress = 0   // 0-100
-  let uploadSpeed = 0      // bytes/sec
-  let uploadTimeLeft = 0   // seconds
-  let uploadLoaded = 0     // bytes
-  let uploadTotal = 0      // bytes
   let copyLinkDone = false
   /** @type {ReturnType<typeof setTimeout> | null} */
   let copyLinkTimer = null
@@ -111,6 +103,7 @@
   let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   let clipTimer    = null
+
   let sessionStarted = false
   let audioInitError = ''
   /** False once we have a display name from cookie, sessionStorage, or form. */
@@ -124,10 +117,6 @@
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: recordingLabel = recordingState === 'recording' ? 'Stop Recording' : 'Start Recording'
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
-  $: guestUploadReady =
-    recordingState === 'idle' && !data.isHostClaim && !!lastRecordingFileHandle
-  /** Only guests see the upload card; hosts never upload so hide the section entirely. */
-  $: showGuestUploadCard = data.uploadSectionEnabled && !data.isHostClaim
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -503,10 +492,6 @@
 
     fileWritable = await fileHandle.createWritable()
     activeFileHandle = fileHandle
-    lastRecordingFileHandle = null
-    lastRecordingFileName = ''
-    uploadState = 'idle'
-    uploadMessage = ''
     recordingSampleRate = Math.round(audioCtx?.sampleRate || 48000)
 
     // Write placeholder WAV header (will patch at end with real size)
@@ -537,15 +522,9 @@
     await fileWritable.write(buildWavHeader(dataByteCount, recordingSampleRate))
     await fileWritable.close()
 
-    lastRecordingFileHandle = activeFileHandle
-    lastRecordingFileName = activeFileHandle?.name || ''
     activeFileHandle = null
     fileWritable = null
     recordingState = 'idle'
-    if (!data.isHostClaim && lastRecordingFileHandle) {
-      uploadState = 'ready'
-      uploadMessage = 'Recording stopped. Ready to upload to Drive workflow.'
-    }
   }
 
   async function toggleRecording() {
@@ -554,98 +533,6 @@
     } else if (recordingState === 'recording') {
       await stopRecording()
     }
-  }
-
-  function fmtBytes(b) {
-    if (b >= 1_048_576) return (b / 1_048_576).toFixed(1) + ' MB'
-    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB'
-    return b + ' B'
-  }
-  function fmtTime(s) {
-    if (!isFinite(s) || s <= 0) return '—'
-    if (s >= 3600) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'
-    if (s >= 60) return Math.floor(s / 60) + 'm ' + Math.floor(s % 60) + 's'
-    return Math.ceil(s) + 's'
-  }
-
-  async function uploadWavToWebhook(file) {
-    if (!file || data.isHostClaim) return
-    uploadState = 'uploading'
-    uploadMessage = ''
-    uploadProgress = 0
-    uploadSpeed = 0
-    uploadTimeLeft = 0
-    uploadLoaded = 0
-    uploadTotal = file.size
-
-    const fd = new FormData()
-    fd.set('audio_file', file, file.name || 'recording.wav')
-    fd.set('client_id', clientId || '')
-
-    await new Promise((resolve) => {
-      const xhr = new XMLHttpRequest()
-      const startTime = Date.now()
-
-      xhr.upload.onprogress = (e) => {
-        if (!e.lengthComputable) return
-        const elapsed = (Date.now() - startTime) / 1000
-        uploadLoaded = e.loaded
-        uploadTotal = e.total
-        uploadProgress = Math.round((e.loaded / e.total) * 100)
-        uploadSpeed = elapsed > 0 ? e.loaded / elapsed : 0
-        uploadTimeLeft = uploadSpeed > 0 ? (e.total - e.loaded) / uploadSpeed : 0
-      }
-
-      xhr.onload = () => {
-        try {
-          const result = deserialize(xhr.responseText)
-          const payload = result?.data?.upload
-          if (result.type === 'success' && payload?.ok) {
-            uploadState = 'success'
-            uploadProgress = 100
-            uploadMessage = payload.message || 'Successfully sent to Drive workflow.'
-          } else {
-            uploadState = 'error'
-            uploadMessage = payload?.message || 'Upload failed. Please try again.'
-          }
-        } catch {
-          uploadState = 'error'
-          uploadMessage = 'Upload failed. Please try again.'
-        }
-        resolve()
-      }
-
-      xhr.onerror = () => {
-        uploadState = 'error'
-        uploadMessage = 'Upload failed. Please try again.'
-        resolve()
-      }
-
-      xhr.open('POST', '?/upload_guest_audio')
-      xhr.setRequestHeader('accept', 'application/json')
-      xhr.send(fd)
-    })
-  }
-
-  async function uploadLastRecording() {
-    if (!guestUploadReady || !lastRecordingFileHandle) return
-    const file = await lastRecordingFileHandle.getFile()
-    await uploadWavToWebhook(file)
-  }
-
-  /** @param {Event} e */
-  function onPickWavForUpload(e) {
-    const input = e.target
-    const file = input instanceof HTMLInputElement && input.files?.[0] ? input.files[0] : null
-    if (input instanceof HTMLInputElement) input.value = ''
-    if (!file) return
-    const lower = file.name.toLowerCase()
-    if (!lower.endsWith('.wav')) {
-      uploadState = 'error'
-      uploadMessage = 'Please choose a WAV file.'
-      return
-    }
-    uploadWavToWebhook(file)
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -663,6 +550,7 @@
   }
 
   function syncClock() {
+    // Ping burst → median RTT/2 estimate of clockOffset (clap + Watch Together).
     _clockSamples = []
     for (let i = 0; i < 3; i++) {
       const seq = ++_pingSeq
@@ -716,6 +604,7 @@
     ws.onopen = () => {
       wsStatus = 'connected'
       ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
+      try { watchTogether?.resyncDuck?.() } catch {}
       syncClock()
     }
 
@@ -737,7 +626,8 @@
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
-      if (msg.type === 'yt_state')  watchTogether?.applyState(msg)
+      if (msg.type === 'yt_state')  watchTogether?.applyState?.(msg)
+      if (msg.type === 'yt_duck')   watchTogether?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 
@@ -1129,66 +1019,14 @@
     {/if}
   </div>
 
-  <!-- Watch together (synced YouTube) -->
-  <WatchTogether {isHost} {clockOffset} send={wsSend} bind:this={watchTogether} />
-
-  {#if showGuestUploadCard}
-    <div class="upload-card">
-      <div class="upload-header">
-        <h3>Send recording to Drive</h3>
-        <span class="role-pill-guest role-pill-you">Guest uploader</span>
-      </div>
-
-      {#if lastRecordingFileHandle || lastRecordingFileName}
-        <p class="upload-copy">
-          Last saved file: <strong>{lastRecordingFileName || 'Latest recording'}</strong>
-        </p>
-      {:else}
-        <p class="upload-copy">
-          Record here and stop to attach your saved WAV, or choose a WAV file below to upload without recording.
-        </p>
-      {/if}
-
-      <div class="upload-actions">
-        <button
-          type="button"
-          class="btn-primary upload-btn"
-          on:click={uploadLastRecording}
-          disabled={!guestUploadReady || uploadState === 'uploading'}
-        >
-          {uploadState === 'uploading' ? 'Uploading…' : 'Upload last recording'}
-        </button>
-        <label class="btn-secondary upload-pick" class:upload-pick-disabled={uploadState === 'uploading'}>
-          <input
-            type="file"
-            accept=".wav,audio/wav,audio/x-wav,audio/wave"
-            class="upload-file-input"
-            disabled={uploadState === 'uploading'}
-            on:change={onPickWavForUpload}
-          />
-          Choose WAV…
-        </label>
-      </div>
-
-      {#if uploadState === 'uploading'}
-        <div class="upload-progress-wrap">
-          <div class="upload-progress-bar" style="width: {uploadProgress}%"></div>
-        </div>
-        <div class="upload-progress-stats">
-          <span>{uploadProgress}%</span>
-          <span>{fmtBytes(uploadLoaded)} / {fmtBytes(uploadTotal)}</span>
-          <span>{fmtBytes(uploadSpeed)}/s</span>
-          <span>~{fmtTime(uploadTimeLeft)} left</span>
-        </div>
-      {/if}
-
-      {#if uploadMessage}
-        <p class="upload-status" class:upload-ok={uploadState === 'success'} class:upload-error={uploadState === 'error'}>
-          {uploadMessage}
-        </p>
-      {/if}
-    </div>
-  {/if}
+  <!-- Watch together: implementation in WatchTogether.svelte + yt-sync.js -->
+  <WatchTogether
+    {isHost}
+    guestCanControl={data.guestPlaybackControlEnabled}
+    {clockOffset}
+    send={wsSend}
+    bind:this={watchTogether}
+  />
 
 </div>
 {/if}
@@ -1680,115 +1518,6 @@
     flex-shrink: 0;
   }
   .warn-stat { color: var(--warn); }
-
-  /* ── Upload card ── */
-  .upload-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .upload-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .upload-header h3 {
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .role-pill-guest {
-    font-size: 11px;
-    border-radius: 999px;
-    padding: 4px 10px;
-    color: #86efac;
-    border: 1px solid rgba(34,197,94,.35);
-    background: rgba(34,197,94,.1);
-  }
-  .role-pill-guest.role-pill-you {
-    font-weight: 700;
-    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
-  }
-  .upload-copy {
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.6;
-  }
-  .upload-copy strong { color: var(--text); }
-  .upload-actions {
-    display: flex;
-    align-items: stretch;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .upload-btn {
-    flex: 1;
-    min-width: 140px;
-    width: auto;
-  }
-  .btn-secondary.upload-pick {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 1;
-    min-width: 140px;
-    margin: 0;
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--bg);
-    color: var(--text);
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    font-family: var(--font);
-  }
-  .btn-secondary.upload-pick:hover:not(.upload-pick-disabled) {
-    background: var(--border);
-  }
-  .upload-pick-disabled {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-  .upload-file-input {
-    position: absolute;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
-    width: 100%;
-    height: 100%;
-    font-size: 0;
-  }
-  .upload-status {
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .upload-status.upload-ok { color: #86efac; }
-  .upload-status.upload-error { color: #fca5a5; }
-  .upload-progress-wrap {
-    height: 6px;
-    background: var(--border);
-    border-radius: 999px;
-    overflow: hidden;
-  }
-  .upload-progress-bar {
-    height: 100%;
-    background: #22c55e;
-    border-radius: 999px;
-    transition: width 0.3s ease;
-  }
-  .upload-progress-stats {
-    display: flex;
-    gap: 12px;
-    font-size: 11px;
-    color: var(--muted);
-    flex-wrap: wrap;
-  }
 
   /* ── Instructions ── */
   .instructions {
