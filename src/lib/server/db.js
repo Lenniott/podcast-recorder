@@ -31,18 +31,14 @@ function getDb() {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
 
-  try {
-    _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_can_control_playback INTEGER NOT NULL DEFAULT 0`).run()
-  } catch (e) {
-    if (!/duplicate column/i.test(String(e?.message || e))) throw e
-  }
-
-  // Drop the retired n8n-upload flag column from existing DBs (SQLite 3.35+).
-  // No-op if it's already gone, or if the SQLite version can't drop columns.
-  try {
-    _db.prepare(`ALTER TABLE rooms DROP COLUMN show_upload`).run()
-  } catch (e) {
-    if (!/no such column/i.test(String(e?.message || e))) throw e
+  // Drop retired columns from existing DBs (SQLite 3.35+). No-op if a column
+  // is already gone, or if the SQLite version can't drop columns.
+  for (const column of ['show_upload', 'guest_can_control_playback']) {
+    try {
+      _db.prepare(`ALTER TABLE rooms DROP COLUMN ${column}`).run()
+    } catch (e) {
+      if (!/no such column/i.test(String(e?.message || e))) throw e
+    }
   }
 
   return _db
@@ -54,12 +50,11 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash, passwordPlain = null, guestCanControlPlayback = false }) {
-  const gc = guestCanControlPlayback ? 1 : 0
+export function createRoom({ slug, name, passwordHash, passwordPlain = null }) {
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at, guest_can_control_playback)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, passwordPlain, Date.now(), gc)
+    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, Date.now())
 }
 
 export function getRoomBySlug(slug) {

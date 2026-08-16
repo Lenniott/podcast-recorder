@@ -10,12 +10,13 @@ Record lossless audio together, remotely. Audio never leaves your machine.
 - Browser writes WAV directly to local disk via File System Access API
 - Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
 - Load both WAVs in any editor, line up the clap spike, done
-- **📺 Watch together**: the host can share a YouTube clip that plays in sync for both — wear headphones, since the video's audio plays in each browser (it is never mixed into the WAV). Optionally allow the guest to play/pause/seek when creating the room.
+- **Shared tabs**: host and guest can both open tabs in a shared view — switching, adding, or closing a tab changes it for everyone. Each tab can hold a synced YouTube clip (paste a link — playback stays in sync for both; wear headphones, since the video's audio plays in each browser and is never mixed into the WAV) and always has a shared plain-text notes area underneath it, editable by both, with no save state.
+- Hold **Talk** (shown once a tab's video is playing) to duck your local video volume while you speak.
 
 The server only carries:
 - WebSocket presence (who's in the room)
 - Clap sync events
-- Shared YouTube playback state (video id + position — never the video itself)
+- Shared tab state (tab list, each tab's YouTube video id + position, and its shared text — never the video itself)
 - Room metadata (name, password hash) in SQLite
 
 **No audio ever goes to the server.**
@@ -130,16 +131,21 @@ Or in Portainer "Container console", change command from `bash` to `sh`.
 ```
 src/
   lib/
-    WatchTogether.svelte — Synced YouTube panel (IFrame API + room controls)
-    yt-sync.js           — parseYouTubeId + effectivePosition helpers
+    RoomSidebar.svelte     — Composes the left sidebar's four panels
+    RoomDetailsPanel.svelte, MicPanel.svelte, WaveformPanel.svelte,
+    RecordControls.svelte  — Presentational sidebar panels (state stays in +page.svelte)
+    RoomTabs.svelte         — Shared tab strip + active tab's video/text content
+    TabVideoPlayer.svelte   — Synced YouTube panel for one tab (IFrame API + controls)
+    tab-sync.js             — MAX_TABS/MAX_TAB_TEXT_LEN/nextTabTitle (shared client+server)
+    yt-sync.js              — parseYouTubeId + effectivePosition helpers
     server/
       db.js          — SQLite room CRUD
       auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
-      ws-rooms.js    — WebSocket room manager (presence, clap, yt_state)
+      ws-rooms.js    — WebSocket room manager (presence, clap, tabs_state/tab_video/tab_text)
   routes/
     +page.svelte        — Create episode home page
     rec/[slug]/
-      +page.svelte      — Recording room UI (wires clockOffset into WatchTogether)
+      +page.svelte      — Recording room UI (wires clockOffset into RoomTabs)
       +page.server.js   — Auth, load room data
 static/
   worklet/

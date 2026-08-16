@@ -2,23 +2,27 @@
   import { onDestroy, tick } from "svelte";
   import { parseYouTubeId, effectivePosition } from "./yt-sync.js";
 
-  export let isHost = false;
-  export let guestCanControl = false; // room setting: can a guest play/pause/seek?
+  // Scopes every outgoing message to this tab. The parent (RoomTabs) owns
+  // which tab is active and destroys/recreates this component on switch, so
+  // exactly one player/audio-stream is ever live at a time.
+  export let tabId;
   export let send = () => {}; // (payload) => void — JSON-sends over the room WS
   export let clockOffset = 0; // serverTime - clientTime, from the page's clock sync
+
+  // Room-wide hold-to-talk duck, owned by the parent (talk isn't per-tab).
+  export let talking = false; // true while *this* browser is holding Talk
+  export let roomTalking = false; // true while any peer (including us) is holding Talk
 
   const SEEK_TOLERANCE_SEC = 0.75;
   const DRIFT_CHECK_MS = 20000;
   const DUCK_FACTOR = 0.25;
-
-  $: canControl = isHost || guestCanControl;
 
   let container;
   let player = null;
   let playerReady = false;
   let loadedVideoId = null; // what the player currently has cued
 
-  let sharedState = null; // last yt_state received (null = no shared video)
+  let sharedState = null; // last tab_video received for this tab (null = no video)
   let applySeq = 0; // stale-timeout guard: only the latest state applies
 
   let inputUrl = "";
@@ -33,24 +37,22 @@
   let uiTimer = null;
   let driftTimer = null;
 
-  // Slider and mute stay local. Talk-duck is shared: either peer holding
-  // Talk drops both YouTube players to DUCK_FACTOR of their own slider.
+  // Slider and mute stay local; the room-wide Talk duck (above) scales it.
   let volume = 100;
   let muted = false;
-  let talking = false; // true while this browser's Talk button is held
-  let roomTalking = false; // true while any peer (including us) is holding Talk
 
   $: effectiveVolume = talking || roomTalking ? Math.round(volume * DUCK_FACTOR) : volume;
   $: if (playerReady && player && Number.isFinite(effectiveVolume)) player.setVolume(effectiveVolume);
   $: if (playerReady && player) muted ? player.mute() : player.unMute();
 
-  // ── Shared state in (the component's single entry point) ──────────
+  // ── Shared state in — the component's single entry point, driven by the
+  //    parent's inbound `tab_video` messages for this tab ─────────────────
 
   export function applyState(msg) {
     const seq = ++applySeq;
 
-    // Only an explicit empty id is a clear. Ignore malformed payloads
-    // (e.g. a duck message routed here) so they can't unmount the player.
+    // Only an explicit empty id is a clear. Ignore malformed payloads so
+    // they can't unmount the player.
     if (msg.videoId === "") {
       sharedState = null;
       clearPlayer();
@@ -93,15 +95,6 @@
     playing = s.playing;
   }
 
-  export function applyDuck(msg) {
-    roomTalking = !!msg.talking;
-  }
-
-  /** Re-announce a held Talk after a WS reconnect. */
-  export function resyncDuck() {
-    if (talking) send({ type: "yt_duck", talking: true });
-  }
-
   // Clicking the shield re-applies the shared state. This is both a manual
   // re-sync and the escape hatch when the browser blocks autoplay until the
   // user interacts with the page.
@@ -139,7 +132,7 @@
             if (player) return resolve();
             if (!container) return resolve();
             // YT.Player replaces its target node. Use a child Svelte doesn't
-            // own, otherwise the next reactive update (volume/duck) puts the
+            // own, otherwise the next reactive update (volume) puts the
             // empty div back and the iframe vanishes.
             const target = document.createElement("div");
             target.style.width = "100%";
@@ -150,7 +143,7 @@
               width: "100%",
               height: "100%",
               // No native controls — every action goes through room controls
-              // (`canControl`) so both players stay on the server's timeline.
+              // so both players stay on the server's timeline.
               playerVars: {
                 controls: 0,
                 disablekb: 1,
@@ -202,7 +195,7 @@
   }
 
   // Periodically re-align this browser's player with the shared state even
-  // without a fresh host command, so drift (and the echo it can cause) can't
+  // without a fresh command, so drift (and the echo it can cause) can't
   // silently build up between manual "resync" clicks.
   function startDriftTimer() {
     stopDriftTimer();
@@ -223,8 +216,7 @@
   onDestroy(clearPlayer);
 
   // ── Controls out (always send full desired state) ──────────────────
-  // load/clear stay host-only; play/pause/scrub go out as "control" and
-  // are accepted from a guest when the room allows it (see `canControl`).
+  // Load/clear/control are all symmetric — any peer may do any of them.
 
   function loadVideo() {
     const id = parseYouTubeId(inputUrl);
@@ -234,13 +226,14 @@
     }
     inputError = "";
     inputUrl = "";
-    send({ type: "yt_state", action: "load", videoId: id, playing: false, positionSec: 0 });
+    send({ type: "tab_video", tabId, action: "load", videoId: id, playing: false, positionSec: 0 });
   }
 
   function togglePlay() {
     if (!sharedState) return;
     send({
-      type: "yt_state",
+      type: "tab_video",
+      tabId,
       action: "control",
       videoId: sharedState.videoId,
       playing: !playing,
@@ -252,7 +245,8 @@
     scrubbing = false;
     if (!sharedState) return;
     send({
-      type: "yt_state",
+      type: "tab_video",
+      tabId,
       action: "control",
       videoId: sharedState.videoId,
       playing,
@@ -261,24 +255,11 @@
   }
 
   function clearVideo() {
-    send({ type: "yt_state", action: "clear", videoId: "", playing: false, positionSec: 0 });
+    send({ type: "tab_video", tabId, action: "clear", videoId: "", playing: false, positionSec: 0 });
   }
 
   function toggleMute() {
     muted = !muted;
-  }
-
-  function startTalk(e) {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    if (talking) return;
-    talking = true;
-    send({ type: "yt_duck", talking: true });
-  }
-
-  function endTalk() {
-    if (!talking) return;
-    talking = false;
-    send({ type: "yt_duck", talking: false });
   }
 
   function fmt(sec) {
@@ -288,35 +269,11 @@
 </script>
 
 <div class="watch-card">
-  <div class="watch-header">
-    <h3>📺 Watch together</h3>
-    {#if isHost && sharedState}
-      <button type="button" class="watch-clear" on:click={clearVideo}
-        >Clear video</button
-      >
-    {/if}
-  </div>
-
-  {#if isHost}
-    <div class="watch-load-row">
-      <input
-        type="text"
-        placeholder="Paste a YouTube link or video id"
-        bind:value={inputUrl}
-        on:keydown={(e) => e.key === "Enter" && loadVideo()}
-      />
-      <button
-        type="button"
-        class="btn-primary watch-load-btn"
-        on:click={loadVideo}>Watch</button
-      >
-    </div>
-    {#if inputError}
-      <p class="watch-error">{inputError}</p>
-    {/if}
-  {/if}
-
   {#if sharedState}
+    <div class="watch-header">
+      <button type="button" class="watch-clear" on:click={clearVideo}>Clear video</button>
+    </div>
+
     <div class="headphones-banner">
       🎧 Use headphones — YouTube audio plays in each browser and can bleed into
       your mic if speakers are on.
@@ -335,34 +292,29 @@
       ></button>
     </div>
 
-    {#if canControl}
-      <div class="watch-controls">
-        <button type="button" class="watch-play-btn" on:click={togglePlay}>
-          {playing ? "⏸ Pause" : "▶ Play"}
-        </button>
-        <span class="watch-time"
-          >{fmt(scrubbing ? scrubSec : currentSec)} / {fmt(durationSec)}</span
-        >
-        <input
-          type="range"
-          class="watch-scrubber"
-          min="0"
-          max={durationSec || 0}
-          step="1"
-          value={scrubbing ? scrubSec : currentSec}
-          on:input={(e) => {
-            scrubbing = true;
-            scrubSec = +e.currentTarget.value;
-          }}
-          on:change={scrub}
-          disabled={!playerReady}
-        />
-      </div>
-    {:else}
-      <p class="watch-guest-hint">
-        The host controls playback. Click the video if it falls out of sync.
-      </p>
-    {/if}
+    <div class="watch-controls">
+      <slot name="controls-left" />
+      <button type="button" class="watch-play-btn" on:click={togglePlay}>
+        {playing ? "⏸ Pause" : "▶ Play"}
+      </button>
+      <span class="watch-time"
+        >{fmt(scrubbing ? scrubSec : currentSec)} / {fmt(durationSec)}</span
+      >
+      <input
+        type="range"
+        class="watch-scrubber"
+        min="0"
+        max={durationSec || 0}
+        step="1"
+        value={scrubbing ? scrubSec : currentSec}
+        on:input={(e) => {
+          scrubbing = true;
+          scrubSec = +e.currentTarget.value;
+        }}
+        on:change={scrub}
+        disabled={!playerReady}
+      />
+    </div>
 
     <div class="watch-volume-row">
       <button
@@ -383,29 +335,25 @@
         bind:value={volume}
         title="Your local video volume"
       />
-      <button
-        type="button"
-        class="watch-talk-btn"
-        class:active={talking}
-        aria-pressed={talking}
-        title="Hold to lower your local video volume"
-        on:pointerdown={startTalk}
-        on:pointerup={endTalk}
-        on:pointercancel={endTalk}
-        on:lostpointercapture={endTalk}
-        on:contextmenu|preventDefault
-      >
-        Talk
-      </button>
     </div>
-  {:else if !isHost}
-    <p class="watch-guest-hint">Waiting for the host to share a video…</p>
+  {:else}
+    <div class="watch-load-row">
+      <input
+        type="text"
+        placeholder="Paste a YouTube link or video id"
+        bind:value={inputUrl}
+        on:keydown={(e) => e.key === "Enter" && loadVideo()}
+      />
+      <button type="button" class="btn-primary watch-load-btn" on:click={loadVideo}>Watch</button>
+    </div>
+    {#if inputError}
+      <p class="watch-error">{inputError}</p>
+    {/if}
   {/if}
 </div>
 
 <style>
   .watch-card {
-    margin-top: 16px;
     padding: 16px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
@@ -415,13 +363,8 @@
   .watch-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     margin-bottom: 10px;
-  }
-
-  .watch-header h3 {
-    font-size: 14px;
-    margin: 0;
   }
 
   .watch-clear {
@@ -462,7 +405,7 @@
   }
 
   .headphones-banner {
-    margin-top: 12px;
+    margin-bottom: 12px;
     padding: 10px 12px;
     border-radius: 8px;
     background: rgba(245, 158, 11, 0.1);
@@ -473,7 +416,6 @@
 
   .watch-player {
     position: relative;
-    margin-top: 12px;
     aspect-ratio: 16 / 9;
     border-radius: 8px;
     overflow: hidden;
@@ -582,12 +524,6 @@
     flex: 1;
   }
 
-  .watch-guest-hint {
-    margin: 10px 0 0;
-    font-size: 13px;
-    color: var(--muted);
-  }
-
   .watch-volume-row {
     display: flex;
     align-items: center;
@@ -608,31 +544,5 @@
 
   .watch-volume-slider {
     width: 100px;
-  }
-
-  .watch-talk-btn {
-    margin-left: auto;
-    min-width: 88px;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    cursor: pointer;
-    user-select: none;
-    touch-action: none;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
-  }
-  .watch-talk-btn:hover {
-    background: var(--accent-dim);
-  }
-  .watch-talk-btn.active {
-    background: var(--warn);
-    color: #111;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45);
   }
 </style>

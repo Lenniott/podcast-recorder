@@ -76,21 +76,20 @@ export async function stubYouTubeApi(page) {
   })
 }
 
-export async function createRoom(page, { name, password, guestCanControl = false }) {
+export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
   await page.goto('/')
-  // Toggle checkboxes BEFORE filling text fields. The create form uses one-way
-  // `value={form?.name ?? ''}` (not bind:value), so a Svelte re-render from a
-  // checkbox change will wipe any DOM values Playwright already typed.
-  const guestBox = page.locator('#guest_can_control_playback')
-  if (guestCanControl) await guestBox.check()
-  else await guestBox.uncheck()
-
   await page.locator('#name').fill(name)
   await page.locator('#password').fill(password)
   await Promise.all([
     page.waitForURL(/\/rec\//, { timeout: 15_000 }),
     page.getByRole('button', { name: /Create Room/i }).click()
   ])
+  // The room's password/auth cookies are set by room creation, but the host
+  // still has no display name yet — same "how should we show you" gate a
+  // guest hits, just without the password field since they're already authed.
+  await page.getByLabel('Your name').fill(hostDisplayName)
+  await page.getByRole('button', { name: /Continue/i }).click()
+  await roomTabsReady(page)
   return page.url()
 }
 
@@ -100,5 +99,10 @@ export async function joinAsGuest(page, roomUrl, { name, password }) {
   await page.getByLabel('Your name').fill(name)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: /Join Room/i }).click()
-  await page.getByRole('heading', { name: '📺 Watch together' }).waitFor()
+  await roomTabsReady(page)
+}
+
+/** Waits for the room's shared tab state to have arrived over the WS. */
+async function roomTabsReady(page) {
+  await page.getByPlaceholder('Shared notes — visible to everyone in the room…').waitFor({ timeout: 15_000 })
 }
