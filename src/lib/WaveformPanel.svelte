@@ -60,7 +60,7 @@
 
   canvas {
     width: 100%;
-    height: 90px;
+    height: 40px;
     border-radius: 8px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);

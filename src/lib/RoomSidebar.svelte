@@ -20,7 +20,6 @@
   export let slug;
   export let isHostClaim = false;
   export let roomPassword = null;
-  export let myRole = null;
   export let wsStatus = "disconnected";
   export let peers = [];
   export let clientId = null;
@@ -73,7 +72,7 @@
 
   {#if !collapsed}
     <section class="sidebar-section">
-      <RoomDetailsPanel {roomName} {slug} {isHostClaim} {roomPassword} {myRole} {wsStatus} {peers} {clientId} {copyLinkDone} {onCopyLink} />
+      <RoomDetailsPanel {roomName} {slug} {isHostClaim} {roomPassword} {wsStatus} {peers} {clientId} {copyLinkDone} {onCopyLink} />
     </section>
 
     <section class="sidebar-section">

@@ -112,8 +112,6 @@
   let nameGateShow = !data.participantName?.trim()
 
   // ─── Derived ────────────────────────────────────────────────────────
-  $: me = peers.find((p) => p.clientId === clientId)
-  $: myRole = me?.role || null
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
@@ -434,7 +432,16 @@
       canvasCtx.lineTo(W, H / 2)
       canvasCtx.stroke()
 
-      // Waveform
+      // Visual-only auto-gain: speech is far below 0 dBFS, so 1:1 mapping
+      // is a 2px wiggle on this short canvas. Recording path is unchanged.
+      let peak = 0
+      for (let i = 0; i < analyserData.length; i++) {
+        const a = Math.abs(analyserData[i])
+        if (a > peak) peak = a
+      }
+      const noiseFloor = 0.015 // ≈ -36 dBFS
+      const scale = peak < noiseFloor ? 1 : Math.min(24, 0.9 / peak)
+
       const isRec = recordingState === 'recording'
       canvasCtx.strokeStyle = isRec ? '#a855f7' : '#52525b'
       canvasCtx.lineWidth = 1.5
@@ -444,7 +451,7 @@
       let x = 0
 
       for (let i = 0; i < analyserData.length; i++) {
-        const y = (analyserData[i] * 0.5 + 0.5) * H
+        const y = Math.max(0, Math.min(H, (analyserData[i] * scale * 0.5 + 0.5) * H))
         if (i === 0) canvasCtx.moveTo(x, y)
         else canvasCtx.lineTo(x, y)
         x += sliceWidth
@@ -840,7 +847,6 @@
     slug={data.slug}
     isHostClaim={data.isHostClaim}
     roomPassword={data.roomPassword}
-    {myRole}
     {wsStatus}
     {peers}
     {clientId}

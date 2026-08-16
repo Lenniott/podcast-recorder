@@ -16,7 +16,8 @@
   // Stop and Clap must stay reachable without expanding the sidebar.
   export let compact = false;
 
-  $: recordTitle = recordingState === "recording" ? "Stop Recording" : "Start Recording";
+  $: recordTitle =
+    recordingState === "recording" ? "Stop Recording" : "Start Recording";
 </script>
 
 {#if compact}
@@ -49,42 +50,47 @@
   </div>
 {:else}
   <div class="record-controls">
-    <button
-      type="button"
-      class="btn-primary rec-btn"
-      class:is-recording={recordingState === "recording"}
-      on:click={onToggleRecording}
-      disabled={!canRecord || micPermission === "denied"}
-      title={micPermission === "denied" ? "Mic access required" : ""}
-    >
-      {#if recordingState === "idle"}
-        <span class="rec-circle"></span> Start Recording
-      {:else if recordingState === "recording"}
-        <span class="stop-square"></span> Stop Recording
-      {:else}
-        Finishing…
-      {/if}
-    </button>
+    <div class="record-controls-top">
+      <button
+        type="button"
+        class="btn-primary rec-btn"
+        class:is-recording={recordingState === "recording"}
+        on:click={onToggleRecording}
+        disabled={!canRecord || micPermission === "denied"}
+        title={micPermission === "denied" ? "Mic access required" : ""}
+      >
+        {#if recordingState === "idle"}
+          <span class="rec-circle"></span> Start Recording
+        {:else if recordingState === "recording"}
+          <span class="stop-square"></span> Stop Recording
+        {:else}
+          Finishing…
+        {/if}
+      </button>
 
-    <button
-      type="button"
-      class="btn-ghost clap-btn"
-      on:click={onClap}
-      disabled={wsStatus !== "connected"}
-      title="Inject a 1kHz sync tone into both recordings"
-    >
-      👏 Clap
-    </button>
-
+      <button
+        type="button"
+        class="btn-ghost clap-btn"
+        on:click={onClap}
+        disabled={wsStatus !== "connected"}
+        title="Inject a 1kHz sync tone into both recordings"
+      >
+        👏 Clap
+      </button>
+    </div>
     <div class="stats-bar">
       {#if recordingState === "recording"}
-        <div class="stat recording-stat">
-          <span class="stat-dot"></span>
-          REC {formatTime(recordingSeconds)}
+        <div class="stat-row">
+          <div class="stat recording-stat">
+            <span class="stat-dot"></span>
+            REC {formatTime(recordingSeconds)}
+          </div>
+          <div class="stat">{formatBytes(bytesWritten)}</div>
         </div>
-        <div class="stat">{formatBytes(bytesWritten)} written</div>
       {:else if recordingState === "idle" && bytesWritten > 44}
-        <div class="stat">Last recording: {formatBytes(bytesWritten)} saved to your disk</div>
+        <div class="stat">
+          Last recording: {formatBytes(bytesWritten)} saved to your disk
+        </div>
       {/if}
 
       {#if myPeerIsRecording && recordingState === "idle"}
@@ -96,6 +102,11 @@
 
 <style>
   .record-controls {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .record-controls-top {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -143,9 +154,16 @@
   }
 
   .stat {
+    margin-top: 4px;
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  .stat-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   .recording-stat {
@@ -162,13 +180,23 @@
   }
 
   @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
   }
 
   @keyframes pulse-ring {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
-    50%      { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+    }
+    50% {
+      box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+    }
   }
 
   .warn-stat {
