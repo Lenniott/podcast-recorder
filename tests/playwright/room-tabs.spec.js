@@ -125,6 +125,70 @@ test.describe('Room tabs (shared video + text, symmetric host/guest)', () => {
     await host.close()
   })
 
+  test('switching away from a playing tab pauses it, and switching back does not auto-resume', async ({ browser }) => {
+    const host = await browser.newPage()
+    await stubYouTubeApi(host)
+
+    const password = 'tabs-pause-switch'
+    const roomUrl = await createRoom(host, { name: `E2E TabsPauseSwitch ${Date.now()}`, password })
+
+    await host.getByPlaceholder('Paste a YouTube link or video id').fill('dQw4w9WgXcQ')
+    await host.getByRole('button', { name: 'Watch' }).click()
+    await host.locator('.watch-play-btn').click()
+    await expect(host.locator('.watch-play-btn')).toHaveText('⏸ Pause')
+
+    await host.getByRole('button', { name: 'Add tab' }).click() // switches active to Tab 2
+    await expect(host.locator('.tab-pill.active')).toContainText('Tab 2')
+    // Let the pause-on-leave round trip (client → server → back) settle before
+    // switching back, so the cached state we're about to read reflects it.
+    await host.waitForTimeout(500)
+
+    await host.getByRole('button', { name: 'Tab 1', exact: true }).click()
+    await expect(host.locator('.tab-pill.active')).toContainText('Tab 1')
+    await expect(host.locator('.watch-play-btn')).toHaveText('▶ Play')
+    // Give any stray auto-resume a moment to happen, then confirm it stayed paused.
+    await host.waitForTimeout(500)
+    await expect(host.locator('.watch-play-btn')).toHaveText('▶ Play')
+
+    await host.close()
+  })
+
+  test('a guest joining mid-playback and pressing play does not reset the shared position', async ({ browser }) => {
+    const host = await browser.newPage()
+    await stubYouTubeApi(host)
+
+    const password = 'tabs-sync-position'
+    const roomUrl = await createRoom(host, { name: `E2E TabsSyncPos ${Date.now()}`, password })
+
+    await host.getByPlaceholder('Paste a YouTube link or video id').fill('dQw4w9WgXcQ')
+    await host.getByRole('button', { name: 'Watch' }).click()
+    await host.locator('.watch-play-btn').click() // starts playing at position ~0
+
+    // Let real time elapse so the shared position advances meaningfully.
+    await host.waitForTimeout(3000)
+
+    const guest = await browser.newPage()
+    await stubYouTubeApi(guest)
+    await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+
+    // The guest's late-join replay carries playing:true, so reconcile() loads
+    // the video fresh — FakePlayer.loadVideoById simulates a couple seconds
+    // of buffering lag before getCurrentTime() catches up. Clicking Play
+    // immediately exercises exactly the race that used to reset the shared
+    // position to ~0 for everyone.
+    const guestPlayBtn = guest.locator('.watch-play-btn')
+    await expect(guestPlayBtn).toBeVisible({ timeout: 15_000 })
+    await guestPlayBtn.click()
+
+    // The host's player re-syncs to whatever position the guest's click sent.
+    await expect
+      .poll(() => host.evaluate(() => window.__ytPosition), { timeout: 15_000 })
+      .toBeGreaterThan(2)
+
+    await guest.close()
+    await host.close()
+  })
+
   test('closing the active tab falls back to another tab for both peers', async ({ browser }) => {
     const host = await browser.newPage()
     await stubYouTubeApi(host)

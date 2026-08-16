@@ -107,6 +107,7 @@
 
   let sessionStarted = false
   let audioInitError = ''
+  let sidebarCollapsed = false // local UI only — never shared over the room WS
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
 
@@ -655,18 +656,26 @@
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Canvas backing-resolution reset. `width`/`height` attributes (not CSS
+   * size) set the drawing buffer, so this needs re-running whenever the
+   * canvas's on-screen size changes — initial mount, and toggling the
+   * sidebar collapse (see the `sidebarCollapsed` reactive block below).
+   */
+  function resizeCanvas() {
+    if (!canvas) return
+    canvasCtx = canvasCtx || canvas.getContext('2d')
+    canvas.width  = canvas.offsetWidth
+    canvas.height = canvas.offsetHeight
+  }
+
   async function startSession() {
     if (!browser || !data.authenticated || sessionStarted || nameGateShow) return
     sessionStarted = true
     audioInitError = ''
     try {
-      // Init canvas
       await tick()
-      if (canvas) {
-        canvasCtx = canvas.getContext('2d')
-        canvas.width  = canvas.offsetWidth
-        canvas.height = canvas.offsetHeight
-      }
+      resizeCanvas()
 
       await requestMicPermission()
       if (micPermission === 'granted') {
@@ -702,6 +711,13 @@
       console.error('Failed to start session', err)
       sessionStarted = false
     })
+  }
+
+  // Sidebar collapse changes the canvas's on-screen size — re-run the
+  // backing-resolution reset once the DOM has caught up.
+  $: if (browser) {
+    sidebarCollapsed
+    tick().then(resizeCanvas)
   }
 
   $: if (data.participantName?.trim()) nameGateShow = false
@@ -750,7 +766,7 @@
         <label for="pw">Password</label>
         <input id="pw" name="password" type="password" use:focus required />
       </div>
-      <button type="submit" class="btn-primary">Join Room</button>
+      <button type="submit" class="btn-primary btn-block">Join Room</button>
     </form>
   </div>
 </main>
@@ -806,7 +822,7 @@
         <label for="display-name">Your name</label>
         <input id="display-name" name="name" type="text" maxlength="50" bind:value={myName} required use:focus />
       </div>
-      <button type="submit" class="btn-primary">Continue</button>
+      <button type="submit" class="btn-primary btn-block">Continue</button>
     </form>
   </div>
 </main>
@@ -816,9 +832,10 @@
 <!-- ═══════════════════════════════════════════════════════════════ -->
 
 {:else}
-<div class="room">
+<div class="room" class:sidebar-collapsed={sidebarCollapsed}>
 
   <RoomSidebar
+    bind:collapsed={sidebarCollapsed}
     roomName={data.roomName}
     slug={data.slug}
     isHostClaim={data.isHostClaim}
@@ -933,12 +950,17 @@
     align-items: start;
   }
 
+  .room.sidebar-collapsed {
+    grid-template-columns: 72px 1fr;
+  }
+
   .room-main {
     min-width: 0; /* let the grid column shrink below its content's intrinsic width */
   }
 
   @media (max-width: 720px) {
-    .room {
+    .room,
+    .room.sidebar-collapsed {
       grid-template-columns: 1fr;
     }
   }

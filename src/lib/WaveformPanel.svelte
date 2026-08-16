@@ -12,9 +12,12 @@
   export let peakHoldDb = METER_MIN;
   export let isClipping = false;
   export let lastClapFrom = null;
+  // Collapsed-sidebar mode: same live canvas + level bar, no labels/readout
+  // — the point of collapsing is to still see *something* is happening.
+  export let compact = false;
 </script>
 
-<div class="waveform-wrap">
+<div class="waveform-wrap" class:compact>
   <canvas bind:this={canvasEl}></canvas>
 
   <div class="db-meter-wrap">
@@ -24,23 +27,25 @@
         <div class="db-peak-hold" style="left: {peakPct}%"></div>
       {/if}
     </div>
-    <div class="db-labels">
-      <span style="left: 0%">-60</span>
-      <span style="left: 60%">-24</span>
-      <span style="left: 70%">-18</span>
-      <span style="left: 80%">-12</span>
-      <span style="left: 90%">-6</span>
-      <span style="left: 95%">-3</span>
-      <span style="left: 100%">0</span>
-    </div>
-    <div class="db-readout">
-      <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "—"} dBFS</span>
-      <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "—"}</span>
-      {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
-    </div>
+    {#if !compact}
+      <div class="db-labels">
+        <span style="left: 0%">-60</span>
+        <span style="left: 60%">-24</span>
+        <span style="left: 70%">-18</span>
+        <span style="left: 80%">-12</span>
+        <span style="left: 90%">-6</span>
+        <span style="left: 95%">-3</span>
+        <span style="left: 100%">0</span>
+      </div>
+      <div class="db-readout">
+        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "—"} dBFS</span>
+        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "—"}</span>
+        {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
+      </div>
+    {/if}
   </div>
 
-  {#if lastClapFrom}
+  {#if lastClapFrom && !compact}
     <div class="clap-flash">👏 Sync clap — {lastClapFrom}</div>
   {/if}
 </div>
@@ -59,6 +64,10 @@
     border-radius: 8px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
+  }
+
+  .waveform-wrap.compact canvas {
+    height: 48px;
   }
 
   .db-meter-wrap {

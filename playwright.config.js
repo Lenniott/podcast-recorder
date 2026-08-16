@@ -28,7 +28,12 @@ export default defineConfig({
     env: {
       ...process.env,
       SITE_PASSWORD: '',
-      DB_PATH: './data/e2e-rooms.db'
+      DB_PATH: './data/e2e-rooms.db',
+      // A serial e2e run creates/joins many rooms in quick succession — far
+      // more POSTs per minute than the production rate limiter (20/min) is
+      // meant to constrain for a real user. Loosen it for this server only.
+      MAX_POSTS_PER_MIN: '200',
+      MAX_AUTH_POSTS_PER_MIN: '100'
     }
   }
 })

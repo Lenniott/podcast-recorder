@@ -18,7 +18,7 @@
   <div class="rd-name"><span class="rd-icon">🎙️</span> {roomName}</div>
   <div class="rd-slug-row">
     <span class="rd-slug">/rec/{slug}</span>
-    <button type="button" class="btn-copy-link" on:click={onCopyLink}>
+    <button type="button" class="btn-ghost btn-sm" on:click={onCopyLink}>
       {copyLinkDone ? "Copied!" : "Copy link"}
     </button>
   </div>
@@ -99,20 +99,6 @@
     font-size: 12px;
     color: var(--muted);
     font-family: monospace;
-  }
-
-  .btn-copy-link {
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .btn-copy-link:hover {
-    background: var(--border);
-    color: var(--text);
   }
 
   .rd-password-row {

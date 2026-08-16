@@ -14,7 +14,7 @@
   export let roomTalking = false; // true while any peer (including us) is holding Talk
 
   const SEEK_TOLERANCE_SEC = 0.75;
-  const DRIFT_CHECK_MS = 20000;
+  const DRIFT_CHECK_MS = 5000;
   const DUCK_FACTOR = 0.25;
 
   let container;
@@ -213,7 +213,24 @@
     driftTimer = null;
   }
 
-  onDestroy(clearPlayer);
+  onDestroy(() => {
+    // Leaving this tab (switching away, or leaving the room) while its
+    // video is playing shouldn't leave the *shared* state saying it's still
+    // playing — otherwise coming back to this tab later replays that stale
+    // "playing" state and auto-resumes it. Pause it for everyone on the way
+    // out, using the authoritative position (see togglePlay for why).
+    if (playing && sharedState) {
+      send({
+        type: "tab_video",
+        tabId,
+        action: "control",
+        videoId: sharedState.videoId,
+        playing: false,
+        positionSec: effectivePosition(sharedState, Date.now() + clockOffset),
+      });
+    }
+    clearPlayer();
+  });
 
   // ── Controls out (always send full desired state) ──────────────────
   // Load/clear/control are all symmetric — any peer may do any of them.
@@ -237,7 +254,13 @@
       action: "control",
       videoId: sharedState.videoId,
       playing: !playing,
-      positionSec: playerReady ? player.getCurrentTime() : 0,
+      // The authoritative position, not player.getCurrentTime() — a
+      // freshly-loaded/just-joined player's internal clock can still read
+      // 0 (or otherwise stale) before the underlying iframe has actually
+      // caught up to its seek target. Trusting that local clock here would
+      // let a mistimed play/pause snap the *shared* position backward for
+      // everyone (control is last-write-wins on the server).
+      positionSec: effectivePosition(sharedState, Date.now() + clockOffset),
     });
   }
 
@@ -271,7 +294,7 @@
 <div class="watch-card">
   {#if sharedState}
     <div class="watch-header">
-      <button type="button" class="watch-clear" on:click={clearVideo}>Clear video</button>
+      <button type="button" class="btn-ghost btn-sm" on:click={clearVideo}>Clear video</button>
     </div>
 
     <div class="headphones-banner">
@@ -294,7 +317,7 @@
 
     <div class="watch-controls">
       <slot name="controls-left" />
-      <button type="button" class="watch-play-btn" on:click={togglePlay}>
+      <button type="button" class="btn-secondary watch-play-btn" on:click={togglePlay}>
         {playing ? "⏸ Pause" : "▶ Play"}
       </button>
       <span class="watch-time"
@@ -319,7 +342,7 @@
     <div class="watch-volume-row">
       <button
         type="button"
-        class="watch-mute-btn"
+        class="btn-ghost btn-sm btn-icon"
         on:click={toggleMute}
         title={muted ? "Unmute" : "Mute"}
         aria-label={muted ? "Unmute" : "Mute"}
@@ -344,7 +367,7 @@
         bind:value={inputUrl}
         on:keydown={(e) => e.key === "Enter" && loadVideo()}
       />
-      <button type="button" class="btn-primary watch-load-btn" on:click={loadVideo}>Watch</button>
+      <button type="button" class="btn-primary" on:click={loadVideo}>Watch</button>
     </div>
     {#if inputError}
       <p class="watch-error">{inputError}</p>
@@ -367,20 +390,6 @@
     margin-bottom: 10px;
   }
 
-  .watch-clear {
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .watch-clear:hover {
-    background: var(--border);
-    color: var(--text);
-  }
-
   .watch-load-row {
     display: flex;
     gap: 8px;
@@ -392,10 +401,6 @@
   .watch-load-row input:focus {
     outline: none;
     border-color: var(--accent);
-  }
-  .watch-load-btn {
-    white-space: nowrap;
-    width: 100px;
   }
 
   .watch-error {
@@ -450,17 +455,7 @@
   }
 
   .watch-play-btn {
-    padding: 8px 16px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--accent);
-    color: var(--text);
-    font-size: 13px;
-    cursor: pointer;
     white-space: nowrap;
-  }
-  .watch-play-btn:hover {
-    background: var(--accent-dim);
   }
 
   .watch-time {
@@ -530,16 +525,6 @@
     gap: 10px;
     margin-top: 10px;
     flex-wrap: wrap;
-  }
-
-  .watch-mute-btn {
-    border: 1px solid var(--border);
-    background: transparent;
-    border-radius: 6px;
-    padding: 4px 8px;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
   }
 
   .watch-volume-slider {

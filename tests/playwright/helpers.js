@@ -41,21 +41,39 @@ export async function stubYouTubeApi(page) {
         this._muted = false
       }
       loadVideoById(id, start) {
-        this._time = start || 0
+        // Simulate a real YouTube iframe's buffering lag: getCurrentTime()
+        // doesn't actually reach `start` until the seek settles a moment
+        // later. Reading it synchronously right after load — which is
+        // exactly what a just-joined/just-loaded player's Play button click
+        // would do — must NOT be trusted for the shared position (see
+        // TabVideoPlayer#togglePlay).
+        this._time = 0
         this._state = 1
+        window.__ytPosition = this._time
+        window.__ytState = 'playing'
+        clearTimeout(this._loadCatchupTimer)
+        this._loadCatchupTimer = setTimeout(() => {
+          this._time = start || 0
+          window.__ytPosition = this._time
+        }, 2000)
       }
       cueVideoById(id, start) {
         this._time = start || 0
         this._state = 2
+        window.__ytPosition = this._time
+        window.__ytState = 'paused'
       }
       playVideo() {
         this._state = 1
+        window.__ytState = 'playing'
       }
       pauseVideo() {
         this._state = 2
+        window.__ytState = 'paused'
       }
       seekTo(t) {
         this._time = t
+        window.__ytPosition = this._time
       }
       getCurrentTime() {
         return this._time
@@ -102,7 +120,13 @@ export async function joinAsGuest(page, roomUrl, { name, password }) {
   await roomTabsReady(page)
 }
 
-/** Waits for the room's shared tab state to have arrived over the WS. */
+/**
+ * Waits for the room's shared tab state to have arrived over the WS.
+ * Generous timeout: on a cold `npm run dev` start, the WS proxy target
+ * (server-ws-dev.js) can come up a beat after Vite's HTTP port starts
+ * responding (the two are separate processes) — the room's own 3s
+ * auto-reconnect needs a couple of cycles to land in that window.
+ */
 async function roomTabsReady(page) {
-  await page.getByPlaceholder('Shared notes — visible to everyone in the room…').waitFor({ timeout: 15_000 })
+  await page.getByPlaceholder('Shared notes — visible to everyone in the room…').waitFor({ timeout: 30_000 })
 }

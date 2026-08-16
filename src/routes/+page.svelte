@@ -34,7 +34,7 @@
         <label for="site-pw">Site Password</label>
         <input id="site-pw" name="password" type="password" required use:focus />
       </div>
-      <button type="submit" class="btn-primary">Unlock</button>
+      <button type="submit" class="btn-primary btn-block">Unlock</button>
     </form>
   </div>
 
@@ -86,7 +86,7 @@
         <span class="hint">Your guest needs this to join. Not stored in plain text.</span>
       </div>
 
-      <button type="submit" class="btn-primary" disabled={loading}>
+      <button type="submit" class="btn-primary btn-block" disabled={loading}>
         {loading ? 'Creating…' : 'Create Room & Get Link'}
       </button>
     </form>

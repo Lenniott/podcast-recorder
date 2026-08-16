@@ -140,13 +140,18 @@
           {tab.title}
         </button>
         {#if tabs.length > 1}
-          <button type="button" class="tab-close" aria-label="Close {tab.title}" on:click={(e) => closeTab(tab.id, e)}>
+          <button
+            type="button"
+            class="btn-ghost btn-sm btn-icon tab-close"
+            aria-label="Close {tab.title}"
+            on:click={(e) => closeTab(tab.id, e)}
+          >
             &times;
           </button>
         {/if}
       </div>
     {/each}
-    <button type="button" class="tab-add" on:click={addTab} aria-label="Add tab" title="Add tab">+</button>
+    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab">+</button>
   </div>
 
   <div class="tab-content">
@@ -157,8 +162,8 @@
             {#if activeVideoPlaying}
               <button
                 type="button"
-                class="talk-btn"
-                class:active={talking}
+                class="btn-secondary talk-btn"
+                class:is-active={talking}
                 aria-pressed={talking}
                 title="Hold to lower your local video volume"
                 on:pointerdown={startTalk}
@@ -227,42 +232,13 @@
     cursor: pointer;
   }
 
+  /* Nested inside the already-bordered .tab-pill — no second border. */
   .tab-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
-    color: inherit;
-    font-size: 12px;
-    line-height: 1;
+    border-color: transparent;
     opacity: 0.7;
-    cursor: pointer;
   }
   .tab-close:hover {
     opacity: 1;
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  .tab-add {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    font-size: 16px;
-    cursor: pointer;
-  }
-  .tab-add:hover {
-    background: var(--border);
-    color: var(--text);
   }
 
   .tab-content {
@@ -276,30 +252,16 @@
     font-size: 13px;
   }
 
+  /* Press-and-hold control, not a click toggle — kept visually distinct
+     from a plain secondary button via letter-spacing/uppercase, but same
+     weight/size as Play so it doesn't compete with Start Recording. */
   .talk-btn {
     margin-right: auto;
     min-width: 88px;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 15px;
-    font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    cursor: pointer;
     user-select: none;
     touch-action: none;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
-  }
-  .talk-btn:hover {
-    background: var(--accent-dim);
-  }
-  .talk-btn.active {
-    background: var(--warn);
-    color: #111;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45);
   }
 
   .shared-textarea {

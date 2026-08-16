@@ -12,50 +12,87 @@
   export let onClap = () => {};
   export let formatTime = (s) => String(s);
   export let formatBytes = (b) => String(b);
+  // Collapsed-sidebar mode: same click handlers, icon-only buttons — Record/
+  // Stop and Clap must stay reachable without expanding the sidebar.
+  export let compact = false;
+
+  $: recordTitle = recordingState === "recording" ? "Stop Recording" : "Start Recording";
 </script>
 
-<div class="record-controls">
-  <button
-    class="rec-btn"
-    class:recording={recordingState === "recording"}
-    on:click={onToggleRecording}
-    disabled={!canRecord || micPermission === "denied"}
-    title={micPermission === "denied" ? "Mic access required" : ""}
-  >
-    {#if recordingState === "idle"}
-      <span class="rec-circle"></span> Start Recording
-    {:else if recordingState === "recording"}
-      <span class="stop-square"></span> Stop Recording
-    {:else}
-      Finishing…
-    {/if}
-  </button>
-
-  <button
-    class="clap-btn"
-    on:click={onClap}
-    disabled={wsStatus !== "connected"}
-    title="Inject a 1kHz sync tone into both recordings"
-  >
-    👏 Clap
-  </button>
-
-  <div class="stats-bar">
-    {#if recordingState === "recording"}
-      <div class="stat recording-stat">
-        <span class="stat-dot"></span>
-        REC {formatTime(recordingSeconds)}
-      </div>
-      <div class="stat">{formatBytes(bytesWritten)} written</div>
-    {:else if recordingState === "idle" && bytesWritten > 44}
-      <div class="stat">Last recording: {formatBytes(bytesWritten)} saved to your disk</div>
-    {/if}
-
-    {#if myPeerIsRecording && recordingState === "idle"}
-      <div class="stat warn-stat">⚠️ Guest is recording — are you?</div>
-    {/if}
+{#if compact}
+  <div class="record-controls-compact">
+    <button
+      type="button"
+      class="btn-primary btn-icon"
+      class:is-recording={recordingState === "recording"}
+      on:click={onToggleRecording}
+      disabled={!canRecord || micPermission === "denied"}
+      title={recordTitle}
+      aria-label={recordTitle}
+    >
+      {#if recordingState === "recording"}
+        <span class="stop-square"></span>
+      {:else}
+        <span class="rec-circle"></span>
+      {/if}
+    </button>
+    <button
+      type="button"
+      class="btn-ghost btn-icon"
+      on:click={onClap}
+      disabled={wsStatus !== "connected"}
+      title="Clap — inject a 1kHz sync tone"
+      aria-label="Clap"
+    >
+      👏
+    </button>
   </div>
-</div>
+{:else}
+  <div class="record-controls">
+    <button
+      type="button"
+      class="btn-primary rec-btn"
+      class:is-recording={recordingState === "recording"}
+      on:click={onToggleRecording}
+      disabled={!canRecord || micPermission === "denied"}
+      title={micPermission === "denied" ? "Mic access required" : ""}
+    >
+      {#if recordingState === "idle"}
+        <span class="rec-circle"></span> Start Recording
+      {:else if recordingState === "recording"}
+        <span class="stop-square"></span> Stop Recording
+      {:else}
+        Finishing…
+      {/if}
+    </button>
+
+    <button
+      type="button"
+      class="btn-ghost clap-btn"
+      on:click={onClap}
+      disabled={wsStatus !== "connected"}
+      title="Inject a 1kHz sync tone into both recordings"
+    >
+      👏 Clap
+    </button>
+
+    <div class="stats-bar">
+      {#if recordingState === "recording"}
+        <div class="stat recording-stat">
+          <span class="stat-dot"></span>
+          REC {formatTime(recordingSeconds)}
+        </div>
+        <div class="stat">{formatBytes(bytesWritten)} written</div>
+      {:else if recordingState === "idle" && bytesWritten > 44}
+        <div class="stat">Last recording: {formatBytes(bytesWritten)} saved to your disk</div>
+      {/if}
+
+      {#if myPeerIsRecording && recordingState === "idle"}
+        <div class="stat warn-stat">⚠️ Guest is recording — are you?</div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 <style>
   .record-controls {
@@ -64,30 +101,21 @@
     gap: 8px;
   }
 
-  button {
+  .rec-btn,
+  .clap-btn {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
+    width: 100%;
     padding: 12px 16px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
-  .rec-btn {
-    background: var(--accent);
-    color: var(--text);
-  }
-  .rec-btn.recording {
-    background: #ef4444;
-    color: #fff;
+  .record-controls-compact {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
   }
 
   .rec-circle {
@@ -102,9 +130,8 @@
     background: currentColor;
   }
 
-  .clap-btn {
-    background: var(--bg-elevated);
-    color: var(--text);
+  .btn-icon.is-recording {
+    animation: pulse-ring 1.2s infinite;
   }
 
   .stats-bar {
@@ -137,6 +164,11 @@
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+  }
+
+  @keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+    50%      { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
   }
 
   .warn-stat {
