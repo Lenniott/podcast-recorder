@@ -4,6 +4,7 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { createCaptureWriter } from '$lib/capture-writer.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
@@ -39,11 +40,14 @@
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
   let recordingTimer = null
-  let bytesWritten = 0
-  let dataByteCount = 0        // PCM bytes written (for WAV header patch)
+  let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
-  let recordingStartAudioTime = 0
-  let samplesWritten = 0
+  let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
+  // Set the instant the current mic stops flowing (device swap/dropout),
+  // cleared once audio is flowing again. Read by captureWriter.notifyDeviceGap()
+  // so silence is only ever written for a REAL gap, never inferred from
+  // how long a disk write took (see $lib/capture-writer.js for why that matters).
+  let micGapStartedAt = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
@@ -235,6 +239,10 @@
   async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
     if (!audioCtx) return
 
+    // Marks the start of a real capture gap unless one is already running
+    // (e.g. track.onended already marked it more precisely — see below).
+    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
+
     micSource?.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
 
@@ -254,9 +262,14 @@
 
     micStream = await navigator.mediaDevices.getUserMedia(constraints)
 
-    // Instant detection: fires before devicechange, keeps recording alive
+    // Instant detection: fires before devicechange, keeps recording alive.
+    // Mark the gap the moment audio actually stops, not once the fallback
+    // logic gets around to reacting to it.
     micStream.getAudioTracks().forEach(track => {
-      track.onended = () => connectMicWithFallback()
+      track.onended = () => {
+        micGapStartedAt = audioCtx?.currentTime ?? null
+        connectMicWithFallback()
+      }
     })
 
     micSource = audioCtx.createMediaStreamSource(micStream)
@@ -264,6 +277,19 @@
     gainNode.connect(workletNode)
     gainNode.connect(analyserNode)
     injectReconnectMarker()
+    resolveMicGap()
+  }
+
+  /**
+   * Report a resolved capture gap to the Capture Writer as real, measured
+   * wall-clock silence — the only path allowed to write silence into the
+   * take. See $lib/capture-writer.js for why write-latency must never do this.
+   */
+  function resolveMicGap() {
+    if (micGapStartedAt == null) return
+    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
+    micGapStartedAt = null
+    if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
   }
 
   /**
@@ -303,12 +329,18 @@
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
       })
-      micStream.getAudioTracks().forEach(track => { track.onended = () => connectMicWithFallback() })
+      micStream.getAudioTracks().forEach(track => {
+        track.onended = () => {
+          micGapStartedAt = audioCtx?.currentTime ?? null
+          connectMicWithFallback()
+        }
+      })
       micSource = audioCtx.createMediaStreamSource(micStream)
       micSource.connect(gainNode)
       gainNode.connect(workletNode)
       gainNode.connect(analyserNode)
       injectReconnectMarker()
+      resolveMicGap()
 
       // Figure out what we actually got
       await loadDevices()
@@ -372,23 +404,12 @@
           clipTimer = setTimeout(() => { isClipping = false }, 2000)
         }
       }
-      if (e.data.type === 'data' && fileWritable && recordingState === 'recording') {
+      if (e.data.type === 'data' && captureWriter && recordingState === 'recording') {
         const i16 = float32ToInt16(e.data.buffer)
-        // Keep timeline continuous across reconnects/device swaps by
-        // backfilling missing wall-clock capture time as digital silence.
-        const elapsedSec = (audioCtx?.currentTime || 0) - recordingStartAudioTime
-        const expectedSamples = Math.max(0, Math.round(elapsedSec * recordingSampleRate))
-        const gapSamples = expectedSamples - (samplesWritten + i16.length)
-        if (gapSamples > 0) {
-          const silence = new Int16Array(gapSamples)
-          await fileWritable.write(silence.buffer)
-          samplesWritten += gapSamples
-          dataByteCount += silence.byteLength
-        }
-        await fileWritable.write(i16.buffer)
-        samplesWritten += i16.length
-        dataByteCount += i16.buffer.byteLength
-        bytesWritten = dataByteCount + 44
+        // Queued internally and flushed in the background — a slow disk
+        // just makes the queue longer, it can never fabricate silence.
+        // Real gaps only ever come from notifyDeviceGap() (see connectMic).
+        bytesWritten += captureWriter.writeChunk(i16)
       }
     }
 
@@ -504,10 +525,12 @@
 
     // Write placeholder WAV header (will patch at end with real size)
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
-    dataByteCount = 0
-    samplesWritten = 0
     bytesWritten = 44
-    recordingStartAudioTime = audioCtx?.currentTime || 0
+    micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
+    captureWriter = createCaptureWriter({
+      sampleRate: recordingSampleRate,
+      write: (buf) => fileWritable.write(buf)
+    })
 
     recordingState = 'recording'
     recordingSeconds = 0
@@ -522,8 +545,12 @@
     clearInterval(recordingTimer)
     wsNotifyState('stopped')
 
-    // Give the worklet a moment to flush the last chunk
+    // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
+    // then drain every write the Capture Writer has queued — however many
+    // there are, not a guessed fixed delay.
     await new Promise(r => setTimeout(r, 300))
+    const { dataByteCount } = await captureWriter.stop()
+    captureWriter = null
 
     // Patch the WAV header with the real data size
     await fileWritable.seek(0)
