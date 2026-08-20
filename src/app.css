@@ -150,3 +150,15 @@ label {
 .dot.red    { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 .dot.yellow { background: var(--warn); }
 .dot.grey   { background: var(--muted); }
+
+/* Masks a plain text input to look like a password field without using
+   type="password" — Chrome's password-manager autofill classifies forms by
+   literally scanning for that input type, and once it does, it can clobber
+   *other* fields in the same form (e.g. a "name" field next to it) with
+   autofill on focus, which `autocomplete` attributes don't reliably stop.
+   These room passwords are one-off/transitory — never worth Chrome
+   offering to save — so avoiding the classifier entirely is the fix. */
+.pw-mask {
+  -webkit-text-security: disc;
+  text-security: disc;
+}

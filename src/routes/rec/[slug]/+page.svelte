@@ -4,6 +4,7 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
@@ -629,6 +630,11 @@
         }
       }
       if (msg.type === 'clap') {
+        // Flash even when the audio graph isn't up yet (no mic). Queue the
+        // tone for when the worklet starts; injectClap does both.
+        lastClapFrom = msg.from
+        clearTimeout(clapTimeout)
+        clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
@@ -705,8 +711,14 @@
 
   onMount(async () => {
     if (browser) {
-      myName = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
-      if (myName) {
+      // Only *restore* a previously-known name — never unconditionally
+      // reset myName to '' when neither source has one. This ran
+      // unconditionally before, which could race a fast programmatic fill
+      // of the name field (e.g. right after the SPA navigation into this
+      // route) and silently wipe it out a moment later.
+      const known = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
+      if (known) {
+        myName = known
         nameGateShow = false
         persistParticipantName()
       }
@@ -767,11 +779,11 @@
     <form method="POST" action="?/enter" use:enhance>
       <div class="field">
         <label for="name">Your name</label>
-        <input id="name" name="name" type="text" maxlength="50" bind:value={myName} required />
+        <input id="name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill />
       </div>
       <div class="field">
         <label for="pw">Password</label>
-        <input id="pw" name="password" type="password" use:focus required />
+        <input id="pw" name="password" type="text" class="pw-mask" autocomplete="off" spellcheck="false" use:focus required />
       </div>
       <button type="submit" class="btn-primary btn-block">Join Room</button>
     </form>
@@ -827,7 +839,7 @@
     }}>
       <div class="field">
         <label for="display-name">Your name</label>
-        <input id="display-name" name="name" type="text" maxlength="50" bind:value={myName} required use:focus />
+        <input id="display-name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill use:focus />
       </div>
       <button type="submit" class="btn-primary btn-block">Continue</button>
     </form>

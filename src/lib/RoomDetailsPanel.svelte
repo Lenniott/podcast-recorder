@@ -93,7 +93,9 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    height: 24px;
+    min-height: 24px;
+    position: relative;
+    z-index: 1;
   }
 
   .rd-slug {

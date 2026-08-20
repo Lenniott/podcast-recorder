@@ -1,9 +1,17 @@
 <script>
   import { enhance } from '$app/forms'
+  import { noAutofill } from '$lib/actions.js'
   export let data   // { siteAuthed, siteProtected }
   export let form
 
   let loading = false
+
+  // bind:value (not a one-way value={...} expression) so a component
+  // re-render — e.g. from dev-server HMR after editing an unrelated file —
+  // can't silently wipe out whatever the user already typed. Still
+  // repopulated after a failed submit, since `form` only changes then.
+  let name = form?.name ?? ''
+  $: if (form && form.name !== undefined && form.name !== name) name = form.name
 
   function focus(el) { el.focus() }
 </script>
@@ -32,7 +40,7 @@
     <form method="POST" action="?/site_enter" use:enhance>
       <div class="field">
         <label for="site-pw">Site Password</label>
-        <input id="site-pw" name="password" type="password" required use:focus />
+        <input id="site-pw" name="password" type="text" class="pw-mask" autocomplete="off" spellcheck="false" required use:focus />
       </div>
       <button type="submit" class="btn-primary btn-block">Unlock</button>
     </form>
@@ -66,9 +74,12 @@
           name="name"
           type="text"
           placeholder="e.g. Ep 42 — The One About AI"
-          value={form?.name ?? ''}
+          autocomplete="off"
+          bind:value={name}
           maxlength="100"
           required
+          readonly
+          use:noAutofill
           use:focus
         />
       </div>
@@ -78,8 +89,11 @@
         <input
           id="password"
           name="password"
-          type="password"
+          type="text"
+          class="pw-mask"
           placeholder="Share this with your guest"
+          autocomplete="off"
+          spellcheck="false"
           minlength="4"
           required
         />
