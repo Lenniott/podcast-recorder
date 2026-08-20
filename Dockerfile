@@ -17,7 +17,11 @@ COPY --from=builder /app/build         ./build
 COPY --from=builder /app/node_modules  ./node_modules
 COPY --from=builder /app/server.js     ./server.js
 COPY --from=builder /app/src/lib/server ./src/lib/server
+# server.js loads these as real files (not bundled). Copy every top-level
+# lib JS so a new import from ws-rooms.js cannot crash the image.
+COPY --from=builder /app/src/lib/*.js ./src/lib/
 COPY --from=builder /app/scripts       ./scripts
+
 COPY --from=builder /app/package.json  ./package.json
 
 # Persist database outside the container
