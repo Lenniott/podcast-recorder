@@ -14,52 +14,75 @@
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
- *   { type: 'yt_state', action, videoId, playing, positionSec }
- *                                        — action: 'load' | 'clear' (host only) or
- *                                          'control' (host, or guest if the room has
- *                                          guest_can_control_playback set); full desired
- *                                          shared-video state; videoId '' clears the video
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
+ *   { type: 'tab_create', tabId, title? }
+ *                                        — client-generated tabId (like clientId);
+ *                                          host and guest are equally allowed
+ *   { type: 'tab_switch', tabId }        — changes the room's shared active tab
+ *   { type: 'tab_close',  tabId }        — refused if it's the only tab left
+ *   { type: 'tab_video',  tabId, action, videoId, playing, positionSec }
+ *                                        — action: 'load' | 'clear' | 'control';
+ *                                          full desired video state for that tab;
+ *                                          videoId '' clears it. No host gate —
+ *                                          any peer may load/clear/control any tab.
+ *   { type: 'tab_text',   tabId, text }  — full shared text for that tab
+ *                                          (last write wins, no host gate)
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
- *   { type: 'yt_state',        videoId, playing, positionSec,
+ *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
+ *   { type: 'tabs_state',      tabs: [{id, title}], activeTabId }
+ *                                        — structural changes (create/switch/close)
+ *                                          and replayed in full to late joiners
+ *   { type: 'tab_video',       tabId, videoId, playing, positionSec,
  *                              positionAtMs, triggerAtMs }
- *                                        — broadcast on command and replayed to late
- *                                          joiners. Timing fields (all server clock):
+ *                                        — broadcast on command, replayed per-tab
+ *                                          (for tabs with a loaded video) to late
+ *                                          joiners. Timing fields (all server
+ *                                          clock), same lead-time scheme as before:
  *                                            triggerAtMs  — when every client should
- *                                                           apply this state (~lead ms
- *                                                           ahead, absorbs WS jitter)
+ *                                                           apply this state (~lead
+ *                                                           ms ahead, absorbs WS
+ *                                                           jitter)
  *                                            positionAtMs — timeline origin for
  *                                                           effectivePosition(); late
  *                                                           join keeps the stored
  *                                                           positionAtMs and gets a
- *                                                           fresh triggerAtMs so the
- *                                                           client can advance past
- *                                                           elapsed play time
- *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
+ *                                                           fresh triggerAtMs
+ *   { type: 'tab_text',        tabId, text }
+ *                                        — broadcast to everyone except the sender
+ *                                          (so a typist's own textarea isn't
+ *                                          clobbered mid-keystroke), replayed
+ *                                          per-tab (for tabs with non-empty text)
+ *                                          to late joiners
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
 
 import { roomExists, getRoomBySlug } from './db.js'
 import { verifyHostClaimToken } from './auth.js'
+import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
-const YT_LEAD_MS = 250   // same idea as clap: schedule apply slightly in the future
+const TAB_VIDEO_LEAD_MS = 250 // same idea as clap: schedule apply slightly in the future
 const YT_VIDEO_ID = /^[\w-]{11}$/
 
 // rooms: Map<slug, Map<clientId, peer>>
-// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt }
+// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking }
 const rooms = new Map()
 
-// ytStates: Map<slug, { videoId, playing, positionSec, positionAtMs }>
-// The room's shared YouTube video, kept so late joiners can catch up.
-const ytStates = new Map()
+// tabRooms: Map<slug, {
+//   tabs: Map<tabId, { id, title, video: {videoId,playing,positionSec,positionAtMs}|null, text }>,
+//   order: [tabId, ...],   // insertion order — stable display + close fallback
+//   activeTabId: string|null
+// }>
+// Kept in memory only (no save state), so late joiners can catch up, same as the
+// old single-video ytStates map this replaces.
+const tabRooms = new Map()
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg))
@@ -132,10 +155,58 @@ function sendDuck(slug) {
   for (const peer of room.values()) send(peer.ws, msg)
 }
 
+// ── Tabs ─────────────────────────────────────────────────────────────────
+
+function makeTabId() {
+  return 'tab-' + Math.random().toString(36).slice(2, 10)
+}
+
+/** Lazily creates a room's tab state with one default, active, empty tab. */
+function ensureTabRoom(slug) {
+  if (tabRooms.has(slug)) return tabRooms.get(slug)
+  const id = makeTabId()
+  const troom = {
+    tabs: new Map([[id, { id, title: nextTabTitle([]), video: null, text: '' }]]),
+    order: [id],
+    activeTabId: id
+  }
+  tabRooms.set(slug, troom)
+  return troom
+}
+
+function tabsSnapshot(troom) {
+  return troom.order.map((id) => {
+    const tab = troom.tabs.get(id)
+    return { id: tab.id, title: tab.title }
+  })
+}
+
+function sendTabsState(slug) {
+  const room = rooms.get(slug)
+  const troom = tabRooms.get(slug)
+  if (!room || !troom) return
+  const msg = { type: 'tabs_state', tabs: tabsSnapshot(troom), activeTabId: troom.activeTabId }
+  for (const peer of room.values()) send(peer.ws, msg)
+}
+
+/** Replays a room's full tab state (structure + per-tab video/text) to one late joiner. */
+function replayTabsTo(ws, troom) {
+  send(ws, { type: 'tabs_state', tabs: tabsSnapshot(troom), activeTabId: troom.activeTabId })
+  for (const tabId of troom.order) {
+    const tab = troom.tabs.get(tabId)
+    if (tab.video) {
+      send(ws, { type: 'tab_video', tabId: tab.id, ...tab.video, triggerAtMs: Date.now() + TAB_VIDEO_LEAD_MS })
+    }
+    if (tab.text) {
+      send(ws, { type: 'tab_text', tabId: tab.id, text: tab.text })
+    }
+  }
+}
+
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
-  ytStates.clear()
+  tabRooms.clear()
 }
 
 export function getPeerRole(slug, clientId) {
@@ -225,17 +296,8 @@ export function setupWss(wss) {
         recomputeRoles(room)
         sendPresence(slug)
 
-        // Catch a late joiner (or reconnect) up on the shared video.
-        // Spread keeps the stored positionAtMs (so effectivePosition advances
-        // through elapsed play time); only triggerAtMs is freshened.
-        if (firstJoin && clientId && ytStates.has(slug)) {
-          send(ws, {
-            type: 'yt_state',
-            ...ytStates.get(slug),
-            triggerAtMs: Date.now() + YT_LEAD_MS
-          })
-        }
         if (firstJoin && clientId) {
+          replayTabsTo(ws, ensureTabRoom(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
         }
       }
@@ -262,55 +324,121 @@ export function setupWss(wss) {
         broadcast(slug, { type: 'recording_state', name: peer.name, state: msg.state }, clientId)
       }
 
-      if (msg.type === 'yt_state' && clientId) {
-        const action = msg.action === 'load' || msg.action === 'clear' || msg.action === 'control'
-          ? msg.action
-          : (String(msg.videoId || '') === '' ? 'clear' : 'load')
+      if (msg.type === 'yt_duck' && clientId) {
+        peer.talking = !!msg.talking
+        sendDuck(slug)
+      }
 
-        const guestCanControl = !!roomRow?.guest_can_control_playback
-        const allowed = peer.role === 'host' || (action === 'control' && peer.role === 'guest' && guestCanControl)
-        if (!allowed) {
-          send(ws, { type: 'error', message: 'Only the host can control playback' })
+      if (msg.type === 'tab_create' && clientId) {
+        const troom = ensureTabRoom(slug)
+        const tabId = String(msg.tabId || '').slice(0, 64)
+
+        if (!tabId || troom.tabs.has(tabId)) {
+          send(ws, { type: 'error', message: 'Invalid or duplicate tab id' })
+          return
+        }
+        if (troom.tabs.size >= MAX_TABS) {
+          send(ws, { type: 'error', message: `Too many tabs open (max ${MAX_TABS}).` })
+          return
+        }
+
+        const requestedTitle = String(msg.title || '').trim().slice(0, 50)
+        const title = requestedTitle || nextTabTitle(tabsSnapshot(troom).map((t) => t.title))
+
+        troom.tabs.set(tabId, { id: tabId, title, video: null, text: '' })
+        troom.order.push(tabId)
+        troom.activeTabId = tabId
+        sendTabsState(slug)
+      }
+
+      if (msg.type === 'tab_switch' && clientId) {
+        const troom = tabRooms.get(slug)
+        const tabId = String(msg.tabId || '')
+        if (!troom || !troom.tabs.has(tabId)) {
+          send(ws, { type: 'error', message: 'Unknown tab' })
+          return
+        }
+        troom.activeTabId = tabId
+        sendTabsState(slug)
+      }
+
+      if (msg.type === 'tab_close' && clientId) {
+        const troom = tabRooms.get(slug)
+        const tabId = String(msg.tabId || '')
+        if (!troom || !troom.tabs.has(tabId)) {
+          send(ws, { type: 'error', message: 'Unknown tab' })
+          return
+        }
+        if (troom.tabs.size <= 1) {
+          send(ws, { type: 'error', message: 'Cannot close the only remaining tab' })
+          return
+        }
+
+        const idx = troom.order.indexOf(tabId)
+        troom.tabs.delete(tabId)
+        troom.order.splice(idx, 1)
+        if (troom.activeTabId === tabId) {
+          troom.activeTabId = troom.order[Math.max(0, idx - 1)]
+        }
+        sendTabsState(slug)
+      }
+
+      if (msg.type === 'tab_video' && clientId) {
+        const troom = tabRooms.get(slug)
+        const tabId = String(msg.tabId || '')
+        const tab = troom?.tabs.get(tabId)
+        if (!tab) {
+          send(ws, { type: 'error', message: 'Unknown tab' })
           return
         }
 
         const videoId = String(msg.videoId || '')
+        const action = msg.action === 'load' || msg.action === 'clear' || msg.action === 'control'
+          ? msg.action
+          : (videoId === '' ? 'clear' : 'load')
+
         if (videoId !== '' && !YT_VIDEO_ID.test(videoId)) {
           send(ws, { type: 'error', message: 'Invalid YouTube video id' })
           return
         }
 
-        if (action === 'control' && videoId !== (ytStates.get(slug)?.videoId || '')) {
-          // A guest control message must target the video already playing —
+        if (action === 'control' && videoId !== (tab.video?.videoId || '')) {
+          // A control message must target the video already loaded in this tab —
           // it can never be used to smuggle in a load/clear.
           return
         }
 
         if (videoId === '') {
-          ytStates.delete(slug)
+          tab.video = null
           for (const p of room.values()) {
-            send(p.ws, { type: 'yt_state', videoId: '', playing: false, positionSec: 0, positionAtMs: 0, triggerAtMs: 0 })
+            send(p.ws, { type: 'tab_video', tabId: tab.id, videoId: '', playing: false, positionSec: 0, positionAtMs: 0, triggerAtMs: 0 })
           }
           return
         }
 
         const positionSec = Number(msg.positionSec)
-        const applyAtMs = Date.now() + YT_LEAD_MS
-        const state = {
+        const applyAtMs = Date.now() + TAB_VIDEO_LEAD_MS
+        tab.video = {
           videoId,
           playing: !!msg.playing,
           positionSec: Number.isFinite(positionSec) && positionSec > 0 ? positionSec : 0,
           positionAtMs: applyAtMs
         }
-        ytStates.set(slug, state)
         for (const p of room.values()) {
-          send(p.ws, { type: 'yt_state', ...state, triggerAtMs: applyAtMs })
+          send(p.ws, { type: 'tab_video', tabId: tab.id, ...tab.video, triggerAtMs: applyAtMs })
         }
       }
 
-      if (msg.type === 'yt_duck' && clientId) {
-        peer.talking = !!msg.talking
-        sendDuck(slug)
+      if (msg.type === 'tab_text' && clientId) {
+        const troom = tabRooms.get(slug)
+        const tabId = String(msg.tabId || '')
+        const tab = troom?.tabs.get(tabId)
+        if (!tab) {
+          send(ws, { type: 'error', message: 'Unknown tab' })
+          return
+        }
+        tab.text = String(msg.text ?? '').slice(0, MAX_TAB_TEXT_LEN)
+        broadcast(slug, { type: 'tab_text', tabId: tab.id, text: tab.text }, clientId)
       }
     })
 
@@ -319,7 +447,7 @@ export function setupWss(wss) {
         room.delete(clientId)
         if (room.size === 0) {
           rooms.delete(slug)
-          ytStates.delete(slug)
+          tabRooms.delete(slug)
         } else {
           recomputeRoles(room)
           sendPresence(slug)

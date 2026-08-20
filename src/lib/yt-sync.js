@@ -1,9 +1,9 @@
 /**
- * Pure helpers for synced YouTube playback ("Watch together").
+ * Pure helpers for synced YouTube playback, shared by every tab's video.
  *
  * No DOM, no player — everything here is unit-testable math and parsing.
  * The wire protocol lives in src/lib/server/ws-rooms.js; the player lives
- * in src/lib/WatchTogether.svelte.
+ * in src/lib/TabVideoPlayer.svelte.
  */
 
 const VIDEO_ID = /^[\w-]{11}$/

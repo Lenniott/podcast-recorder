@@ -45,14 +45,11 @@ export async function load({ params, cookies }) {
   const isHostClaim = verifyHostClaimToken(cookies.get(HOST_COOKIE(slug)), slug, room.password_hash, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
-  const guestPlaybackControlEnabled = Number(room.guest_can_control_playback) !== 0
-
   return {
     slug,
     roomName: room.name,
     authenticated,
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
-    guestPlaybackControlEnabled,
     isHostClaim,
     createdAt: room.created_at,
     roomPassword: isHostClaim ? (room.password_plain || null) : null

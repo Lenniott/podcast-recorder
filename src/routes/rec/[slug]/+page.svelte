@@ -4,8 +4,10 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
-  import WatchTogether from '$lib/WatchTogether.svelte'
+  import RoomSidebar from '$lib/RoomSidebar.svelte'
+  import RoomTabs from '$lib/RoomTabs.svelte'
 
   function focus(el) { el.focus() }
 
@@ -16,7 +18,7 @@
   let ws = null
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost }]
-  let watchTogether = null     // WatchTogether component instance
+  let roomTabs = null          // RoomTabs component instance
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -106,16 +108,12 @@
 
   let sessionStarted = false
   let audioInitError = ''
+  let sidebarCollapsed = false // local UI only — never shared over the room WS
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
 
   // ─── Derived ────────────────────────────────────────────────────────
-  $: me = peers.find((p) => p.clientId === clientId)
-  $: myRole = me?.role || null
-  $: isHost = myRole === 'host'
-  $: isGuest = myRole === 'guest'
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
-  $: recordingLabel = recordingState === 'recording' ? 'Stop Recording' : 'Start Recording'
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -435,7 +433,16 @@
       canvasCtx.lineTo(W, H / 2)
       canvasCtx.stroke()
 
-      // Waveform
+      // Visual-only auto-gain: speech is far below 0 dBFS, so 1:1 mapping
+      // is a 2px wiggle on this short canvas. Recording path is unchanged.
+      let peak = 0
+      for (let i = 0; i < analyserData.length; i++) {
+        const a = Math.abs(analyserData[i])
+        if (a > peak) peak = a
+      }
+      const noiseFloor = 0.015 // ≈ -36 dBFS
+      const scale = peak < noiseFloor ? 1 : Math.min(24, 0.9 / peak)
+
       const isRec = recordingState === 'recording'
       canvasCtx.strokeStyle = isRec ? '#a855f7' : '#52525b'
       canvasCtx.lineWidth = 1.5
@@ -445,7 +452,7 @@
       let x = 0
 
       for (let i = 0; i < analyserData.length; i++) {
-        const y = (analyserData[i] * 0.5 + 0.5) * H
+        const y = Math.max(0, Math.min(H, (analyserData[i] * scale * 0.5 + 0.5) * H))
         if (i === 0) canvasCtx.moveTo(x, y)
         else canvasCtx.lineTo(x, y)
         x += sliceWidth
@@ -604,7 +611,7 @@
     ws.onopen = () => {
       wsStatus = 'connected'
       ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
-      try { watchTogether?.resyncDuck?.() } catch {}
+      try { roomTabs?.resyncDuck?.() } catch {}
       syncClock()
     }
 
@@ -623,11 +630,18 @@
         }
       }
       if (msg.type === 'clap') {
+        // Flash even when the audio graph isn't up yet (no mic). Queue the
+        // tone for when the worklet starts; injectClap does both.
+        lastClapFrom = msg.from
+        clearTimeout(clapTimeout)
+        clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
         if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
-      if (msg.type === 'yt_state')  watchTogether?.applyState?.(msg)
-      if (msg.type === 'yt_duck')   watchTogether?.applyDuck?.(msg)
+      if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
+      if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
+      if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
+      if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 
@@ -655,18 +669,26 @@
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Canvas backing-resolution reset. `width`/`height` attributes (not CSS
+   * size) set the drawing buffer, so this needs re-running whenever the
+   * canvas's on-screen size changes — initial mount, and toggling the
+   * sidebar collapse (see the `sidebarCollapsed` reactive block below).
+   */
+  function resizeCanvas() {
+    if (!canvas) return
+    canvasCtx = canvasCtx || canvas.getContext('2d')
+    canvas.width  = canvas.offsetWidth
+    canvas.height = canvas.offsetHeight
+  }
+
   async function startSession() {
     if (!browser || !data.authenticated || sessionStarted || nameGateShow) return
     sessionStarted = true
     audioInitError = ''
     try {
-      // Init canvas
       await tick()
-      if (canvas) {
-        canvasCtx = canvas.getContext('2d')
-        canvas.width  = canvas.offsetWidth
-        canvas.height = canvas.offsetHeight
-      }
+      resizeCanvas()
 
       await requestMicPermission()
       if (micPermission === 'granted') {
@@ -689,8 +711,14 @@
 
   onMount(async () => {
     if (browser) {
-      myName = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
-      if (myName) {
+      // Only *restore* a previously-known name — never unconditionally
+      // reset myName to '' when neither source has one. This ran
+      // unconditionally before, which could race a fast programmatic fill
+      // of the name field (e.g. right after the SPA navigation into this
+      // route) and silently wipe it out a moment later.
+      const known = (data.participantName || sessionStorage.getItem(participantNameStorageKey) || '').trim()
+      if (known) {
+        myName = known
         nameGateShow = false
         persistParticipantName()
       }
@@ -702,6 +730,13 @@
       console.error('Failed to start session', err)
       sessionStarted = false
     })
+  }
+
+  // Sidebar collapse changes the canvas's on-screen size — re-run the
+  // backing-resolution reset once the DOM has caught up.
+  $: if (browser) {
+    sidebarCollapsed
+    tick().then(resizeCanvas)
   }
 
   $: if (data.participantName?.trim()) nameGateShow = false
@@ -744,13 +779,13 @@
     <form method="POST" action="?/enter" use:enhance>
       <div class="field">
         <label for="name">Your name</label>
-        <input id="name" name="name" type="text" maxlength="50" bind:value={myName} required />
+        <input id="name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill />
       </div>
       <div class="field">
         <label for="pw">Password</label>
-        <input id="pw" name="password" type="password" use:focus required />
+        <input id="pw" name="password" type="text" class="pw-mask" autocomplete="off" spellcheck="false" use:focus required />
       </div>
-      <button type="submit" class="btn-primary">Join Room</button>
+      <button type="submit" class="btn-primary btn-block">Join Room</button>
     </form>
   </div>
 </main>
@@ -804,9 +839,9 @@
     }}>
       <div class="field">
         <label for="display-name">Your name</label>
-        <input id="display-name" name="name" type="text" maxlength="50" bind:value={myName} required use:focus />
+        <input id="display-name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill use:focus />
       </div>
-      <button type="submit" class="btn-primary">Continue</button>
+      <button type="submit" class="btn-primary btn-block">Continue</button>
     </form>
   </div>
 </main>
@@ -816,217 +851,52 @@
 <!-- ═══════════════════════════════════════════════════════════════ -->
 
 {:else}
-<div class="room">
+<div class="room" class:sidebar-collapsed={sidebarCollapsed}>
 
-  <!-- Header -->
-  <header>
-    <div class="header-left">
-      <span class="mic-icon">🎙️</span>
-      <div>
-        <div class="ep-name">{data.roomName}</div>
-        <div class="ep-slug-row">
-          <span class="ep-slug">/rec/{data.slug}</span>
-          <button type="button" class="btn-copy-link" on:click={copyRoomLink}>
-            {copyLinkDone ? 'Copied!' : 'Copy link'}
-          </button>
-        </div>
-        {#if data.isHostClaim && data.roomPassword}
-          <div class="room-password-row">
-            <span class="room-password-label">Password:</span>
-            <span class="room-password-value">{data.roomPassword}</span>
-          </div>
-        {/if}
-        {#if myRole}
-          <div class="role-hint" aria-live="polite">
-            <span class="role-hint-label">You are</span>
-            <span
-              class="role-chip role-chip-you"
-              class:role-chip-host={myRole === 'host'}
-              class:role-chip-guest={myRole === 'guest'}
-            >
-              {myRole === 'host' ? 'Host' : 'Guest'}
-            </span>
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <div class="header-right">
-      <!-- WS status -->
-      <div class="ws-pill" class:ws-ok={wsStatus === 'connected'} class:ws-bad={wsStatus === 'disconnected'}>
-        <span class="dot" class:green={wsStatus === 'connected'} class:yellow={wsStatus === 'connecting'} class:grey={wsStatus === 'disconnected'}></span>
-        {wsStatus}
-      </div>
-
-      <!-- Peer presence -->
-      <div class="presence">
-        {#each peers as p}
-          <div class="peer" class:peer-you={p.clientId === clientId} title={p.name}>
-            <span class="peer-name">{p.name}</span>
-            <span
-              class="role-tag"
-              class:role-host={p.role === 'host'}
-              class:role-guest={p.role === 'guest'}
-              class:role-tag-you={p.clientId === clientId}
-            >
-              {p.role === 'host' ? 'Host' : 'Guest'}
-            </span>
-            {#if p.recording}
-              <span class="rec-dot"></span>
-            {/if}
-          </div>
-        {/each}
-        {#if peers.length === 0}
-          <span class="muted-text">Waiting for guest…</span>
-        {/if}
-      </div>
-    </div>
-  </header>
-
-  <!-- Mic selector -->
-  <div class="mic-bar">
-    <label for="mic-select">Microphone</label>
-    <select id="mic-select" bind:value={selectedDeviceId} on:change={changeMic} disabled={devices.length === 0}>
-      {#if devices.length === 0}
-        <option value="">No microphone found</option>
-      {:else}
-        {#each devices as d}
-          <option value={d.deviceId}>{d.label || `Microphone ${d.deviceId.slice(0,8)}`}</option>
-        {/each}
-      {/if}
-    </select>
-
-    {#if micPermission === 'denied'}
-      <p class="perm-warn">⚠️ Mic access denied. Check browser permissions.</p>
-    {/if}
-    {#if audioInitError}
-      <p class="muted-text">{audioInitError}</p>
-    {/if}
-
-    {#if micFallback}
-      <p class="fallback-warn">
-        ⚠️ Original mic disconnected — switched to <strong>{micFallbackName}</strong>.
-        Recording continues. Reconnect your mic or pick a new one above.
-      </p>
-    {/if}
-
-    <div class="gain-row">
-      <label for="gain-slider">
-        Input Gain
-        <span class="gain-db">{gainDb > 0 ? '+' : ''}{gainDb.toFixed(1)} dB</span>
-      </label>
-      <input
-        id="gain-slider"
-        type="range"
-        min="0.25"
-        max="4"
-        step="0.05"
-        bind:value={gainValue}
-        on:input={updateGain}
-      />
-      <div class="gain-markers">
-        <span>-12</span><span>-6</span><span>0</span><span>+6</span><span>+12</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Waveform -->
-  <div class="waveform-wrap">
-    <canvas bind:this={canvas}></canvas>
-
-    <!-- dBFS meter -->
-    <div class="db-meter-wrap">
-      <div class="db-meter-track">
-        <!-- Coloured fill (gradient clipped by width) -->
-        <div class="db-meter-fill" style="--meter-pct: {meterPct}%"></div>
-        <!-- Peak-hold marker -->
-        {#if peakHoldDb > METER_MIN}
-          <div class="db-peak-hold" style="left: {peakPct}%"></div>
-        {/if}
-      </div>
-      <!-- dB scale labels -->
-      <div class="db-labels">
-        <span style="left: 0%">-60</span>
-        <span style="left: 60%">-24</span>
-        <span style="left: 70%">-18</span>
-        <span style="left: 80%">-12</span>
-        <span style="left: 90%">-6</span>
-        <span style="left: 95%">-3</span>
-        <span style="left: 100%">0</span>
-      </div>
-      <!-- Live readout + clip -->
-      <div class="db-readout">
-        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : '—'} dBFS</span>
-        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : '—'}</span>
-        {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
-      </div>
-    </div>
-
-    <!-- Clap flash -->
-    {#if lastClapFrom}
-      <div class="clap-flash">
-        👏 Sync clap — {lastClapFrom}
-      </div>
-    {/if}
-  </div>
-
-  <!-- Controls -->
-  <div class="controls">
-
-    <!-- Record button -->
-    <button
-      class="rec-btn"
-      class:recording={recordingState === 'recording'}
-      on:click={toggleRecording}
-      disabled={!canRecord || micPermission === 'denied'}
-      title={micPermission === 'denied' ? 'Mic access required' : ''}
-    >
-      {#if recordingState === 'idle'}
-        <span class="rec-circle"></span> Start Recording
-      {:else if recordingState === 'recording'}
-        <span class="stop-square"></span> Stop Recording
-      {:else}
-        Finishing…
-      {/if}
-    </button>
-
-    <!-- Clap button -->
-    <button
-      class="clap-btn"
-      on:click={sendClap}
-      disabled={wsStatus !== 'connected'}
-      title="Inject a 1kHz sync tone into both recordings"
-    >
-      👏 Clap
-    </button>
-
-  </div>
-
-  <!-- Stats bar -->
-  <div class="stats-bar">
-    {#if recordingState === 'recording'}
-      <div class="stat recording-stat">
-        <span class="stat-dot"></span>
-        REC {formatTime(recordingSeconds)}
-      </div>
-      <div class="stat">{formatBytes(bytesWritten)} written</div>
-    {:else if recordingState === 'idle' && bytesWritten > 44}
-      <div class="stat">Last recording: {formatBytes(bytesWritten)} saved to your disk</div>
-    {/if}
-
-    {#if myPeerIsRecording && recordingState === 'idle'}
-      <div class="stat warn-stat">⚠️ Guest is recording — are you?</div>
-    {/if}
-  </div>
-
-  <!-- Watch together: implementation in WatchTogether.svelte + yt-sync.js -->
-  <WatchTogether
-    {isHost}
-    guestCanControl={data.guestPlaybackControlEnabled}
-    {clockOffset}
-    send={wsSend}
-    bind:this={watchTogether}
+  <RoomSidebar
+    bind:collapsed={sidebarCollapsed}
+    roomName={data.roomName}
+    slug={data.slug}
+    isHostClaim={data.isHostClaim}
+    roomPassword={data.roomPassword}
+    {wsStatus}
+    {peers}
+    {clientId}
+    {copyLinkDone}
+    onCopyLink={copyRoomLink}
+    {devices}
+    bind:selectedDeviceId
+    {micPermission}
+    {audioInitError}
+    {micFallback}
+    {micFallbackName}
+    bind:gainValue
+    {gainDb}
+    onChangeMic={changeMic}
+    onGainInput={updateGain}
+    bind:canvasEl={canvas}
+    {meterPct}
+    {peakPct}
+    {dbLevel}
+    {peakHoldDb}
+    {isClipping}
+    {lastClapFrom}
+    {recordingState}
+    {canRecord}
+    {myPeerIsRecording}
+    {recordingSeconds}
+    {bytesWritten}
+    onToggleRecording={toggleRecording}
+    onClap={sendClap}
+    {formatTime}
+    {formatBytes}
   />
+
+  <main class="room-main">
+    <!-- Shared tabs: video (per tab) + stacked shared textarea. Implementation
+         in RoomTabs.svelte + TabVideoPlayer.svelte + tab-sync.js. -->
+    <RoomTabs send={wsSend} {clockOffset} bind:this={roomTabs} />
+  </main>
 
 </div>
 {/if}
@@ -1089,463 +959,27 @@
   /* ── Room layout ── */
   .room {
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    max-width: 880px;
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 20px;
+    max-width: 1400px;
     margin: 0 auto;
-    padding: 20px 20px 40px;
-    gap: 16px;
+    padding: 20px;
+    align-items: start;
   }
 
-  /* ── Header ── */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 14px 18px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-  .header-left { display: flex; align-items: center; gap: 12px; }
-  .mic-icon { font-size: 24px; }
-  .ep-name { font-size: 15px; font-weight: 600; }
-  .ep-slug-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-top: 2px;
+  .room.sidebar-collapsed {
+    grid-template-columns: 72px 1fr;
   }
 
-  .ep-slug { font-size: 11px; color: var(--muted); font-family: monospace; }
-
-  .room-password-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 3px;
-    font-size: 11px;
-  }
-  .room-password-label { color: var(--muted); }
-  .room-password-value {
-    font-family: monospace;
-    background: rgba(250,204,21,.12);
-    border: 1px solid rgba(250,204,21,.25);
-    color: #fde047;
-    padding: 2px 7px;
-    border-radius: 5px;
-    letter-spacing: 0.03em;
+  .room-main {
+    min-width: 0; /* let the grid column shrink below its content's intrinsic width */
   }
 
-  .btn-copy-link {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg-elevated);
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .btn-copy-link:hover {
-    background: var(--border);
-  }
-  .role-hint {
-    margin-top: 6px;
-    font-size: 11px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .role-hint-label {
-    color: var(--muted);
-  }
-  .role-chip {
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 3px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-  }
-  .role-chip-you.role-chip-host {
-    border-color: rgba(168, 85, 247, 0.75);
-    color: #f5f3ff;
-    background: rgba(168, 85, 247, 0.22);
-    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.35);
-  }
-  .role-chip-you.role-chip-guest {
-    border-color: rgba(34, 197, 94, 0.6);
-    color: #dcfce7;
-    background: rgba(34, 197, 94, 0.18);
-    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.32);
-  }
-
-  .header-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-
-  .ws-pill {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 12px; color: var(--muted);
-    padding: 4px 10px;
-    border-radius: 100px;
-    border: 1px solid var(--border);
-    text-transform: capitalize;
-  }
-
-  .presence {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 13px;
-  }
-  .peer {
-    display: flex; align-items: center; gap: 5px;
-    background: var(--border);
-    padding: 3px 10px;
-    border-radius: 100px;
-    border: 1px solid transparent;
-  }
-  .peer.peer-you {
-    border-color: rgba(255, 255, 255, 0.14);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
-  }
-  .peer-name { font-size: 12px; }
-  .role-tag {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    padding: 2px 6px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--muted);
-  }
-  .role-tag.role-host {
-    border-color: rgba(168,85,247,.45);
-    color: #d8b4fe;
-    background: rgba(168,85,247,.12);
-  }
-  .role-tag.role-guest {
-    border-color: rgba(34,197,94,.35);
-    color: #86efac;
-    background: rgba(34,197,94,.1);
-  }
-  .role-tag.role-tag-you {
-    font-weight: 700;
-  }
-  .role-tag.role-host.role-tag-you {
-    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.55);
-  }
-  .role-tag.role-guest.role-tag-you {
-    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.45);
-  }
-  .rec-dot {
-    width: 7px; height: 7px;
-    background: var(--danger);
-    border-radius: 50%;
-    animation: blink 1s ease infinite;
-  }
-  @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
-
-  .muted-text { color: var(--muted); font-size: 12px; }
-
-  /* ── Mic bar ── */
-  .mic-bar {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 18px;
-  }
-  .mic-bar label { margin-bottom: 8px; }
-  .perm-warn {
-    margin-top: 8px;
-    font-size: 12px;
-    color: var(--warn);
-  }
-  .fallback-warn {
-    margin-top: 8px;
-    font-size: 12px;
-    color: var(--warn);
-    background: rgba(245, 158, 11, .08);
-    border: 1px solid rgba(245, 158, 11, .25);
-    border-radius: var(--radius);
-    padding: 8px 12px;
-    line-height: 1.6;
-  }
-  .fallback-warn strong { color: var(--text); }
-
-  /* ── Waveform ── */
-  .waveform-wrap {
-    position: relative;
-    flex: 1;
-    min-height: 160px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  canvas {
-    width: 100%;
-    height: 100%;
-    display: block;
-    min-height: 160px;
-  }
-
-  /* ── dBFS Meter ── */
-  .db-meter-wrap {
-    position: absolute;
-    bottom: 10px; left: 12px; right: 12px;
-  }
-
-  .db-meter-track {
-    position: relative;
-    height: 10px;
-    background: #1a1a1e;
-    border-radius: 3px;
-    overflow: visible;
-    border: 1px solid var(--border);
-  }
-
-  .db-meter-fill {
-    width: 100%;
-    height: 100%;
-    border-radius: 2px;
-    /* Gradient spans full track; clip-path reveals current level */
-    background: linear-gradient(to right,
-      #16a34a   0%,   /* -60 → -24: dark green */
-      #22c55e  60%,   /* -24: green */
-      #86efac  75%,   /* -12: light green */
-      #facc15  82%,   /* -9: yellow */
-      #f97316  90%,   /* -6: orange */
-      #ef4444  95%,   /* -3: red */
-      #dc2626 100%    /*  0: deep red */
-    );
-    background-size: 100% 100%;
-    clip-path: inset(0 calc(100% - var(--meter-pct, 0%)) 0 0);
-    transition: clip-path 0.02s linear;
-  }
-
-  .db-peak-hold {
-    position: absolute;
-    top: -2px;
-    width: 2px;
-    height: calc(100% + 4px);
-    background: #fff;
-    border-radius: 1px;
-    transform: translateX(-50%);
-    opacity: 0.9;
-  }
-
-  .db-labels {
-    position: relative;
-    height: 14px;
-    margin-top: 3px;
-  }
-  .db-labels span {
-    position: absolute;
-    font-size: 9px;
-    color: var(--muted);
-    transform: translateX(-50%);
-    white-space: nowrap;
-  }
-  /* 0dB label: right-align so it doesn't overflow */
-  .db-labels span:last-child { transform: translateX(-100%); }
-
-  .db-readout {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 4px;
-  }
-  .db-value {
-    font-size: 11px;
-    font-family: monospace;
-    color: var(--text);
-    min-width: 80px;
-  }
-  .db-peak-label {
-    font-size: 11px;
-    font-family: monospace;
-    color: var(--muted);
-  }
-  .clip-badge {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .08em;
-    background: var(--danger);
-    color: #fff;
-    padding: 2px 6px;
-    border-radius: 3px;
-    animation: blink .4s ease infinite;
-  }
-
-  /* ── Gain slider ── */
-  .gain-row {
-    margin-top: 14px;
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
-  }
-  .gain-row label {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 6px;
-  }
-  .gain-db {
-    font-size: 12px;
-    font-family: monospace;
-    color: var(--accent);
-    font-weight: 600;
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .gain-row input[type=range] {
-    width: 100%;
-    accent-color: var(--accent);
-    padding: 0;
-    height: 4px;
-    border: none;
-    background: none;
-    cursor: pointer;
-  }
-  .gain-markers {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 3px;
-  }
-  .gain-markers span {
-    font-size: 9px;
-    color: var(--muted);
-  }
-
-  .clap-flash {
-    position: absolute;
-    top: 12px; left: 50%; transform: translateX(-50%);
-    background: rgba(168,85,247,.2);
-    border: 1px solid var(--accent);
-    border-radius: 100px;
-    padding: 6px 16px;
-    font-size: 13px;
-    white-space: nowrap;
-    animation: fadeIn .2s ease;
-  }
-  @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-4px) } to { opacity: 1; transform: translateX(-50%) translateY(0) } }
-
-  /* ── Controls ── */
-  .controls {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .rec-btn {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 15px;
-    font-weight: 600;
-    padding: 14px 28px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 10px;
-    flex: 1;
-    justify-content: center;
-    transition: background .15s, border-color .15s;
-  }
-  .rec-btn:hover:not(:disabled) {
-    background: var(--border);
-  }
-  .rec-btn.recording {
-    background: rgba(239,68,68,.12);
-    border-color: rgba(239,68,68,.4);
-    color: #fca5a5;
-  }
-  .rec-btn.recording:hover:not(:disabled) {
-    background: rgba(239,68,68,.2);
-  }
-
-  .rec-circle {
-    width: 12px; height: 12px;
-    background: var(--danger);
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .stop-square {
-    width: 12px; height: 12px;
-    background: #fca5a5;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-
-  .clap-btn {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 15px;
-    padding: 14px 24px;
-    border-radius: 10px;
-    transition: background .15s;
-  }
-  .clap-btn:hover:not(:disabled) { background: var(--border); }
-
-  /* ── Stats bar ── */
-  .stats-bar {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    min-height: 28px;
-    align-items: center;
-  }
-  .stat {
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .recording-stat {
-    display: flex; align-items: center; gap: 6px;
-    color: #fca5a5;
-    font-weight: 600;
-  }
-  .stat-dot {
-    width: 8px; height: 8px;
-    background: var(--danger);
-    border-radius: 50%;
-    animation: blink 1s ease infinite;
-    flex-shrink: 0;
-  }
-  .warn-stat { color: var(--warn); }
-
-  /* ── Instructions ── */
-  .instructions {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 18px;
-    font-size: 13px;
-  }
-  summary {
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: .05em;
-    text-transform: uppercase;
-    user-select: none;
-  }
-  ol {
-    margin-top: 12px;
-    padding-left: 18px;
-    line-height: 2;
-    color: var(--text);
-  }
-  .note {
-    margin-top: 10px;
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 1.6;
+  @media (max-width: 720px) {
+    .room,
+    .room.sidebar-collapsed {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

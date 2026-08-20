@@ -3,6 +3,7 @@
 :root {
   --bg:        #0e0e10;
   --surface:   #18181b;
+  --bg-elevated:#1f1f23;  /* panels/cards nested inside a --surface card */
   --border:    #2a2a2e;
   --text:      #e4e4e7;
   --muted:     #71717a;
@@ -70,22 +71,73 @@ label {
   padding: 28px;
 }
 
+/*
+ * Button system — three weights, used consistently everywhere:
+ *   .btn-primary   the ONE main action of a view (Start/Stop Recording;
+ *                  Create Room / Join Room / Continue; Watch)
+ *   .btn-secondary a visible, clearly-clickable action that isn't the main
+ *                  one (Clap, Play/Pause, Talk while idle)
+ *   .btn-ghost     small utility/icon actions (Copy link, Clear video,
+ *                  Mute, tab add/close)
+ * Sizes: the bare `button` rule above is "normal"; add .btn-sm for
+ * compact/icon-ish buttons. .btn-block makes any of the above full-width
+ * (only the single-purpose gate/home forms need this — Watch etc. don't).
+ * State modifiers: .is-active (a held/toggled-on control, e.g. Talk),
+ * .is-recording (only on .btn-primary, for the record button while live).
+ */
+
 .btn-primary {
   background: var(--accent);
   color: #fff;
   font-weight: 600;
-  width: 100%;
-  padding: 12px;
-  font-size: 15px;
 }
 .btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+.btn-primary.is-recording { background: var(--danger); }
+.btn-primary.is-recording:hover:not(:disabled) { background: #dc2626; }
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+}
+.btn-secondary:hover:not(:disabled) { background: var(--border); }
+.btn-secondary.is-active {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #111;
+}
 
 .btn-ghost {
   background: transparent;
   border: 1px solid var(--border);
-  color: var(--text);
+  color: var(--muted);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+
+.btn-block {
+  width: 100%;
+  padding: 12px;
+  font-size: 15px;
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+}
+.btn-icon.btn-sm { width: 24px; height: 24px; }
 
 .field { margin-bottom: 16px; }
 
@@ -98,3 +150,15 @@ label {
 .dot.red    { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 .dot.yellow { background: var(--warn); }
 .dot.grey   { background: var(--muted); }
+
+/* Masks a plain text input to look like a password field without using
+   type="password" — Chrome's password-manager autofill classifies forms by
+   literally scanning for that input type, and once it does, it can clobber
+   *other* fields in the same form (e.g. a "name" field next to it) with
+   autofill on focus, which `autocomplete` attributes don't reliably stop.
+   These room passwords are one-off/transitory — never worth Chrome
+   offering to save — so avoiding the classifier entirely is the fix. */
+.pw-mask {
+  -webkit-text-security: disc;
+  text-security: disc;
+}

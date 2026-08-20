@@ -1,9 +1,17 @@
 <script>
   import { enhance } from '$app/forms'
+  import { noAutofill } from '$lib/actions.js'
   export let data   // { siteAuthed, siteProtected }
   export let form
 
   let loading = false
+
+  // bind:value (not a one-way value={...} expression) so a component
+  // re-render — e.g. from dev-server HMR after editing an unrelated file —
+  // can't silently wipe out whatever the user already typed. Still
+  // repopulated after a failed submit, since `form` only changes then.
+  let name = form?.name ?? ''
+  $: if (form && form.name !== undefined && form.name !== name) name = form.name
 
   function focus(el) { el.focus() }
 </script>
@@ -32,9 +40,9 @@
     <form method="POST" action="?/site_enter" use:enhance>
       <div class="field">
         <label for="site-pw">Site Password</label>
-        <input id="site-pw" name="password" type="password" required use:focus />
+        <input id="site-pw" name="password" type="text" class="pw-mask" autocomplete="off" spellcheck="false" required use:focus />
       </div>
-      <button type="submit" class="btn-primary">Unlock</button>
+      <button type="submit" class="btn-primary btn-block">Unlock</button>
     </form>
   </div>
 
@@ -66,9 +74,12 @@
           name="name"
           type="text"
           placeholder="e.g. Ep 42 — The One About AI"
-          value={form?.name ?? ''}
+          autocomplete="off"
+          bind:value={name}
           maxlength="100"
           required
+          readonly
+          use:noAutofill
           use:focus
         />
       </div>
@@ -78,29 +89,18 @@
         <input
           id="password"
           name="password"
-          type="password"
+          type="text"
+          class="pw-mask"
           placeholder="Share this with your guest"
+          autocomplete="off"
+          spellcheck="false"
           minlength="4"
           required
         />
         <span class="hint">Your guest needs this to join. Not stored in plain text.</span>
       </div>
 
-      <div class="field field-checkbox">
-        <span class="checkbox-heading">Guest playback control</span>
-        <label class="checkbox-row">
-          <input
-            id="guest_can_control_playback"
-            type="checkbox"
-            name="guest_can_control_playback"
-            value="1"
-          />
-          <span class="checkbox-copy">Let your guest play/pause and seek the shared video</span>
-        </label>
-        <span class="hint">Guests can never load a new video or clear it — only the host can do that.</span>
-      </div>
-
-      <button type="submit" class="btn-primary" disabled={loading}>
+      <button type="submit" class="btn-primary btn-block" disabled={loading}>
         {loading ? 'Creating…' : 'Create Room & Get Link'}
       </button>
     </form>
@@ -188,50 +188,4 @@
   }
 
   .footer-note strong { color: var(--text); }
-
-  /* Match other .field blocks: heading row + control; override global input { width:100% } for checkboxes */
-  .field-checkbox {
-    margin-bottom: 16px;
-  }
-
-  .checkbox-heading {
-    display: block;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-
-  .checkbox-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin: 0;
-    padding: 0;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 400;
-    letter-spacing: normal;
-    text-transform: none;
-    color: var(--text);
-    line-height: 1.45;
-  }
-
-  .checkbox-row input[type='checkbox'] {
-    width: 18px;
-    min-width: 18px;
-    height: 18px;
-    margin: 2px 0 0 0;
-    padding: 0;
-    flex-shrink: 0;
-    accent-color: var(--accent);
-    cursor: pointer;
-  }
-
-  .checkbox-copy {
-    flex: 1;
-    min-width: 0;
-  }
 </style>
