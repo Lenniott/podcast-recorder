@@ -1,3 +1,5 @@
+import { expect } from '@playwright/test'
+
 /**
  * Stub the YouTube IFrame API so Watch Together can load without hitting youtube.com.
  * Must be installed before navigation (page.addInitScript).
@@ -94,18 +96,62 @@ export async function stubYouTubeApi(page) {
   })
 }
 
+/**
+ * noAutofill keeps inputs readonly until focus. Playwright's fill() checks
+ * "editable" *before* focusing, so a plain fill() deadlocks on a still-locked
+ * field. Click first (click doesn't need editable), wait until the action has
+ * unlocked, then fill. Waiting for editable also means Svelte has hydrated —
+ * a fill that landed on SSR HTML would get wiped by bind:value='' and submit
+ * as "Episode name is required".
+ */
+export async function fillField(locator, value) {
+  await locator.click()
+  await expect(locator).toBeEditable()
+  await locator.fill(value)
+  await expect(locator).toHaveValue(value)
+}
+
+/**
+ * Home is behind SITE_PASSWORD when .env has one; Playwright's own webServer
+ * blanks that var so the gate is off. Handle both: unlock if the field is there.
+ */
+export async function unlockIfNeeded(page) {
+  const site = page.getByRole('textbox', { name: 'Site Password' })
+  const episode = page.getByRole('textbox', { name: 'Episode Name' })
+  await expect(site.or(episode)).toBeVisible({ timeout: 15_000 })
+  if (await site.isVisible()) {
+    const pw = process.env.SITE_PASSWORD
+    if (!pw) throw new Error('SITE_PASSWORD is not set but the site gate is showing')
+    await site.fill(pw)
+    await page.getByRole('button', { name: 'Unlock' }).click()
+    const blocked = page.getByText(/Too many requests/i)
+    await expect(episode.or(blocked)).toBeVisible({ timeout: 15_000 })
+    if (await blocked.isVisible()) {
+      throw new Error(
+        'Site unlock hit the rate limiter. Stop `npm run dev` so Playwright can start its own server, or wait a minute and re-run.'
+      )
+    }
+  }
+}
+
 export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
   await page.goto('/')
-  await page.locator('#name').fill(name)
-  await page.locator('#password').fill(password)
+  await unlockIfNeeded(page)
+  await fillField(page.locator('#name'), name)
+  await fillField(page.locator('#password'), password)
+  // Generous timeout: if the form's click lands before use:enhance has
+  // hydrated, the browser falls back to a real full-page POST + redirect +
+  // GET of /rec/[slug] — on a cold `npm run dev` worker that route's (now
+  // much larger, post-tabs-redesign) client bundle can take a while to
+  // compile on its first hit, occasionally pushing well past 15s.
   await Promise.all([
-    page.waitForURL(/\/rec\//, { timeout: 15_000 }),
+    page.waitForURL(/\/rec\//, { timeout: 30_000 }),
     page.getByRole('button', { name: /Create Room/i }).click()
   ])
   // The room's password/auth cookies are set by room creation, but the host
   // still has no display name yet — same "how should we show you" gate a
   // guest hits, just without the password field since they're already authed.
-  await page.getByLabel('Your name').fill(hostDisplayName)
+  await fillField(page.getByLabel('Your name'), hostDisplayName)
   await page.getByRole('button', { name: /Continue/i }).click()
   await roomTabsReady(page)
   return page.url()
@@ -114,10 +160,18 @@ export async function createRoom(page, { name, password, hostDisplayName = 'Host
 export async function joinAsGuest(page, roomUrl, { name, password }) {
   await page.goto(roomUrl)
   // Host cookie from createRoom won't exist in a fresh context — expect password gate.
-  await page.getByLabel('Your name').fill(name)
-  await page.getByLabel('Password').fill(password)
+  await fillField(page.getByLabel('Your name'), name)
+  await fillField(page.getByLabel('Password'), password)
   await page.getByRole('button', { name: /Join Room/i }).click()
   await roomTabsReady(page)
+}
+
+const SAMPLE_YOUTUBE_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+
+export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
+  await page.getByPlaceholder('Paste a YouTube link or video id').fill(url)
+  await page.getByRole('button', { name: 'Watch' }).click()
+  await expect(page.getByRole('button', { name: /Play|Pause/ })).toBeVisible()
 }
 
 /**
@@ -128,5 +182,10 @@ export async function joinAsGuest(page, roomUrl, { name, password }) {
  * auto-reconnect needs a couple of cycles to land in that window.
  */
 async function roomTabsReady(page) {
-  await page.getByPlaceholder('Shared notes — visible to everyone in the room…').waitFor({ timeout: 30_000 })
+  // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
+  // tab_state WS message is applied) rather than the shared textarea's
+  // rendered visibility — the textarea can be attached-but-not-yet-laid-out
+  // for a beat after the WS state lands, which made this a flaky race,
+  // especially under a cold `npm run dev` worker still compiling the bundle.
+  await page.locator('.room-tabs[data-ws-ready="true"]').waitFor({ timeout: 30_000 })
 }

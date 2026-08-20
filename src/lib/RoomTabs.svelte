@@ -12,6 +12,11 @@
   // ─── Shared room state, driven entirely by inbound WS messages ─────────
   let tabs = []; // [{id, title}], in server order — mirrors the room for everyone
   let activeTabId = null;
+  // Flips true once the first tab_state WS message has been applied — the
+  // real signal that this peer's shared room state is live, vs. inferring
+  // readiness from a DOM element's rendered geometry (e2e tests wait on
+  // this rather than racing the textarea's visibility).
+  let wsReady = false;
 
   // Per-tab video/text is tracked for *every* tab, not just the active one,
   // because the server broadcasts tab_video/tab_text for whichever tab a
@@ -35,6 +40,7 @@
   export async function applyTabsState(msg) {
     tabs = msg.tabs;
     activeTabId = msg.activeTabId;
+    wsReady = true;
     // The active tab's player just (re)mounted (see {#key} below) — bring
     // it up to date with whatever we already know about that tab's video.
     await tick();
@@ -132,7 +138,7 @@
   }
 </script>
 
-<div class="room-tabs">
+<div class="room-tabs" data-ws-ready={wsReady}>
   <div class="tab-strip">
     {#each tabs as tab (tab.id)}
       <div class="tab-pill" class:active={tab.id === activeTabId}>
