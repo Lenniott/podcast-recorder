@@ -117,7 +117,7 @@ export async function fillField(locator, value) {
  */
 export async function unlockIfNeeded(page) {
   const site = page.getByRole('textbox', { name: 'Site Password' })
-  const episode = page.getByRole('textbox', { name: 'Episode Name' })
+  const episode = page.locator('#room-episode-name')
   await expect(site.or(episode)).toBeVisible({ timeout: 15_000 })
   if (await site.isVisible()) {
     const pw = process.env.SITE_PASSWORD
@@ -137,8 +137,8 @@ export async function unlockIfNeeded(page) {
 export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
   await page.goto('/')
   await unlockIfNeeded(page)
-  await fillField(page.locator('#name'), name)
-  await fillField(page.locator('#password'), password)
+  await fillField(page.locator('#room-episode-name'), name)
+  await fillField(page.locator('#room-episode-password'), password)
   // Generous timeout: if the form's click lands before use:enhance has
   // hydrated, the browser falls back to a real full-page POST + redirect +
   // GET of /rec/[slug] — on a cold `npm run dev` worker that route's (now

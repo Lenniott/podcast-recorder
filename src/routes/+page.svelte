@@ -68,13 +68,13 @@
       return async ({ update }) => { await update(); loading = false }
     }}>
       <div class="field">
-        <label for="name">Episode Name</label>
+        <label for="room-episode-name">Episode Name</label>
         <input
-          id="name"
-          name="name"
+          id="room-episode-name"
+          name="room-episode-name"
           type="text"
           placeholder="e.g. Ep 42 — The One About AI"
-          autocomplete="off"
+          autocomplete="nope"
           bind:value={name}
           maxlength="100"
           required
@@ -85,14 +85,14 @@
       </div>
 
       <div class="field">
-        <label for="password">Room Password</label>
+        <label for="room-episode-password">Room Password</label>
         <input
-          id="password"
-          name="password"
+          id="room-episode-password"
+          name="room-episode-password"
           type="text"
           class="pw-mask"
           placeholder="Share this with your guest"
-          autocomplete="off"
+          autocomplete="nope"
           spellcheck="false"
           minlength="4"
           required
