@@ -1,5 +1,5 @@
 <script>
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
 
   // (payload) => void — JSON-sends over the room WS. The room's single
@@ -34,6 +34,13 @@
   let textDebounceTimer = null;
 
   $: activeVideoPlaying = !!tabVideos[activeTabId]?.playing;
+
+  // HMR / parent remount resets this component's lets to empty, but the WS
+  // (owned by the page) may still be open — so we never get the join replay.
+  // Ask the server for the room's current tabs/video/text on every mount.
+  onMount(() => {
+    send({ type: "tabs_sync" });
+  });
 
   // ─── Inbound — called by the page's ws.onmessage, one method per type ──
 

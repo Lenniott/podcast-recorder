@@ -27,6 +27,9 @@
  *                                          any peer may load/clear/control any tab.
  *   { type: 'tab_text',   tabId, text }  — full shared text for that tab
  *                                          (last write wins, no host gate)
+ *   { type: 'tabs_sync' }                — request a full replay (structure +
+ *                                          per-tab video/text). Used when the
+ *                                          UI remounts without a WS reconnect.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording}] }
@@ -80,8 +83,9 @@ const rooms = new Map()
 //   order: [tabId, ...],   // insertion order — stable display + close fallback
 //   activeTabId: string|null
 // }>
-// Kept in memory only (no save state), so late joiners can catch up, same as the
-// old single-video ytStates map this replaces.
+// Kept in memory for the life of this WS process (and cleared by _resetRooms in
+// tests). Occupancy is not the store: a reconnect, HMR blip, or last-peer
+// socket drop must not mint a fresh empty Tab 1 over live notes/video.
 const tabRooms = new Map()
 
 function send(ws, msg) {
@@ -302,6 +306,10 @@ export function setupWss(wss) {
         }
       }
 
+      if (msg.type === 'tabs_sync' && clientId) {
+        replayTabsTo(ws, ensureTabRoom(slug))
+      }
+
       if (msg.type === 'ping') {
         send(ws, { type: 'pong', seq: msg.seq, clientSentAt: msg.sentAt, serverReceivedAt: Date.now() })
       }
@@ -443,21 +451,27 @@ export function setupWss(wss) {
     })
 
     ws.on('close', () => {
-      if (clientId) {
-        room.delete(clientId)
-        if (room.size === 0) {
-          rooms.delete(slug)
-          tabRooms.delete(slug)
-        } else {
-          recomputeRoles(room)
-          sendPresence(slug)
-          sendDuck(slug)
-        }
+      if (!clientId) return
+      // A reconnect with the same clientId already replaced this socket —
+      // do not delete the new peer (or we'd empty the room and, previously,
+      // wipe tab memory while the user was still connected).
+      const current = room.get(clientId)
+      if (current && current.ws !== ws) return
+      room.delete(clientId)
+      if (room.size === 0) {
+        rooms.delete(slug)
+      } else {
+        recomputeRoles(room)
+        sendPresence(slug)
+        sendDuck(slug)
       }
     })
 
     ws.on('error', () => {
-      if (clientId) room.delete(clientId)
+      if (!clientId) return
+      const current = room.get(clientId)
+      if (current && current.ws !== ws) return
+      room.delete(clientId)
     })
   })
 }

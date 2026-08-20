@@ -120,14 +120,40 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
     expect(host.sent.some((m) => m.type === 'error')).toBe(true)
   })
 
-  it('drops all tab state when the room empties, so the next joiner starts fresh', () => {
+  it('keeps tabs in room memory after the last peer disconnects and rejoins', () => {
     host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId: 't2', text: 'keep me' }))
+    host.emit('message', JSON.stringify({ type: 'tab_video', tabId: 't2', action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 }))
     host.emit('close')
     guest.emit('close')
 
-    const fresh = mockWs()
-    wss.connect(fresh, 'room1'); join(fresh, 'Fresh', 'c9')
-    expect(latest(fresh, 'tabs_state').tabs).toHaveLength(1)
+    const again = mockWs()
+    wss.connect(again, 'room1'); join(again, 'Host', 'c1')
+    expect(latest(again, 'tabs_state').tabs.map((t) => t.id)).toContain('t2')
+    expect(latest(again, 'tab_text')).toMatchObject({ tabId: 't2', text: 'keep me' })
+    expect(latest(again, 'tab_video')).toMatchObject({ tabId: 't2', videoId: 'dQw4w9WgXcQ' })
+  })
+
+  it('a replaced socket closing does not drop the new peer from the room', () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    const replacement = mockWs()
+    wss.connect(replacement, 'room1')
+    join(replacement, 'Host', 'c1')
+    host.emit('close')
+
+    guest.emit('message', JSON.stringify({ type: 'tab_text', tabId: 't2', text: 'still here' }))
+    expect(latest(replacement, 'tab_text')).toMatchObject({ tabId: 't2', text: 'still here' })
+  })
+
+  it('tabs_sync replays structure, video, and text to the requester', () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId: 't2', text: 'notes' }))
+    host.emit('message', JSON.stringify({ type: 'tab_video', tabId: 't2', action: 'load', videoId: 'dQw4w9WgXcQ', playing: false, positionSec: 0 }))
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tabs_sync' }))
+    expect(latest(host, 'tabs_state').tabs.map((t) => t.id)).toContain('t2')
+    expect(latest(host, 'tab_text')).toMatchObject({ tabId: 't2', text: 'notes' })
+    expect(latest(host, 'tab_video')).toMatchObject({ tabId: 't2', videoId: 'dQw4w9WgXcQ' })
   })
 })
 

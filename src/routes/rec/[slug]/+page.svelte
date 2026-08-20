@@ -107,6 +107,7 @@
   let clipTimer    = null
 
   let sessionStarted = false
+  let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
   /** False once we have a display name from cookie, sessionStorage, or form. */
@@ -602,20 +603,23 @@
   const pendingClaps = []
 
   function connectWs() {
-    if (!data.authenticated) return
+    if (sessionDestroyed || !data.authenticated) return
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     wsStatus = 'connecting'
-    ws = new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
+    const socket = new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
+    ws = socket
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (ws !== socket) return
       wsStatus = 'connected'
-      ws.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
+      socket.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
       try { roomTabs?.resyncDuck?.() } catch {}
       syncClock()
     }
 
-    ws.onmessage = (e) => {
+    socket.onmessage = (e) => {
       let msg
       try { msg = JSON.parse(e.data) } catch { return }
 
@@ -645,13 +649,15 @@
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     }
 
-    ws.onclose = () => {
+    socket.onclose = () => {
+      if (ws !== socket || sessionDestroyed) return
       wsStatus = 'disconnected'
       // Auto-reconnect after 3s (recording continues locally regardless)
       setTimeout(connectWs, 3000)
     }
 
-    ws.onerror = () => {
+    socket.onerror = () => {
+      if (ws !== socket) return
       wsStatus = 'disconnected'
     }
   }
@@ -743,6 +749,7 @@
 
   onDestroy(() => {
     if (!browser) return
+    sessionDestroyed = true
     cancelAnimationFrame(animFrame)
     clearInterval(recordingTimer)
     clearTimeout(clapTimeout)
