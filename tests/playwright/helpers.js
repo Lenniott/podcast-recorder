@@ -161,7 +161,7 @@ export async function joinAsGuest(page, roomUrl, { name, password }) {
   await page.goto(roomUrl)
   // Host cookie from createRoom won't exist in a fresh context — expect password gate.
   await fillField(page.getByLabel('Your name'), name)
-  await fillField(page.getByLabel('Password'), password)
+  await fillField(page.locator('#room-episode-code'), password)
   await page.getByRole('button', { name: /Join Room/i }).click()
   await roomTabsReady(page)
 }

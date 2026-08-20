@@ -105,15 +105,6 @@
   // still overwrite unsent local keystrokes — an accepted trade-off for a
   // basic, no-save-state shared textarea (no operational transform here).
 
-  function autosize(node) {
-    function resize() {
-      node.style.height = "auto";
-      node.style.height = `${node.scrollHeight}px`;
-    }
-    resize();
-    return { update: resize };
-  }
-
   function onTextInput(e) {
     const text = e.currentTarget.value;
     tabTexts = { ...tabTexts, [activeTabId]: text };
@@ -190,7 +181,6 @@
         placeholder="Shared notes — visible to everyone in the room…"
         value={tabTexts[activeTabId] ?? ""}
         on:input={onTextInput}
-        use:autosize
       ></textarea>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
@@ -281,7 +271,8 @@
 
   .shared-textarea {
     width: 100%;
-    min-height: 100vh;
+    min-height: 80vh;
+    field-sizing: content;
     resize: none;
     overflow: hidden;
     padding: 16px;

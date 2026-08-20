@@ -65,7 +65,7 @@ export const actions = {
     if (!room) throw redirect(303, '/')
 
     const data = await request.formData()
-    const password = String(data.get('password') || '')
+    const password = String(data.get('room-episode-code') || '')
     const name = String(data.get('name') || '').trim().slice(0, 50)
 
     if (!name) {

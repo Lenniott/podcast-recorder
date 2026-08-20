@@ -10,7 +10,7 @@ test('wrong room password shows an error', async ({ browser }) => {
   await stubYouTubeApi(guest)
   await guest.goto(roomUrl)
   await fillField(guest.getByLabel('Your name'), 'Guest')
-  await fillField(guest.getByLabel('Password'), 'nope')
+  await fillField(guest.locator('#room-episode-code'), 'nope')
   await guest.getByRole('button', { name: /Join Room/i }).click()
 
   await expect(guest.getByText('Wrong password. Try again.')).toBeVisible()

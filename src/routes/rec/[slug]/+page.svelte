@@ -770,20 +770,66 @@
   <div class="card gate-card">
     <div class="gate-icon">🔒</div>
     <h2>{data.roomName}</h2>
-    <p class="sub">Enter the room password to join.</p>
+    <p class="sub">Enter the room code to join.</p>
 
     {#if form?.error}
       <div class="error-banner">{form.error}</div>
     {/if}
 
-    <form method="POST" action="?/enter" use:enhance>
+    <!-- Extensions attach to the first username/password-shaped pair on the
+         page. Keep that pair off-screen and *outside* the real form so Chrome
+         doesn't treat Join as a login. Real fields stay type=text, unmasked. -->
+    <div class="autofill-trap" aria-hidden="true">
+      <input type="text" tabindex="-1" autocomplete="username" />
+      <input type="password" tabindex="-1" autocomplete="current-password" />
+    </div>
+
+    <form
+      method="POST"
+      action="?/enter"
+      autocomplete="off"
+      data-1p-ignore
+      data-lpignore="true"
+      data-bwignore
+      data-protonpass-ignore="true"
+      use:enhance
+    >
       <div class="field">
         <label for="name">Your name</label>
-        <input id="name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill />
+        <input
+          id="name"
+          name="name"
+          type="text"
+          autocomplete="off"
+          maxlength="50"
+          bind:value={myName}
+          required
+          readonly
+          use:noAutofill
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-protonpass-ignore="true"
+          data-form-type="other"
+        />
       </div>
       <div class="field">
-        <label for="pw">Password</label>
-        <input id="pw" name="password" type="text" class="pw-mask" autocomplete="off" spellcheck="false" use:focus required />
+        <label for="room-episode-code">Room code</label>
+        <input
+          id="room-episode-code"
+          name="room-episode-code"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          readonly
+          use:noAutofill
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-protonpass-ignore="true"
+          data-form-type="other"
+        />
       </div>
       <button type="submit" class="btn-primary btn-block">Join Room</button>
     </form>
@@ -910,7 +956,18 @@
     justify-content: center;
     padding: 20px;
   }
-  .gate-card { max-width: 380px; width: 100%; text-align: center; }
+  .gate-card { max-width: 380px; width: 100%; text-align: center; position: relative; }
+  .autofill-trap {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .gate-icon { font-size: 36px; margin-bottom: 12px; }
 
   .browser-card { max-width: 440px; }
