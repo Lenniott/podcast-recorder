@@ -215,8 +215,9 @@
   .tab-pill {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 4px 6px 4px 14px;
+    justify-content: space-between;
+    padding: 4px 2px 4px 12px;
+    height: 30px;
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
@@ -232,16 +233,24 @@
   .tab-title {
     background: none;
     border: none;
-    padding: 4px 0;
+    padding: 0 12px 0 0;
     color: inherit;
     font: inherit;
     cursor: pointer;
+    width: 100%;
+    text-align: center;
   }
 
   /* Nested inside the already-bordered .tab-pill — no second border. */
   .tab-close {
     border-color: transparent;
     opacity: 0.7;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
   }
   .tab-close:hover {
     opacity: 1;

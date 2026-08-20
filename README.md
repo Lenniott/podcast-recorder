@@ -47,20 +47,54 @@ Open `http://localhost:5173`
 
 ## Production (home server with Docker)
 
-```bash
-cp .env.example .env
-# Edit .env — set a strong SECRET
+Clone the repo (compose builds from this Dockerfile; a compose-file URL is not enough):
 
+```bash
+git clone https://github.com/Lenniott/podcast-recorder.git
+cd podcast-recorder
+cp .env.example .env
+# Set SECRET (required). SITE_PASSWORD is optional (locks the create-episode page).
+# Behind TLS, set HTTPS=true (and FORCE_HTTPS=true if the proxy terminates TLS).
+
+chmod +x update.sh
 docker compose up -d --build
 ```
 
-App runs on port 3000. Put it behind Nginx/Caddy for HTTPS.
+Compose publishes **7799** on the host (`7799:3000` in `docker-compose.yml`). Open `http://<host>:7799`. SQLite lives in the `podcast-recorder-data` volume; `.env` is local and gitignored.
+
+### Updating after you push
+
+On the laptop: commit and push to `main`.
+
+On the server, from this directory:
+
+```bash
+sudo ./update.sh
+```
+
+That `git pull --ff-only`s, then `docker compose up -d --build`, then prints `ps` and the last 20 log lines. `./update.sh` also works; the script sudo's docker if you're not root.
+
+`--ff-only` refuses to pull if the server has local commits or a dirty merge. Stash or discard server-side edits, or the pull stops on purpose.
+
+Rooms survive the rebuild. Never `docker compose down -v` (that deletes the volume).
+
+Sanity check:
+
+```bash
+docker compose ps
+docker compose logs --tail 20 podcast-recorder
+curl -sI http://127.0.0.1:7799/ | head -1
+```
+
+You want the container **Up**, logs showing `listening on http://0.0.0.0:3000` and `SECRET = ✓ set`, and `HTTP/1.1 200 OK`.
+
+Put it behind Nginx/Caddy for HTTPS. Proxy to **7799**, not 3000.
 
 ### Quick Caddy config
 
 ```
 your-subdomain.example.com {
-    reverse_proxy localhost:3000
+    reverse_proxy localhost:7799
 }
 ```
 
@@ -72,7 +106,7 @@ server {
     server_name your-subdomain.example.com;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:7799;
         proxy_http_version 1.1;
         # WebSocket support — critical
         proxy_set_header Upgrade $http_upgrade;

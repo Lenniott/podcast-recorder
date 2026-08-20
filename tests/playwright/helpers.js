@@ -138,7 +138,7 @@ export async function createRoom(page, { name, password, hostDisplayName = 'Host
   await page.goto('/')
   await unlockIfNeeded(page)
   await fillField(page.locator('#room-episode-name'), name)
-  await fillField(page.locator('#room-episode-password'), password)
+  await fillField(page.locator('#room-episode-code'), password)
   // Generous timeout: if the form's click lands before use:enhance has
   // hydrated, the browser falls back to a real full-page POST + redirect +
   // GET of /rec/[slug] — on a cold `npm run dev` worker that route's (now

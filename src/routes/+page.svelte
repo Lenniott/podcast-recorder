@@ -63,7 +63,23 @@
       <div class="error-banner">{form.error}</div>
     {/if}
 
-    <form method="POST" action="?/create" use:enhance={() => {
+    <!-- Extensions attach to the first username/password-shaped pair on the
+         page. Keep that pair off-screen and *outside* the real form so Chrome
+         doesn't treat Create as a login. Real fields stay type=text, unmasked. -->
+    <div class="autofill-trap" aria-hidden="true">
+      <input type="text" tabindex="-1" autocomplete="username" />
+      <input type="password" tabindex="-1" autocomplete="current-password" />
+    </div>
+
+    <form
+      method="POST"
+      action="?/create"
+      autocomplete="off"
+      data-1p-ignore
+      data-lpignore="true"
+      data-bwignore
+      data-protonpass-ignore="true"
+      use:enhance={() => {
       loading = true
       return async ({ update }) => { await update(); loading = false }
     }}>
@@ -74,32 +90,41 @@
           name="room-episode-name"
           type="text"
           placeholder="e.g. Ep 42 — The One About AI"
-          autocomplete="nope"
+          autocomplete="off"
           bind:value={name}
           maxlength="100"
           required
           readonly
           use:noAutofill
-          use:focus
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-protonpass-ignore="true"
+          data-form-type="other"
         />
       </div>
 
       <div class="field">
-        <label for="room-episode-password">Room Password</label>
+        <label for="room-episode-code">Room code</label>
         <input
-          id="room-episode-password"
-          name="room-episode-password"
+          id="room-episode-code"
+          name="room-episode-code"
           type="text"
-          class="pw-mask"
           placeholder="Share this with your guest"
-          autocomplete="nope"
+          autocomplete="off"
           spellcheck="false"
           minlength="4"
           required
+          readonly
+          use:noAutofill
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore
+          data-protonpass-ignore="true"
+          data-form-type="other"
         />
         <span class="hint">Your guest needs this to join. Not stored in plain text.</span>
       </div>
-
       <button type="submit" class="btn-primary btn-block" disabled={loading}>
         {loading ? 'Creating…' : 'Create Room & Get Link'}
       </button>
@@ -143,7 +168,19 @@
     font-size: 14px;
   }
 
-  .form-card { width: 100%; max-width: 420px; }
+  .form-card { width: 100%; max-width: 420px; position: relative; }
+
+  .autofill-trap {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   h2 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
 

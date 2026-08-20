@@ -15,6 +15,7 @@
 </script>
 
 <div class="mic-panel">
+  <div class="field">
   <label for="mic-select">Microphone</label>
   <select id="mic-select" bind:value={selectedDeviceId} on:change={onChangeMic} disabled={devices.length === 0}>
     {#if devices.length === 0}
@@ -39,7 +40,7 @@
       Recording continues. Reconnect your mic or pick a new one above.
     </p>
   {/if}
-
+  </div>
   <div class="gain-row">
     <label for="gain-slider">
       Input Gain
@@ -74,7 +75,8 @@
 
   select {
     width: 100%;
-    padding: 8px 10px;
+    height: 35px;
+    padding: 0px 4px;
     border-radius: 8px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);

@@ -78,7 +78,7 @@ export const actions = {
 
     const data     = await request.formData()
     const name     = String(data.get('room-episode-name') || '').trim()
-    const password = String(data.get('room-episode-password') || '').trim()
+    const password = String(data.get('room-episode-code') || '').trim()
 
     console.log('[action create] name=%s passwordLen=%d', name, password.length)
 

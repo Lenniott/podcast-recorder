@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ephemeral Room Login – No Autocomplete</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #151821;
+      --text: #e6e8ef;
+      --muted: #9aa0b4;
+      --accent: #6ea8fe;
+      --danger: #ff6b6b;
+      --border: #2a2f3f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 6px 0;
+      letter-spacing: 0.3px;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0f1219;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(110,168,254,0.15);
+    }
+    button {
+      width: 100%;
+      padding: 10px 14px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #0b0c10;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover {
+      filter: brightness(1.05);
+    }
+    .note {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 12px;
+      line-height: 1.4;
+    }
+    .warn {
+      font-size: 11px;
+      color: var(--danger);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Enter room</h1>
+    <p class="subtitle">This room is ephemeral and will be destroyed after use.</p>
+
+    <!--
+      Key anti-autocomplete techniques used here:
+      - autocomplete="nope" on form and inputs
+      - non-standard, unique name attributes
+      - password-manager ignore data-* attributes
+      - type="text" for both fields (no password type)
+    -->
+    <form
+      autocomplete="nope"
+      method="post"
+      action="/join-room"
+    >
+      <label for="room_name">Room name</label>
+      <input
+        type="text"
+        id="room_name"
+        name="ephemeral_room_name_x9k2"
+        autocomplete="nope"
+        data-1p-ignore
+        data-lpignore="true"
+        data-bwignore
+        data-protonpass-ignore="true"
+        data-form-type="other"
+        placeholder="e.g. alpha-7"
+        required
+      />
+
+      <label for="room_pass">Room code</label>
+      <input
+        type="text"
+        id="room_pass"
+        name="ephemeral_room_code_j4m7"
+        autocomplete="nope"
+        data-1p-ignore
+        data-lpignore="true"
+        data-bwignore
+        data-protonpass-ignore="true"
+        data-form-type="other"
+        placeholder="e.g. 8F3Q9Z"
+        required
+      />
+
+      <button type="submit">Join room</button>
+
+      <p class="note">
+        Fields are configured to discourage autocomplete and password‑manager saving.
+        The room is ephemeral and should not be stored by the browser.
+      </p>
+      <p class="warn">
+        Note: Browsers and password managers may still try to save data; users can
+        disable saving in their browser settings if needed.
+      </p>
+    </form>
+  </div>
+
+  <script>
+    // Optional: randomise field names on each load to further break autofill matching.
+    // If you control the backend, generate these server-side instead.
+    (function () {
+      function randToken() {
+        return Math.random().toString(36).slice(2, 10);
+      }
+      const form = document.querySelector('form');
+      const nameInput = form.querySelector('#room_name');
+      const passInput = form.querySelector('#room_pass');
+
+      const nameToken = randToken();
+      const passToken = randToken();
+
+      nameInput.name = 'ephemeral_room_name_' + nameToken;
+      passInput.name = 'ephemeral_room_code_' + passToken;
+
+      // Also randomise ids to avoid any heuristic based on id
+      nameInput.id = 'room_name_' + nameToken;
+      passInput.id = 'room_code_' + passToken;
+
+      // Update labels to match new ids
+      document.querySelector('label[for="room_name"]').setAttribute('for', nameInput.id);
+      document.querySelector('label[for="room_pass"]').setAttribute('for', passInput.id);
+    })();
+  </script>
+</body>
+</html>
