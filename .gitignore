@@ -24,3 +24,8 @@ Thumbs.db
 test-results/
 playwright-report/
 blob-report/
+
+# Claude Code agent worktrees — local, ephemeral git worktrees for
+# background subagents; never meant to be tracked (each is its own
+# nested checkout of this repo).
+.claude/worktrees/
