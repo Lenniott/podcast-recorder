@@ -110,6 +110,44 @@ describe('createCaptureWriter — notifyDeviceGap', () => {
   })
 })
 
+// ─── regression: the OLD handler's reentrancy bug ──────────────────────────
+// The old inline handler only incremented its sample counter AFTER an
+// `await fileWritable.write(...)` resolved. Because the browser doesn't wait
+// for one message handler to finish before delivering the next, an
+// overlapping handler could read that counter while it was still stale —
+// inflating its own gap estimate and, worse, queuing its real chunk's write
+// call LATER than chunks that arrived after it. Real audio ended up written
+// out of chronological order, diluted with escalating fabricated silence —
+// which is why deleting the silence from an affected recording never
+// reconstructed coherent speech. writeChunk() must never be able to do this:
+// no await in the caller's path, no shared counter read before it's safe to.
+
+describe('createCaptureWriter — immune to the old handler-reentrancy bug', () => {
+  it('writes real chunks in exact call order under jittery latency worse than the chunk cadence', async () => {
+    const N = 40
+    const CHUNK_MS = (BUFFER_SIZE / SAMPLE_RATE) * 1000 // ~170.7ms real-time cadence
+    const callOrder = []
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: async (buf) => {
+        const id = new Int16Array(buf)[0]
+        await delay(150 + Math.random() * 200) // 150-350ms — worse than the 170.7ms cadence
+        callOrder.push(id)
+      }
+    })
+
+    for (let i = 1; i <= N; i++) {
+      const chunk = realChunk(BUFFER_SIZE, 1)
+      chunk[0] = i // tag each chunk so we can verify write() saw it in order
+      writer.writeChunk(chunk)
+      await delay(CHUNK_MS) // arrive at the worklet's real-time cadence, not waiting on writes
+    }
+    await writer.stop()
+
+    expect(callOrder).toEqual(Array.from({ length: N }, (_, i) => i + 1))
+  }, 25000)
+})
+
 // ─── stop()/drain(): no more "sleep and hope" ───────────────────────────────
 
 describe('createCaptureWriter — stop() drains the real queue instead of guessing', () => {
