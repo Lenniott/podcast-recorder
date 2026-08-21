@@ -11,8 +11,15 @@
  * `write` is injected (a Blob/ArrayBuffer -> Promise<void> adapter), so
  * this is testable with an in-memory fake and, in the app, backed by a
  * FileSystemWritableFileStream.
+ *
+ * `onWritten(i16, sampleOffset)` is optional and fires only AFTER a chunk's
+ * write() has actually resolved — never on writeChunk() being called. It's
+ * the one seam anything that needs to show "what's really on disk" (a live
+ * waveform, a listen-back preview) should hang off, instead of the live mic
+ * signal — the write path is the thing that can silently break; the mic
+ * never lies about what it's picking up.
  */
-export function createCaptureWriter({ sampleRate, write }) {
+export function createCaptureWriter({ sampleRate, write, onWritten }) {
   if (!(sampleRate > 0)) throw new Error('createCaptureWriter: sampleRate must be > 0')
   if (typeof write !== 'function') throw new Error('createCaptureWriter: write must be a function')
 
@@ -40,8 +47,10 @@ export function createCaptureWriter({ sampleRate, write }) {
     const bytes = i16.byteLength
     enqueue(async () => {
       await write(i16.buffer)
+      const offset = samplesWritten
       samplesWritten += i16.length
       dataByteCount += bytes
+      onWritten?.(i16, offset)
     })
     return bytes
   }
@@ -60,8 +69,10 @@ export function createCaptureWriter({ sampleRate, write }) {
     enqueue(async () => {
       const silence = new Int16Array(gapSamples)
       await write(silence.buffer)
+      const offset = samplesWritten
       samplesWritten += gapSamples
       dataByteCount += bytes
+      onWritten?.(silence, offset)
     })
     return bytes
   }

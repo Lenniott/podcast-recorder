@@ -3,12 +3,14 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
+  import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
+  import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
 
   function focus(el) { el.focus() }
 
@@ -54,6 +56,28 @@
   let canvasCtx
   let animFrame
   let analyserData
+  // While recording, the waveform draws from this instead of analyserNode —
+  // it only ever holds audio the Capture Writer has confirmed was actually
+  // written to disk (fed via captureWriter's onWritten). The mic signal can
+  // look perfectly healthy while the file silently diverges from it; a
+  // display sourced from the mic can never catch that. See
+  // $lib/written-audio-ring.js.
+  let writtenRing = null
+
+  // ─── Record-start listen-back check ──────────────────────────────────
+  const CHECK_SENTENCES = [
+    'The quick brown fox jumps over the lazy dog.',
+    'Pack my box with five dozen liquor jugs.',
+    'Sphinx of black quartz, judge my vow.',
+    'How vexingly quick daft zebras jump.',
+    'Bright vixens jump; dozy fowl quack.'
+  ]
+  const CHECK_PREVIEW_MAX_SAMPLES = 30 * 48000 // cap buffering at 30s regardless of sample rate specifics
+  let checkModalOpen = false
+  let checkSentence = ''
+  let collectingPreview = false
+  let previewChunks = []
+  let previewSampleCount = 0
 
   // ─── Clap state ─────────────────────────────────────────────────────
   let lastClapFrom = null
@@ -372,6 +396,7 @@
     silentSink.gain.value = 0
     analyserNode.fftSize = 2048
     analyserData = new Float32Array(analyserNode.fftSize)
+    writtenRing = createWrittenAudioRing(analyserNode.fftSize)
     gainNode = audioCtx.createGain()
     gainNode.gain.value = gainValue
     // Keep the worklet graph "live" without sending audible audio to speakers.
@@ -441,7 +466,15 @@
       const H = canvas.height
       canvasCtx.clearRect(0, 0, W, H)
 
-      analyserNode.getFloatTimeDomainData(analyserData)
+      // While recording, draw from confirmed-written audio, not the live
+      // mic — see writtenRing's declaration for why. Pre-recording (mic
+      // check before pressing Start, when nothing has been written yet),
+      // the live mic signal is the only thing there is to show.
+      if (recordingState === 'recording' && writtenRing) {
+        writtenRing.read(analyserData)
+      } else {
+        analyserNode.getFloatTimeDomainData(analyserData)
+      }
 
       // Background
       canvasCtx.fillStyle = '#0e0e10'
@@ -488,6 +521,46 @@
   // RECORDING
   // ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Fires once per chunk, only after captureWriter has actually confirmed
+   * it was written (see capture-writer.js's onWritten). Feeds the live
+   * waveform always; feeds the listen-back check's buffer only while that
+   * check is open, capped so a host who leaves it open doesn't grow it
+   * unbounded.
+   */
+  function handleWritten(i16) {
+    writtenRing?.push(i16)
+    if (collectingPreview && previewSampleCount < CHECK_PREVIEW_MAX_SAMPLES) {
+      previewChunks.push(i16)
+      previewSampleCount += i16.length
+    }
+  }
+
+  function startRecordingCheck() {
+    checkSentence = CHECK_SENTENCES[Math.floor(Math.random() * CHECK_SENTENCES.length)]
+    previewChunks = []
+    previewSampleCount = 0
+    collectingPreview = true
+    checkModalOpen = true
+  }
+
+  function buildCheckPreview() {
+    return buildWavBlob(previewChunks, recordingSampleRate)
+  }
+
+  function confirmRecordingCheck() {
+    checkModalOpen = false
+    collectingPreview = false
+    previewChunks = []
+  }
+
+  async function rejectRecordingCheck() {
+    checkModalOpen = false
+    collectingPreview = false
+    previewChunks = []
+    await stopRecording()
+  }
+
   async function startRecording() {
     if (!audioCtx || !workletNode) {
       try {
@@ -529,7 +602,8 @@
     micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
-      write: (buf) => fileWritable.write(buf)
+      write: (buf) => fileWritable.write(buf),
+      onWritten: handleWritten
     })
 
     recordingState = 'recording'
@@ -537,6 +611,7 @@
 
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
+    startRecordingCheck()
   }
 
   async function stopRecording() {
@@ -544,6 +619,15 @@
     recordingState = 'stopping'
     clearInterval(recordingTimer)
     wsNotifyState('stopped')
+
+    // Stopping via the regular Stop button while the listen-back check is
+    // still up (not via its own "something's wrong" path) should still
+    // close it cleanly rather than leave it showing over an idle room.
+    if (checkModalOpen) {
+      checkModalOpen = false
+      collectingPreview = false
+      previewChunks = []
+    }
 
     // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
     // then drain every write the Capture Writer has queued — however many
@@ -979,6 +1063,14 @@
   </main>
 
 </div>
+
+<RecordingCheckModal
+  open={checkModalOpen}
+  sentence={checkSentence}
+  onListen={buildCheckPreview}
+  onConfirm={confirmRecordingCheck}
+  onReject={rejectRecordingCheck}
+/>
 {/if}
 
 <style>

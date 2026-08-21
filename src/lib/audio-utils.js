@@ -53,6 +53,25 @@ export function float32ToInt16(f32) {
 }
 
 /**
+ * Build a standalone, playable WAV Blob from a list of Int16Array chunks —
+ * used for the record-start listen-back check, where the chunks passed in
+ * must be ones a Capture Writer has confirmed actually written (see
+ * capture-writer.js's `onWritten`), never raw mic input, or the "does this
+ * sound right" check couldn't have caught this app's actual production bug.
+ */
+export function buildWavBlob(chunks, sampleRate) {
+  const totalSamples = chunks.reduce((n, c) => n + c.length, 0)
+  const merged = new Int16Array(totalSamples)
+  let offset = 0
+  for (const c of chunks) {
+    merged.set(c, offset)
+    offset += c.length
+  }
+  const header = buildWavHeader(merged.byteLength, sampleRate)
+  return new Blob([header, merged.buffer], { type: 'audio/wav' })
+}
+
+/**
  * Convert a linear gain multiplier to dBFS.
  */
 export function gainToDb(gain) {

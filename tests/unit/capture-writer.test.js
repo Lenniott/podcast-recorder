@@ -67,6 +67,67 @@ describe('createCaptureWriter — slow disk does not fabricate silence', () => {
   })
 })
 
+// ─── onWritten: the seam anything showing "what's really on disk" needs ────
+
+describe('createCaptureWriter — onWritten', () => {
+  it('fires only after a chunk\'s write() has actually resolved, never on writeChunk() being called', async () => {
+    let resolveWrite
+    const seen = []
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: () => new Promise((resolve) => { resolveWrite = resolve }),
+      onWritten: (i16) => seen.push(i16[0])
+    })
+
+    writer.writeChunk(realChunk(4, 7))
+    await delay(20)
+    expect(seen).toEqual([]) // write() hasn't resolved yet — must not have fired
+
+    resolveWrite()
+    await delay(20)
+    expect(seen).toEqual([7]) // now it has
+  })
+
+  it('reports the correct sample offset for each chunk, in write order', async () => {
+    const sink = makeSlowSink(0)
+    const seen = []
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: (i16, offset) => seen.push(offset)
+    })
+
+    writer.writeChunk(realChunk(100))
+    writer.writeChunk(realChunk(100))
+    writer.writeChunk(realChunk(100))
+    await writer.stop()
+
+    expect(seen).toEqual([0, 100, 200])
+  })
+
+  it('fires for notifyDeviceGap silence too — it reflects everything actually written, not just real audio', async () => {
+    const sink = makeSlowSink(0)
+    const seen = []
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: (i16) => seen.push(i16.length)
+    })
+
+    writer.notifyDeviceGap(0.1) // 4800 samples at 48kHz
+    await writer.stop()
+
+    expect(seen).toEqual([4800])
+  })
+
+  it('is optional — omitting it changes nothing else about behavior', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
+    writer.writeChunk(realChunk())
+    await expect(writer.stop()).resolves.toBeTruthy()
+  })
+})
+
 // ─── notifyDeviceGap: the only legitimate source of silence ────────────────
 
 describe('createCaptureWriter — notifyDeviceGap', () => {
