@@ -11,6 +11,7 @@
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  import { createRoomConnection } from '$lib/room-connection.js'
 
   function focus(el) { el.focus() }
 
@@ -18,7 +19,6 @@
   export let form   // action result
 
   // ─── WebSocket state ────────────────────────────────────────────────
-  let ws = null
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost }]
   let roomTabs = null          // RoomTabs component instance
@@ -663,8 +663,7 @@
   }
 
   function sendClap() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'clap' }))
+    room.send({ type: 'clap' })
     // Server echoes back to all (including sender) which triggers tone injection
   }
 
@@ -675,7 +674,7 @@
       const seq = ++_pingSeq
       const sentAt = Date.now()
       _pendingPings.set(seq, sentAt)
-      ws.send(JSON.stringify({ type: 'ping', seq, sentAt }))
+      room.send({ type: 'ping', seq, sentAt })
     }
   }
 
@@ -702,38 +701,26 @@
   // ───────────────────────────────────────────────────────────────────
 
   function wsNotifyState(state) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'recording_state', state }))
+    room.send({ type: 'recording_state', state })
   }
 
   function wsSend(payload) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify(payload))
+    room.send(payload)
   }
 
   const pendingClaps = []
 
-  function connectWs() {
-    if (sessionDestroyed || !data.authenticated) return
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
-
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    wsStatus = 'connecting'
-    const socket = new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
-    ws = socket
-
-    socket.onopen = () => {
-      if (ws !== socket) return
-      wsStatus = 'connected'
-      socket.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
+  const room = createRoomConnection({
+    createSocket() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
+    },
+    onOpen() {
+      room.send({ type: 'join', name: getJoinName(), clientId })
       try { roomTabs?.resyncDuck?.() } catch {}
       syncClock()
-    }
-
-    socket.onmessage = (e) => {
-      let msg
-      try { msg = JSON.parse(e.data) } catch { return }
-
+    },
+    onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
       if (msg.type === 'pong') {
         const sentAt = _pendingPings.get(msg.seq)
@@ -758,19 +745,15 @@
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
+    },
+    onStatusChange(status) {
+      wsStatus = status
     }
+  })
 
-    socket.onclose = () => {
-      if (ws !== socket || sessionDestroyed) return
-      wsStatus = 'disconnected'
-      // Auto-reconnect after 3s (recording continues locally regardless)
-      setTimeout(connectWs, 3000)
-    }
-
-    socket.onerror = () => {
-      if (ws !== socket) return
-      wsStatus = 'disconnected'
-    }
+  function connectWs() {
+    if (sessionDestroyed || !data.authenticated) return
+    room.connect()
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -867,7 +850,7 @@
     clearTimeout(peakHoldTimer)
     clearTimeout(clipTimer)
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
-    ws?.close()
+    room.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
     audioCtx?.close()
