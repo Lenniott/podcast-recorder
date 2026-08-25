@@ -70,7 +70,12 @@
     'Pack my box with five dozen liquor jugs.',
     'Sphinx of black quartz, judge my vow.',
     'How vexingly quick daft zebras jump.',
-    'Bright vixens jump; dozy fowl quack.'
+    'Bright vixens jump; dozy fowl quack.',
+    'The five boxing wizards jump quickly.',
+    'Jackdaws love my big sphinx of quartz.',
+    'Waltz, bad nymph, for quick jigs vex.',
+    'Quick zephyrs blow, vexing daft Jim.',
+    'Amazingly few discotheques provide jukeboxes.'
   ]
   const CHECK_PREVIEW_MAX_SAMPLES = 30 * 48000 // cap buffering at 30s regardless of sample rate specifics
   let checkModalOpen = false
