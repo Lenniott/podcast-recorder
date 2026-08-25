@@ -717,7 +717,6 @@
     },
     onOpen() {
       room.send({ type: 'join', name: getJoinName(), clientId })
-      try { roomTabs?.resyncDuck?.() } catch {}
       syncClock()
     },
     onMessage(msg) {
@@ -749,6 +748,13 @@
     onStatusChange(status) {
       wsStatus = status
     }
+  })
+
+  room.registerResync(() => {
+    roomTabs?.resyncDuck?.()
+  })
+  room.registerResync(() => {
+    if (recordingState === 'recording') wsNotifyState('recording')
   })
 
   function connectWs() {
