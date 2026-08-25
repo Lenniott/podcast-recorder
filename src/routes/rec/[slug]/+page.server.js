@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getRoomBySlug } from '$lib/server/db.js'
+import { deleteRoom, getRoomBySlug } from '$lib/server/db.js'
+import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, verifyHostClaimToken } from '$lib/server/auth.js'
 
 const COOKIE = (slug) => `pr_auth_${slug}`
@@ -12,12 +13,6 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 // Prevents silent cookie rejection during HTTP LAN / Docker testing.
 function isSecure() {
   return env.HTTPS === 'true' || env.FORCE_HTTPS === 'true'
-}
-
-function parseRoomMaxAgeMs() {
-  const raw = Number.parseFloat(String(env.ROOM_MAX_AGE_HOURS || ''))
-  const hours = Number.isFinite(raw) && raw > 0 ? raw : 12
-  return hours * 60 * 60 * 1000
 }
 
 function isAuthenticatedForRoom(cookies, slug, room) {
@@ -35,8 +30,9 @@ export async function load({ params, cookies }) {
     throw redirect(303, '/?notfound=1')
   }
 
-  if (Date.now() - room.created_at > parseRoomMaxAgeMs()) {
+  if (isRoomExpired(room, Date.now(), env)) {
     console.log('[load /rec/%s] room expired → redirect /', slug)
+    deleteRoom(slug)
     throw redirect(303, '/?expired=1')
   }
 
@@ -63,6 +59,10 @@ export const actions = {
     const room = getRoomBySlug(slug)
 
     if (!room) throw redirect(303, '/')
+    if (isRoomExpired(room, Date.now(), env)) {
+      deleteRoom(slug)
+      throw redirect(303, '/?expired=1')
+    }
 
     const data = await request.formData()
     const password = String(data.get('room-episode-code') || '')
@@ -101,6 +101,10 @@ export const actions = {
     const { slug } = params
     const room = getRoomBySlug(slug)
     if (!room) throw redirect(303, '/')
+    if (isRoomExpired(room, Date.now(), env)) {
+      deleteRoom(slug)
+      throw redirect(303, '/?expired=1')
+    }
 
     if (!isAuthenticatedForRoom(cookies, slug, room)) {
       return fail(401, { error: 'Not signed in to this room.', name: '' })

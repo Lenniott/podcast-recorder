@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  roomExists: vi.fn(() => true),  // default: room exists
-  getRoomBySlug: vi.fn(() => ({
+  getActiveRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
@@ -15,7 +14,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
 }))
 
-import { roomExists } from '../../src/lib/server/db.js'
+import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -28,7 +27,7 @@ describe('setupWss — connection handling', () => {
     _resetRooms()          // clear stale state from previous test
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
   })
 
   it('closes connection when no slug provided', () => {
@@ -40,14 +39,14 @@ describe('setupWss — connection handling', () => {
     // Re-setup to test this path
     const wss2 = mockWss()
     setupWss(wss2)
-    roomExists.mockReturnValue(false)
+    getActiveRoomBySlug.mockReturnValue(null)
     const ws2 = mockWs()
     wss2.connect(ws2, 'nonexistent')
     expect(ws2.closed).toBe(true)
   })
 
   it('closes connection when room does not exist', () => {
-    roomExists.mockReturnValue(false)
+    getActiveRoomBySlug.mockReturnValue(null)
     const ws = mockWs()
     wss.connect(ws, 'badslug')
     expect(ws.closed).toBe(true)
@@ -165,7 +164,7 @@ describe('setupWss — yt_duck (hold-to-talk)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
