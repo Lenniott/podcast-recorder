@@ -2,93 +2,92 @@
 
 **Status:** research only, no tickets cut yet, no code changed.
 
-## The tension this sits on top of
+**Revision note:** an earlier draft of this doc framed "audio never touches
+the server" as a hard privacy rule this feature had to route around. That was
+wrong — per direct correction: the actual rule (`AGENTS.md`) is that a
+recording must **save locally and keep recording even if the internet
+drops**; it isn't a security boundary, and there's already a separate branch
+that uploads guest audio to the server so the host can download it. Episodes
+are public anyway. This revision drops the on-device-vs-cloud dilemma and
+commits to the snappy option.
 
-`AGENTS.md`'s one rule is *"never let the UI claim things are fine when they
-might not be"* and its concrete form today: **your audio never touches the
-server.** Every WS message the server currently relays is either presence,
-sync timing, or plain text (`tab_text`, notes) — never audio. Transcription
-and a research agent both want to read what was *said*, which means somewhere
-between "raw mic audio" and "an AI call," speech has to become text. Two
-honestly different places that can happen, and they have very different
-privacy/cost/quality shapes. Both are laid out below — the pick is a product
-call for whoever owns the "audio never touches server" promise, not something
-to default silently.
+## Ground truth this design now runs on
 
-One thing that's true either way and worth noting up front: **speaker
-separation is already free here.** Host and guest each run their own
-`getUserMedia` stream in their own browser (see `capture-writer.js`), so
-whichever transcription path you choose, you transcribe each person's stream
-independently and tag it with `peer.name` from `ws-rooms.js` — no diarization
-step needed, unlike a single-mixed-feed podcast setup.
+- **Live, low-latency transcription > perfect privacy.** This is for
+  in-the-moment "what does that mean?" answers while people are still
+  talking, not a transcript-accuracy product.
+- **Browser `SpeechRecognition` (the "Google speech recognition" you're
+  thinking of) is fine to use.** It's free, built into Chrome/Edge (which
+  the app already requires), and streams interim + final results with
+  genuinely low latency — no batching, no chunk-and-wait.
+- **The whole thing sits behind one env feature flag**, off by default,
+  specifically so a self-hosted internal/company podcast can run this app
+  with zero calls to Google or any AI vendor. On is "public podcast,
+  send it"; off is "internal show, don't."
+- **An AI API key is required too**, server-side only, for the research
+  agent (Part 2).
+- Speaker separation is still free: host and guest each run their own
+  `getUserMedia` stream in their own browser (`capture-writer.js`), so each
+  person's `SpeechRecognition` instance is inherently single-speaker —
+  tag results with `peer.name` from `ws-rooms.js`, no diarization needed.
 
 ---
 
-## Part 1 — Transcription: on-device vs. cloud
+## Part 1 — Transcription: browser `SpeechRecognition`, per person
 
-### Path A — On-device (audio never leaves the browser)
+Each browser runs its own `webkitSpeechRecognition`/`SpeechRecognition`
+instance (`continuous: true, interimResults: true`) alongside its existing
+mic capture graph. It's a separate, independent API call from the audio
+recording path — it does **not** touch `capture-writer.js`, the WAV write
+path, or anything covered by the "never corrupt a recording" rule. If
+`SpeechRecognition` errors, restarts, or drops, that's a transcription/UX
+issue only; the actual recording is untouched.
 
-Run STT inside each participant's own browser, on their own mic stream.
-Nothing audio-shaped crosses the network; only the resulting *text* does
-(same trust boundary the app already has for `tab_text`).
+- **Cost:** $0 marginal — this is the point of using it.
+- **Latency:** genuinely live — interim results stream in as someone talks,
+  finals settle a beat later. This is what makes "answers while people are
+  still talking" actually feasible, unlike a chunk-and-submit model.
+- **Quality:** good enough for a lookup trigger; not word-perfect, doesn't
+  need to be — the transcript here drives "should we look something up,"
+  not a published transcript.
+- **Real caveat to prototype early: device targeting.** `MicPanel.svelte`
+  lets a participant explicitly pick which input device gets recorded
+  (`selectedDeviceId`), and `capture-writer.js` records from exactly that
+  device. `SpeechRecognition` has no equivalent "use this deviceId" option
+  in Chrome — it listens to whatever the browser/OS currently treats as the
+  default input, which can silently diverge from the device actually being
+  recorded (e.g. someone recording on a USB mic but the OS default is still
+  a laptop mic). Worth confirming behavior on a real machine with two
+  input devices before building UI around it — if it diverges, the fix is
+  just "transcription mic ≠ recording mic, and that's an accepted
+  limitation," not a blocker.
+- **Restart handling:** `SpeechRecognition` sessions can time out or drop on
+  silence/network hiccups; needs an auto-restart loop (same shape as
+  `room-connection.js`'s reconnect-with-backoff, just for a much shorter,
+  more frequent cycle) so a dropped recognition session doesn't just go
+  quiet for the rest of the episode.
 
-- **`transformers.js` (Xenova) running Whisper `tiny`/`base` via WASM/WebGPU.**
-  Genuinely local — no network call for STT at all, $0 marginal cost. Real
-  browsers hosting Whisper-web demos for years now; WebGPU (Chrome/Edge —
-  which the app already requires) gets `base`-size models running at
-  faster-than-realtime chunked inference on a normal laptop CPU/GPU.
-  Trade-offs: rolling-chunk latency (models transcribe a buffered window, so
-  expect ~3–8s lag on a chunk, not word-by-word streaming), noticeably lower
-  accuracy than a large cloud model — especially on cross-talk, accents, or
-  jargon — and it burns the participant's own CPU/battery for the whole
-  episode. For a research *trigger* (not a transcript people read back), that
-  accuracy bar is probably fine — you don't need verbatim, you need "did the
-  last 15 seconds contain something worth looking up."
-- **Browser `SpeechRecognition` (Web Speech API).** Free, built into Chrome
-  already (the app is Chrome/Edge-only per the README), zero setup. **Not
-  actually on-device** for the default engine — Chrome's implementation
-  streams audio to Google's speech servers under the hood, so this doesn't
-  preserve the "audio never leaves the device" property even though it feels
-  local. Worth ruling out explicitly rather than reaching for it by
-  reflex — it looks like the free local option and isn't one.
+### Where the flag lives
 
-### Path B — Cloud streaming STT (audio does leave the device, for this feature)
+Follow the existing config pattern exactly — `env.SECRET`/`env.SITE_PASSWORD`
+are read server-side via `$env/dynamic/private` in `+page.server.js`'s
+`load()` and handed down as page data (see `roomPassword`, `isHostClaim`).
+Do the same here rather than reaching for a build-time `PUBLIC_` var, since
+this app is a single Docker image configured per-deployment at runtime, not
+per-build:
 
-Each browser streams its own mic audio to a cheap real-time STT vendor —
-either proxied through our WS server, or directly browser→vendor using a
-short-lived scoped token our server mints (same shape as a signed upload URL;
-avoids piping audio bytes through our own process at all).
+```
+# .env.example additions
+RESEARCH_ASSISTANT_ENABLED=false   # master switch: transcription UI + all AI calls
+AI_API_KEY=                        # see Part 2 — required if enabled
+```
 
-- **Deepgram (Nova-3), streaming websocket.** ~$0.0043–0.0059/min. True
-  low-latency partial+final streaming, good accuracy, handles cross-talk
-  fine per-stream since each person is already isolated. For a 60-minute
-  two-person episode: ~120 person-minutes ≈ **$0.50–0.70/episode.**
-- **Groq-hosted Whisper (`large-v3-turbo`), batch endpoint.** Extremely
-  cheap (~$0.04/hour of audio) and extremely fast inference, but it's a
-  batch call, not a streaming socket — "live" would mean submitting rolling
-  ~5–10s clips, which is a usable near-real-time hack but adds a bit of
-  request overhead and jitter vs. a real streaming API.
-- **AssemblyAI / OpenAI (`gpt-4o-mini-transcribe`) streaming** — comparable
-  shape and cost band to Deepgram, worth a bake-off if Deepgram's docs or
-  limits don't fit.
-
-Cloud STT is the one place this proposal would need new consent UI and a
-rewrite of the "your audio never touches the server" claim in the README —
-even scoped as "only while transcription is enabled, only for the research
-feature, opt-in per room." That's a real product decision, not a technical
-detail.
-
-### What doesn't change between the two paths
-
-Regardless of where STT happens, the *text* transcript still needs to reach
-the server, because the research agent needs to combine it with the tab's
-`[script]`/`[notes]` content and with the other participant's transcript —
-that assembly has to happen somewhere both peers' state is visible, which
-today is the WS server (see `ws-rooms.js`'s `tabRooms`). So "on-device STT"
-buys you "raw audio stays local," not "transcript stays local" — the AI
-research call the user is asking for inherently means transcript text goes
-to a third-party LLM either way. That's the real scope of the privacy
-decision: it's about the *audio*, not about whether text leaves the room.
+`+page.server.js` reads `env.RESEARCH_ASSISTANT_ENABLED === 'true'` and
+returns it as `researchEnabled` in `load()`'s return value, same as every
+other piece of server config this app already threads through to the page.
+When off: no `SpeechRecognition` instance is started, no transcript UI
+renders, and the server-side AI-call code path never runs — a company
+running this for internal podcasts sees literally the same app as today.
 
 ---
 
@@ -96,67 +95,62 @@ decision: it's about the *audio*, not about whether text leaves the room.
 
 ### Provider: a multi-model gateway, not a single vendor lock-in
 
-What you're describing — "an api key approach... connects loads of different
+What you described — "an api key approach... connects loads of different
 [models] under one key" — is **OpenRouter** (openrouter.ai). One API key,
-one OpenAI-compatible endpoint, and the model is just a string
+one OpenAI-compatible endpoint, model chosen per-call by a plain string
 (`openai/gpt-4o-mini`, `perplexity/sonar`, `anthropic/claude-...`,
-`google/gemini-2.5-flash`, etc.) — so cheap/fast models and
-search-capable models can be swapped per call, and swapped later via config
-with no code change. This fits the "control its overall prompt" ask well
-too: model choice, system prompt, and per-call parameters all live in one
-place server-side, same pattern as `SECRET`/`SITE_PASSWORD` in `.env` —
-the key never ships to the browser, the server makes the call.
+`google/gemini-2.5-flash`, etc.). Good fit here: cheap/fast models and
+search-capable models can be swapped independently, and swapped later via
+config with no code change. `AI_API_KEY` stays server-side only — the
+server makes the call, same as every other secret in this app's `.env`.
 
-### Two-stage funnel (keeps it cheap)
+### Two-stage funnel (keeps it cheap without sacrificing snappiness)
 
-Calling a websearch-capable model on every sentence would be neither cheap
-nor useful — most sentences aren't "I wonder what that means" moments. Two
-stages:
+Running a websearch-capable model on every sentence would be neither cheap
+nor fast enough to feel live. Two stages:
 
 1. **Cheap classifier, runs on every new final transcript chunk.** A small,
    fast model (e.g. `openai/gpt-4o-mini` or similar via OpenRouter,
-   fractions of a cent per call) sees a short rolling window of transcript
-   and answers "is there a specific, lookup-worthy claim/name/term here, and
-   if so what's the query?" Cheap enough to run continuously.
+   fractions of a cent and well under a second) sees a short rolling window
+   of transcript and answers "is there a specific, lookup-worthy
+   claim/name/term here, and if so what's the query?" Cheap and fast enough
+   to run continuously without adding perceptible lag.
    Lightweight local heuristics (regex for "I wonder", "what does that
    mean", "no idea what that is", "is that true", "who's that") can gate
-   *even calling the classifier*, if you want a third, free tier before any
-   API call happens at all.
+   *even calling the classifier*, if you want a free tier before any API
+   call happens at all.
 2. **Search-capable model, only on a hit.** A model with real web access
-   (OpenRouter's `perplexity/sonar` or `sonar-pro`, or a `:online` /
-   web-search-tool variant of a bigger model) takes the query plus the
-   guardrail system prompt and produces one short "did you know" card:
-   title + 2–3 sentence body + optionally a source. This is the pricier
-   call (search + generation), but it's rare — maybe 10–20 per episode.
-
-Rough episode cost: classifier calls ≈ pennies total; ~15 research cards at
-roughly $0.02–0.05 each ≈ $0.30–0.75. Combined with cloud STT, a full
-hour-long two-person episode lands somewhere in the **$0.30 (on-device STT)
-to ~$1.50 (cloud STT + research) per episode** range — genuinely cheap for
-what it's replacing (a human researcher scrolling Wikipedia mid-show).
-
+   (OpenRouter's `perplexity/sonar`/`sonar-pro`, or a `:online` /
+   web-search-tool variant) takes the query plus the room's guardrail
+   system prompt and produces one short "did you know" card: title + 2–3
+   sentence body + optionally a source. Pricier call (search + generation),
+   but rare — maybe 10–20 per episode, not per sentence.
 3. **Manual override, always available.** A "🔍 look this up" button next
    to the transcript/notes lets either person force a card without waiting
-   on the classifier — good fallback when the auto-trigger misses something
-   or someone just wants an answer right now.
+   on the classifier — good fallback when auto-trigger misses something or
+   someone just wants an answer right now.
+
+Rough episode cost, now that transcription itself is free: classifier calls
+≈ pennies total across an episode; ~15 research cards at roughly
+$0.02–0.05 each ≈ **$0.30–0.75/episode** — genuinely cheap for what it's
+replacing (a human researcher scrolling Wikipedia mid-show).
 
 ### Where results show up
 
-The user's own framing — "present little 'did you know' sections below the
-text area" — maps directly onto the tab model that already exists. Each tab
-already carries `video` and `text`; add a third piece of per-tab state,
+The framing — "present little 'did you know' sections below the text area"
+— maps directly onto the tab model that already exists. Each tab already
+carries `video` and `text`; add a third piece of per-tab state,
 `research: [{id, title, body, query, createdAt}]`, broadcast the same way
 `tab_text` is today (server holds it in `tabRooms`, relays to both peers,
-replayed to late joiners). No new sync mechanism needed — this is squarely
-inside the pattern `ws-rooms.js` already has for shared, ephemeral,
-per-tab state that dies with the room.
+replayed to late joiners). No new sync mechanism needed — this slots
+directly into the pattern `ws-rooms.js` already has for shared, ephemeral,
+per-tab state.
 
 ---
 
 ## Part 3 — Prompt control
 
-Two distinct things the ask calls for, and they map onto two different
-scopes:
+Two distinct things the ask calls for, mapping onto two different scopes:
 
 ### 1. The overall system prompt ("the rules"), one per room
 
@@ -167,7 +161,7 @@ activated prompt below. This is the actual enforcement point for "no
 spoilers": the host writes it once per episode (e.g. *"This is a recap
 podcast for [show]. Don't reveal or confirm plot details past episode 4.
 Keep answers to 2–3 sentences. If a lookup risks a spoiler, decline and say
-so instead of guessing."*), and because it's prepended unconditionally, no
+so instead of guessing."*). Because it's prepended unconditionally, no
 per-prompt template or ad-hoc host action can route around it — there's one
 place the rule lives, not one per template.
 
@@ -187,12 +181,12 @@ anywhere:
 - `[notes]` → substituted with the shared notes text for the active tab
 
 Clicking a template assembles: **room system prompt + template body (with
-placeholders filled from live tab state) + a recent transcript window**, and
-sends that as one call — result comes back as another `research` card, same
-delivery path as the automatic ones. This is naturally a small CRUD surface
-(create/edit/delete/reorder templates) plus a "run" button per template,
-host-only (mirrors the existing host/guest role split already in
-`ws-rooms.js`'s `recomputeRoles`).
+placeholders filled from live tab state) + a recent transcript window**,
+sent as one call — result comes back as another `research` card, same
+delivery path as the automatic ones. Small CRUD surface (create/edit/
+delete/reorder templates) plus a "run" button per template, host-only
+(mirrors the existing host/guest role split already in `ws-rooms.js`'s
+`recomputeRoles`).
 
 Storage: a `prompt_templates` table (`id`, room slug, `name`, `body`,
 `created_at`, maybe a `pinned`/order column) — small, standard CRUD, fits
@@ -204,7 +198,7 @@ Following the existing style/comment block at the top of `ws-rooms.js`:
 
 ```
 Client → server:
-  { type: 'transcript_chunk', text, isFinal }        — from the sender's own STT (path-dependent on Part 1)
+  { type: 'transcript_chunk', text, isFinal }          — from the sender's own SpeechRecognition
   { type: 'prompt_run', tabId, templateId | adhocBody } — host runs a template or manual lookup
   { type: 'research_dismiss', tabId, cardId }
 
@@ -214,23 +208,32 @@ Server → client:
   { type: 'research_dismiss', tabId, cardId }
 ```
 
-Transcript and research-card state would live in-memory per room, in the
-same `tabRooms`-shaped structure — not a new DB table — since everything
-else about a room (tabs, video state, notes) is already treated as ephemeral
-and dies with the room's expiry. No reason for the transcript to outlive
-that when nothing else does.
+All of this is gated server-side by `RESEARCH_ASSISTANT_ENABLED` — with the
+flag off, these message types are simply never processed (or rejected),
+same as any other feature-flagged server behavior.
+
+Transcript and research-card state live in-memory per room, in the same
+`tabRooms`-shaped structure — not a new DB table — since everything else
+about a room (tabs, video state, notes) is already ephemeral and dies with
+the room's expiry. No reason for the transcript to outlive that when
+nothing else does. (`prompt_templates` is the one exception worth
+persisting in SQLite — a host's saved prompt library is worth keeping
+across episodes, unlike the live transcript.)
 
 ---
 
-## Open decision for whoever's driving this next
+## Suggested build order (for whoever cuts tickets next)
 
-The one fork this doc deliberately didn't resolve: **on-device STT (Path A)
-vs. cloud STT (Path B)** in Part 1. Recommend on-device (`transformers.js` +
-Whisper `base` via WebGPU) as the default if keeping the "audio never
-touches the server" claim intact matters more than transcript accuracy —
-it's the only path that doesn't require new consent UI or a README rewrite.
-Cloud STT (Deepgram) is the better product if accuracy/latency matters more
-than that specific promise, and it's still cheap (~$0.50–0.70/episode) — it
-just isn't free of the privacy trade-off. Worth prototyping both against a
-real 10-minute recording before committing, since "good enough for a
-curiosity trigger" is an accuracy bar that's easy to guess wrong on paper.
+1. `RESEARCH_ASSISTANT_ENABLED` + `AI_API_KEY` env plumbing, threaded down
+   to the client exactly like `roomPassword` is today — ships as a no-op
+   with the flag off.
+2. Per-browser `SpeechRecognition` wrapper with auto-restart, wired to
+   `transcript_chunk` over the existing WS connection — no AI calls yet,
+   just prove live transcript flows both directions and survives a dropped
+   recognition session.
+3. Room-level system prompt: DB column + host settings UI.
+4. Two-stage funnel (classifier → research call) wired to real transcript
+   chunks, cards rendered under the tab's text area via `research_card`.
+5. Host prompt-template library (CRUD + `[script]`/`[notes]` substitution +
+   run button) — layered on top of the same `prompt_run` → `research_card`
+   path step 4 already built.
