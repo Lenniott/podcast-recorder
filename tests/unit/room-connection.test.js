@@ -26,6 +26,23 @@ function makeSocket() {
   return sock
 }
 
+/**
+ * A real WebSocket's close() updates readyState synchronously (to CLOSING,
+ * then CLOSED) but only fires onclose asynchronously, later. makeSocket()'s
+ * close() fires onclose synchronously, which can't reproduce bugs that only
+ * show up in that gap — this variant defers onclose to a microtask instead,
+ * matching real browser behavior closely enough to catch them.
+ */
+function makeAsyncCloseSocket() {
+  const sock = makeSocket()
+  sock.close = function () {
+    if (this.readyState === 3) return
+    this.readyState = 3
+    queueMicrotask(() => this.onclose?.())
+  }
+  return sock
+}
+
 function setup(overrides = {}) {
   const sockets = []
   const statuses = []
@@ -189,6 +206,36 @@ describe('createRoomConnection', () => {
 
     vi.advanceTimersByTime(20_000)
     expect(sockets).toHaveLength(1)
+  })
+
+  it('connect() right after disconnect() opens a new socket, even before the old close() has actually resolved', async () => {
+    // Regression: a real WebSocket.close() only fires onclose asynchronously.
+    // If disconnect() doesn't update status itself, a connect() called in
+    // that gap sees a stale 'connected'/'connecting' status and silently
+    // no-ops — nothing ever reconnects.
+    const sockets = []
+    const conn = createRoomConnection({
+      createSocket: () => {
+        const sock = makeAsyncCloseSocket()
+        sockets.push(sock)
+        return sock
+      },
+      onOpen: () => {},
+      onMessage: () => {},
+      onStatusChange: () => {}
+    })
+
+    conn.connect()
+    sockets[0].open()
+    conn.disconnect()
+    conn.connect() // synchronously right after — the old socket's onclose hasn't fired yet
+
+    expect(sockets).toHaveLength(2)
+
+    // Let the deferred onclose from the first socket actually fire, and
+    // confirm it doesn't retroactively mess with the new connection.
+    await Promise.resolve()
+    expect(sockets).toHaveLength(2)
   })
 })
 

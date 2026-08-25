@@ -838,6 +838,16 @@
     })
   }
 
+  // room-connection.js deliberately doesn't know about auth — its own
+  // auto-reconnect loop just keeps retrying on its own schedule, forever,
+  // with no way to ask "should I still be doing this?" connectWs()'s guard
+  // only covers the first manual connect; if auth is ever invalidated while
+  // this component stays mounted (session expiry, not just navigating
+  // away), this is what actually stops the loop.
+  $: if (browser && sessionStarted && !data.authenticated) {
+    room.disconnect()
+  }
+
   // Sidebar collapse changes the canvas's on-screen size — re-run the
   // backing-resolution reset once the DOM has caught up.
   $: if (browser) {

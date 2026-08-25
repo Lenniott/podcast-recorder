@@ -104,6 +104,13 @@ export function createRoomConnection({
   function disconnect() {
     closedByUs = true
     clearReconnectTimer()
+    // isLive() partly trusts `status`, and the real WebSocket.close() only
+    // updates readyState synchronously (to CLOSING) — its onclose, which is
+    // where status normally flips to 'disconnected', fires later, async.
+    // Without this, connect() called right after disconnect() would see a
+    // stale status still reading 'connected'/'connecting' and silently
+    // no-op, leaving nothing to ever reconnect.
+    setStatus('disconnected')
     socket?.close?.()
   }
 

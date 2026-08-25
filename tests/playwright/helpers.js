@@ -10,6 +10,13 @@ export async function trackLiveSockets(page) {
     window.WebSocket = class extends NativeWS {
       constructor(...args) {
         super(...args)
+        // Only track the app's own room socket (/ws?slug=...) — the page
+        // also has Vite's dev-server HMR socket running over WebSocket.
+        // Tracking that too meant closeLiveSockets() was closing Vite's
+        // connection as a side effect ("server connection lost, polling
+        // for restart"), which has nothing to do with what this is for.
+        const url = String(args[0] ?? '')
+        if (!url.includes('/ws?slug=')) return
         window.__prLiveSockets = window.__prLiveSockets || []
         window.__prLiveSockets.push(this)
         this.addEventListener('close', () => {
