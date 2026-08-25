@@ -1,33 +1,34 @@
 # Podpatch — Local Podcast Recorder
 
-Record lossless audio together, remotely. Audio never leaves your machine.
+Record great-quality audio together, even when you're in different places. Every recording is saved straight to each person's own computer — nothing gets uploaded anywhere.
 
 ## How it works
 
-- Host creates an episode (name + password) → gets a shareable URL
-- Guest visits the URL, enters the password
-- Both choose their microphone and hit **Start Recording** — read the on-screen line back to hear exactly what's being saved to disk before continuing
-- Browser writes WAV directly to local disk via File System Access API; the on-screen waveform reflects what's actually been saved, not just the live mic, so a problem with the recording itself is visible while it's happening
-- Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
-- Load both WAVs in any editor, line up the clap spike, done
-- **Shared tabs**: host and guest can both open tabs in a shared view — switching, adding, or closing a tab changes it for everyone. Each tab can hold a synced YouTube clip (paste a link — playback stays in sync for both; wear headphones, since the video's audio plays in each browser and is never mixed into the WAV) and always has a shared plain-text notes area underneath it, editable by both, with no save state.
-- Hold **Talk** (shown once a tab's video is playing) to duck your local video volume while you speak.
+- The host creates an episode (gives it a name and a password) and gets a link to share.
+- The guest opens that link and enters the password.
+- Both people pick their microphone and press **Start Recording**.
+- Right after that, each person reads a line of text out loud and hits Listen. This plays back exactly what got saved, so you both know your recording is working before you really get going.
+- Your browser saves the audio straight to your own hard drive as a WAV file. The waveform on screen shows what's actually been saved — not just what your mic is picking up — so you'd notice right away if something went wrong.
+- Press **👏 Clap** at any point to mark the same moment in both recordings. This makes it easy to line them up later.
+- When you're done, open both WAV files in any audio editor, find the clap, and line them up. Now both recordings play in sync.
+- **Shared tabs**: everyone in the room sees the same set of tabs. Opening, closing, or switching a tab changes it for everyone. Paste a YouTube link into a tab and it plays in sync for both people — wear headphones, since the video's own sound plays in each browser but is never mixed into your recording. Each tab also has a shared notes box underneath it that anyone can type in.
+- Hold **Talk** (it appears once a video is playing) to turn down your own video's volume while you talk.
 
-The server only carries:
-- WebSocket presence (who's in the room)
-- Clap sync events
-- Shared tab state (tab list, each tab's YouTube video id + position, and its shared text — never the video itself)
-- Room metadata (name, password hash) in SQLite
+The server never sees or stores your audio. All it handles is:
+- Who's currently in the room
+- The Clap sync signal
+- The shared tabs — which ones exist, what video is in each, and the shared notes (never the video itself)
+- Basic room details (its name and a password hash), kept in a small local database
 
-**No audio ever goes to the server.**
+**Your audio never touches the server.**
 
 ---
 
 ## Requirements
 
-- **Node.js 22+**
-- **Chrome or Edge** (for File System Access API — Firefox does not support it)
-- Docker (for home server deployment)
+- **Node.js 22 or newer**
+- **Chrome or Edge** — recording relies on a browser feature called the File System Access API, which Firefox doesn't support yet.
+- **Docker**, if you want to host this on your own server.
 
 ---
 
@@ -35,7 +36,7 @@ The server only carries:
 
 ```bash
 cp .env.example .env
-# Edit .env — set SECRET to something random
+# Open .env and set SECRET to any random string
 
 npm install
 npm run dev
@@ -45,40 +46,42 @@ Open `http://localhost:5173`
 
 ---
 
-## Production (home server with Docker)
+## Production (hosting it on your own server)
 
-Clone the repo (compose builds from this Dockerfile; a compose-file URL is not enough):
+Clone the repo — Docker Compose needs to build the image from this repo's Dockerfile, so just pointing it at a compose file on its own isn't enough:
 
 ```bash
 git clone https://github.com/Lenniott/podcast-recorder.git
 cd podcast-recorder
 cp .env.example .env
-# Set SECRET (required). SITE_PASSWORD is optional (locks the create-episode page).
-# Behind TLS, set HTTPS=true (and FORCE_HTTPS=true if the proxy terminates TLS).
+# Set SECRET — this is required. SITE_PASSWORD is optional; set it if you
+# want to lock the "create episode" page behind a password.
+# Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
+# proxy is the one handling HTTPS).
 
 chmod +x update.sh
 docker compose up -d --build
 ```
 
-Compose publishes **7799** on the host (`7799:3000` in `docker-compose.yml`). Open `http://<host>:7799`. SQLite lives in the `podcast-recorder-data` volume; `.env` is local and gitignored.
+This runs the app on port **7799** on your server (it maps to port 3000 inside the container — see `docker-compose.yml`). Open `http://<your-server>:7799` to check it's up. Your rooms are stored in a Docker volume called `podcast-recorder-data`. Your `.env` file stays on your server only — it's never tracked by git.
 
-### Updating after you push
+### Updating after you push new changes
 
-On the laptop: commit and push to `main`.
+On your own computer: commit your changes and push to `main`.
 
-On the server, from this directory:
+On the server, from this folder:
 
 ```bash
 sudo ./update.sh
 ```
 
-That `git pull --ff-only`s, then `docker compose up -d --build`, then prints `ps` and the last 20 log lines. `./update.sh` also works; the script sudo's docker if you're not root.
+This pulls the latest code, rebuilds and restarts the container, then shows you the running containers and the last 20 lines of logs. (Running `./update.sh` without `sudo` also works — it'll ask for permission itself if it needs it.)
 
-`--ff-only` refuses to pull if the server has local commits or a dirty merge. Stash or discard server-side edits, or the pull stops on purpose.
+If the server has its own local changes that would conflict, the update stops on purpose rather than overwriting them. Undo those changes on the server, or save them somewhere else, then try again.
 
-Rooms survive the rebuild. Never `docker compose down -v` (that deletes the volume).
+Rebuilding never deletes your rooms. The one command to avoid is `docker compose down -v` — that's the one that wipes your data.
 
-Sanity check:
+To double-check everything's working:
 
 ```bash
 docker compose ps
@@ -86,9 +89,9 @@ docker compose logs --tail 20 podcast-recorder
 curl -sI http://127.0.0.1:7799/ | head -1
 ```
 
-You want the container **Up**, logs showing `listening on http://0.0.0.0:3000` and `SECRET = ✓ set`, and `HTTP/1.1 200 OK`.
+You're looking for: the container listed as **Up**, a log line saying `listening on http://0.0.0.0:3000` and `SECRET = ✓ set`, and a response of `HTTP/1.1 200 OK`.
 
-Put it behind Nginx/Caddy for HTTPS. Proxy to **7799**, not 3000.
+To make this reachable over HTTPS, put it behind a reverse proxy like Nginx or Caddy, pointing at port **7799** (not 3000).
 
 ### Quick Caddy config
 
@@ -116,46 +119,43 @@ server {
 }
 ```
 
-The `Upgrade` / `Connection` headers are essential — without them WebSocket (presence, clap, and shared YouTube state) won't work.
+The `Upgrade` and `Connection` headers are required — without them, the live features (who's online, Clap, and shared YouTube playback) won't work.
 
-### Managing rooms in Portainer/Docker
+### Managing rooms in Portainer or Docker
 
-Portainer console often defaults to `bash`, but this image is Alpine-based and only has `sh`.
-
-Use one of these:
+Portainer's console often defaults to `bash`, but this image is built on Alpine Linux, which only has `sh`. Use one of these instead:
 
 ```bash
-# From host
+# From your host machine
 docker exec -it podcast-recorder sh
 
-# Then inside container
+# Then inside the container
 npm run rooms
 npm run rooms:delete 1,2,4-6
 npm run rooms:delete all
 ```
 
-Or in Portainer "Container console", change command from `bash` to `sh`.
+Or in Portainer's "Container console", just switch the command from `bash` to `sh`.
 
 ---
 
-## Resilience
+## What happens when things go wrong
 
-| Scenario | Behaviour |
+| If this happens | Here's what you can expect |
 |---|---|
-| Internet drops | Recording continues locally. Connection reconnects automatically (with backoff) when back, and each person's Recording/Talk status is correctly restored on the other side — it doesn't get stuck showing "not recording." |
-| Disk write falls behind | Writes queue in the background rather than ever being inserted as fake silence — the saved file stays complete and in the right order regardless of how slow storage gets. |
-| Mic disconnected | `devicechange` event detected, mic auto-reconnects. Gap in audio, file stays intact. |
-| Browser tab crashes | WAV header won't be patched — file is incomplete. See note below. |
-| File too large | File System Access API streams directly to disk — no memory limit. |
+| Your internet drops | Recording keeps going on your own computer the whole time. Once you're back online, the connection reconnects on its own, and both people's "Recording" status shows correctly again — it won't get stuck showing the wrong thing. |
+| Your hard drive is slow to keep up | The app just waits for your disk to catch up — it never fills the gap with fake silence. Your recording stays complete and in the right order. |
+| Your microphone gets unplugged | The app notices right away and switches to another available mic automatically. You'll get a short gap in that spot, but the rest of the file is untouched. |
+| Your browser tab crashes | The audio that was already saved is fine, but the file's header (the part that says how long the file is) won't get updated, so some players will call it "broken." See the fix below. |
+| Your recording runs very long | No problem — the file is written straight to your hard drive as you go, so there's no memory limit to run into. |
 
-> **Tab crash recovery:** If the tab crashes mid-recording, the WAV data chunk is written but the header won't reflect the real size. You can recover it with `ffmpeg -i broken.wav -c copy fixed.wav` which re-muxes and fixes the header.
+> **Fixing a file after a tab crash:** if your browser tab crashes mid-recording, your audio is safe, but the file's header wasn't updated with the final size. Fix it with `ffmpeg -i broken.wav -c copy fixed.wav` — this rewrites the header without touching your audio.
 
 ---
 
-## Sync workflow (post-production)
+## Lining up two recordings after you're done
 
-1. Both hosts hit **👏 Clap** at the start (and optionally end) of the session.
-2. In your DAW (Reaper, Logic, Audacity, etc.), load both WAV files.
-3. Find the spike — it's the 1kHz tone burst, visible as a clear vertical line in the waveform.
-4. Align the spikes. Tracks are now in sync.
-
+1. Both people should hit **👏 Clap** once at the start of the session (and again at the end, if you like).
+2. Open both WAV files in your editing software — Reaper, Logic, Audacity, whatever you use.
+3. Look for the clap — it shows up as a sharp spike in the waveform.
+4. Line up the two spikes. Your recordings are now in sync.
