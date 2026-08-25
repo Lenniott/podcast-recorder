@@ -12,6 +12,7 @@
   import RoomTabs from '$lib/RoomTabs.svelte'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
   import { createRoomConnection } from '$lib/room-connection.js'
+  import { createClockSync } from '$lib/clock-sync.js'
 
   function focus(el) { el.focus() }
 
@@ -84,14 +85,16 @@
   let clapTimeout = null
 
   // ─── Clock sync ──────────────────────────────────────────────────────
-  // Offset between this client's Date.now() and the server's Date.now().
-  // clockOffset = serverTime - clientTime at the same physical moment.
-  // Used to correct triggerAtMs (which is in server time) into local time
-  // for both clap tone injection and Watch Together playback.
+  // Ping-burst offset estimate (clap tone injection + Watch Together
+  // playback), extracted to $lib/clock-sync.js. `send` is bound lazily via
+  // the arrow function below — `room` (declared further down) only needs to
+  // exist by the time syncClock()/handlePong() are actually called, not at
+  // this point in module init.
+  const clockSync = createClockSync({ send: (msg) => room.send(msg) })
+  // Plain reassignment (not a `$:` derivation) so Svelte's compiler-tracked
+  // reactivity actually fires — clockSync.offset is a getter on a plain JS
+  // object, invisible to Svelte unless something re-reads it on assignment.
   let clockOffset = 0
-  let _clockSamples = []
-  let _pingSeq = 0
-  const _pendingPings = new Map() // seq → sentAt (client time)
 
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
@@ -667,17 +670,6 @@
     // Server echoes back to all (including sender) which triggers tone injection
   }
 
-  function syncClock() {
-    // Ping burst → median RTT/2 estimate of clockOffset (clap + Watch Together).
-    _clockSamples = []
-    for (let i = 0; i < 3; i++) {
-      const seq = ++_pingSeq
-      const sentAt = Date.now()
-      _pendingPings.set(seq, sentAt)
-      room.send({ type: 'ping', seq, sentAt })
-    }
-  }
-
   function injectClap(from, triggerAtMs = null) {
     const delayMs = Number.isFinite(triggerAtMs)
       ? Math.max(0, triggerAtMs - (Date.now() + clockOffset))
@@ -717,18 +709,13 @@
     },
     onOpen() {
       room.send({ type: 'join', name: getJoinName(), clientId })
-      syncClock()
+      clockSync.syncClock()
     },
     onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
       if (msg.type === 'pong') {
-        const sentAt = _pendingPings.get(msg.seq)
-        if (sentAt !== undefined) {
-          _pendingPings.delete(msg.seq)
-          _clockSamples.push(msg.serverReceivedAt - (sentAt + Date.now()) / 2)
-          if (_clockSamples.length >= 3)
-            clockOffset = _clockSamples.reduce((a, b) => a + b) / _clockSamples.length
-        }
+        clockSync.handlePong(msg)
+        clockOffset = clockSync.offset
       }
       if (msg.type === 'clap') {
         // Flash even when the audio graph isn't up yet (no mic). Queue the
