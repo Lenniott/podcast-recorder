@@ -15,6 +15,7 @@
   import { createClockSync } from '$lib/clock-sync.js'
   import { createRecordingCheck } from '$lib/recording-check.js'
   import { createWaveformRenderer } from '$lib/waveform-renderer.js'
+  import { createAudioEngine } from '$lib/audio-engine.js'
 
   function focus(el) { el.focus() }
 
@@ -34,12 +35,11 @@
   let micFallbackName = ''     // label of the fallback device
 
   // ─── Audio recording state ──────────────────────────────────────────
-  let audioCtx = null
-  let workletNode = null
-  let micSource = null
-  let micStream = null
-  let analyserNode = null
-  let silentSink = null
+  // AudioContext/worklet/analyser/gain-node graph + mic connect/fallback +
+  // device-gap tracking now live in $lib/audio-engine.js (constructed
+  // further down, once its callbacks are all in scope). `audioEngineReady`
+  // replaces the old `!audioCtx` checks at each lazy-init call site.
+  let audioEngineReady = false
   let fileWritable = null      // FileSystemWritableFileStream
   let activeFileHandle = null
   let recordingState = 'idle'  // idle | recording | stopping
@@ -48,11 +48,6 @@
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
   let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
-  // Set the instant the current mic stops flowing (device swap/dropout),
-  // cleared once audio is flowing again. Read by captureWriter.notifyDeviceGap()
-  // so silence is only ever written for a REAL gap, never inferred from
-  // how long a disk write took (see $lib/capture-writer.js for why that matters).
-  let micGapStartedAt = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   // Draw loop + resize live in $lib/waveform-renderer.js; canvas is bound
@@ -118,8 +113,7 @@
     : null
 
   // ─── Gain ────────────────────────────────────────────────────────────
-  let gainNode    = null
-  let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
+  let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB); gain node lives in audio-engine.js
 
   // ─── dBFS meter ──────────────────────────────────────────────────────
   let dbLevel      = METER_MIN  // current RMS in dBFS (numeric readout)
@@ -241,7 +235,7 @@
   /** User manually picked a new mic from the dropdown */
   async function changeMic() {
     micFallback = false
-    if (!audioCtx) {
+    if (!audioEngineReady) {
       try {
         await initAudio()
       } catch (err) {
@@ -249,205 +243,69 @@
         return
       }
     }
-    await connectMic(selectedDeviceId, { strictDevice: true })
-  }
-
-  /**
-   * Connect to a specific device by ID.
-   * Uses `ideal` (not `exact`) so the browser can recover if the device
-   * is momentarily unavailable rather than hard-throwing.
-   * Attaches track.onended so we react the instant the mic is yanked.
-   */
-  async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
-    if (!audioCtx) return
-
-    // Marks the start of a real capture gap unless one is already running
-    // (e.g. track.onended already marked it more precisely — see below).
-    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
-
-    micSource?.disconnect()
-    micStream?.getTracks().forEach(t => t.stop())
-
-    const constraints = {
-      audio: {
-        // For manual user picks, require that exact device.
-        // For automatic reconnect/fallback, allow browser flexibility.
-        deviceId: deviceId
-          ? (strictDevice ? { exact: deviceId } : { ideal: deviceId })
-          : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl:  false,
-        channelCount: 1
-      }
-    }
-
-    micStream = await navigator.mediaDevices.getUserMedia(constraints)
-
-    // Instant detection: fires before devicechange, keeps recording alive.
-    // Mark the gap the moment audio actually stops, not once the fallback
-    // logic gets around to reacting to it.
-    micStream.getAudioTracks().forEach(track => {
-      track.onended = () => {
-        micGapStartedAt = audioCtx?.currentTime ?? null
-        connectMicWithFallback()
-      }
-    })
-
-    micSource = audioCtx.createMediaStreamSource(micStream)
-    micSource.connect(gainNode)
-    gainNode.connect(workletNode)
-    gainNode.connect(analyserNode)
-    injectReconnectMarker()
-    resolveMicGap()
-  }
-
-  /**
-   * Report a resolved capture gap to the Capture Writer as real, measured
-   * wall-clock silence — the only path allowed to write silence into the
-   * take. See $lib/capture-writer.js for why write-latency must never do this.
-   */
-  function resolveMicGap() {
-    if (micGapStartedAt == null) return
-    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
-    micGapStartedAt = null
-    if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
-  }
-
-  /**
-   * Mic disappeared. Walk through every available device until one works.
-   * Last resort: no deviceId at all (browser picks built-in).
-   * Recording never stops — there will be a short gap in audio, nothing more.
-   */
-  async function connectMicWithFallback() {
-    await loadDevices()
-
-    // Try the currently selected device first (it may have just blipped)
-    const stillAvailable = devices.some(d => d.deviceId === selectedDeviceId)
-    if (stillAvailable) {
-      try {
-        await connectMic(selectedDeviceId, { strictDevice: true })
-        micFallback = false
-        return
-      } catch { /* fall through */ }
-    }
-
-    // Try each remaining device
-    for (const device of devices) {
-      if (device.deviceId === selectedDeviceId) continue
-      try {
-        await connectMic(device.deviceId)
-        selectedDeviceId  = device.deviceId
-        micFallback       = true
-        micFallbackName   = device.label || 'Unknown microphone'
-        return
-      } catch { continue }
-    }
-
-    // Last resort: let the browser pick (usually the built-in mic)
-    try {
-      micSource?.disconnect()
-      micStream?.getTracks().forEach(t => t.stop())
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
-      })
-      micStream.getAudioTracks().forEach(track => {
-        track.onended = () => {
-          micGapStartedAt = audioCtx?.currentTime ?? null
-          connectMicWithFallback()
-        }
-      })
-      micSource = audioCtx.createMediaStreamSource(micStream)
-      micSource.connect(gainNode)
-      gainNode.connect(workletNode)
-      gainNode.connect(analyserNode)
-      injectReconnectMarker()
-      resolveMicGap()
-
-      // Figure out what we actually got
-      await loadDevices()
-      const label = micStream.getAudioTracks()[0]?.label || ''
-      const match = devices.find(d => d.label === label)
-      if (match) selectedDeviceId = match.deviceId
-      micFallback     = true
-      micFallbackName = label || 'Built-in microphone'
-    } catch {
-      micPermission = 'denied'
-    }
+    await audioEngine.changeMic(selectedDeviceId)
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // AUDIO CONTEXT + WORKLET
+  // AUDIO ENGINE (AudioContext + worklet + mic resilience — $lib/audio-engine.js)
   // ───────────────────────────────────────────────────────────────────
 
-  async function initAudio() {
-    audioCtx = new AudioContext({ sampleRate: 48000 })
-    if (audioCtx.state === 'suspended') {
-      try { await audioCtx.resume() } catch {}
-    }
+  const audioEngine = createAudioEngine({
+    onLevel(rms, peak) {
+      // Bar + readout are both RMS; only the hold line shows peak
+      dbLevel = dbfs(rms)
+      const peakDbNow = dbfs(peak)
 
-    await audioCtx.audioWorklet.addModule('/worklet/recorder-processor.js')
+      const now = performance.now()
+      const dtSec = lastLevelAt ? Math.min(0.25, (now - lastLevelAt) / 1000) : 0.05
+      lastLevelAt = now
+      meterFillDb = nextFillDb(meterFillDb, dbLevel, dtSec)
 
-    workletNode = new AudioWorkletNode(audioCtx, 'recorder-processor')
-    analyserNode = audioCtx.createAnalyser()
-    silentSink = audioCtx.createGain()
-    silentSink.gain.value = 0
-    analyserNode.fftSize = 2048
-    writtenRing = createWrittenAudioRing(analyserNode.fftSize)
-    gainNode = audioCtx.createGain()
-    gainNode.gain.value = gainValue
-    // Keep the worklet graph "live" without sending audible audio to speakers.
-    workletNode.connect(silentSink)
-    silentSink.connect(audioCtx.destination)
-
-    workletNode.port.onmessage = async (e) => {
-      if (e.data.type === 'level') {
-        const { rms, peak } = e.data
-
-        // Bar + readout are both RMS; only the hold line shows peak
-        dbLevel = dbfs(rms)
-        const peakDbNow = dbfs(peak)
-
-        const now = performance.now()
-        const dtSec = lastLevelAt ? Math.min(0.25, (now - lastLevelAt) / 1000) : 0.05
-        lastLevelAt = now
-        meterFillDb = nextFillDb(meterFillDb, dbLevel, dtSec)
-
-        if (peakDbNow > peakHoldDb) {
-          peakHoldDb = peakDbNow
-          clearTimeout(peakHoldTimer)
-          peakHoldTimer = setTimeout(() => { peakHoldDb = METER_MIN }, 2000)
-        }
-
-        // Clip detection (peak within 0.5 dB of full scale)
-        if (peakDbNow >= -0.5) {
-          isClipping = true
-          clearTimeout(clipTimer)
-          clipTimer = setTimeout(() => { isClipping = false }, 2000)
-        }
+      if (peakDbNow > peakHoldDb) {
+        peakHoldDb = peakDbNow
+        clearTimeout(peakHoldTimer)
+        peakHoldTimer = setTimeout(() => { peakHoldDb = METER_MIN }, 2000)
       }
-      if (e.data.type === 'data' && captureWriter && recordingState === 'recording') {
-        const i16 = float32ToInt16(e.data.buffer)
+
+      // Clip detection (peak within 0.5 dB of full scale)
+      if (peakDbNow >= -0.5) {
+        isClipping = true
+        clearTimeout(clipTimer)
+        clipTimer = setTimeout(() => { isClipping = false }, 2000)
+      }
+    },
+    onChunk(buffer) {
+      if (captureWriter && recordingState === 'recording') {
+        const i16 = float32ToInt16(buffer)
         // Queued internally and flushed in the background — a slow disk
         // just makes the queue longer, it can never fabricate silence.
-        // Real gaps only ever come from notifyDeviceGap() (see connectMic).
+        // Real gaps only ever come from notifyDeviceGap() (see onDeviceGapResolved).
         bytesWritten += captureWriter.writeChunk(i16)
       }
-    }
+    },
+    onDeviceGapResolved(gapSec) {
+      if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
+    },
+    onMicConnected: injectReconnectMarker,
+    loadDevices,
+    getDevices: () => devices,
+    getSelectedDeviceId: () => selectedDeviceId,
+    setSelectedDeviceId: (id) => { selectedDeviceId = id },
+    setMicFallback: (v) => { micFallback = v },
+    setMicFallbackName: (name) => { micFallbackName = name },
+    setMicPermissionDenied: () => { micPermission = 'denied' }
+  })
 
-    await connectMic()
+  async function initAudio() {
+    await audioEngine.init()
+    audioEngineReady = true
+    audioEngine.setGain(gainValue) // apply whatever the slider already holds
+    writtenRing = createWrittenAudioRing(audioEngine.getAnalyserNode().fftSize)
     while (pendingClaps.length > 0) {
       const ev = pendingClaps.shift()
       injectClap(ev.from, ev.triggerAtMs)
     }
     waveformRenderer.start()
-  }
-
-  async function ensureAudioRunning() {
-    if (!audioCtx) return
-    if (audioCtx.state !== 'running') {
-      try { await audioCtx.resume() } catch {}
-    }
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -456,7 +314,7 @@
 
   const waveformRenderer = createWaveformRenderer({
     getCanvas: () => canvas,
-    getAnalyserNode: () => analyserNode,
+    getAnalyserNode: () => audioEngine.getAnalyserNode(),
     getWrittenRing: () => writtenRing,
     isRecording: () => recordingState === 'recording'
   })
@@ -499,7 +357,7 @@
   }
 
   async function startRecording() {
-    if (!audioCtx || !workletNode) {
+    if (!audioEngineReady) {
       try {
         await initAudio()
       } catch (err) {
@@ -508,7 +366,7 @@
         return
       }
     }
-    await ensureAudioRunning()
+    await audioEngine.ensureRunning()
     if (!('showSaveFilePicker' in window)) {
       alert('Your browser does not support the File System Access API.\nPlease use Chrome or Edge.')
       return
@@ -531,12 +389,12 @@
 
     fileWritable = await fileHandle.createWritable()
     activeFileHandle = fileHandle
-    recordingSampleRate = Math.round(audioCtx?.sampleRate || 48000)
+    recordingSampleRate = audioEngine.sampleRate
 
     // Write placeholder WAV header (will patch at end with real size)
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
-    micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
+    audioEngine.clearPendingGap() // any gap before "recording" started isn't ours to backfill
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
       write: (buf) => fileWritable.write(buf),
@@ -595,7 +453,7 @@
   // ───────────────────────────────────────────────────────────────────
 
   function updateGain() {
-    if (gainNode) gainNode.gain.value = gainValue
+    audioEngine.setGain(gainValue)
   }
 
   function sendClap() {
@@ -607,9 +465,7 @@
     const delayMs = Number.isFinite(triggerAtMs)
       ? Math.max(0, triggerAtMs - (Date.now() + clockOffset))
       : 0
-    setTimeout(() => {
-      workletNode?.port.postMessage({ type: 'clap' })
-    }, delayMs)
+    audioEngine.scheduleClapTone(delayMs)
     lastClapFrom = from
     clearTimeout(clapTimeout)
     clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
@@ -618,7 +474,7 @@
   function injectReconnectMarker() {
     if (!debugReconnectMarker) return
     if (recordingState !== 'recording') return
-    workletNode?.port.postMessage({ type: 'debug_marker' })
+    audioEngine.postDebugMarker()
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -656,7 +512,7 @@
         lastClapFrom = msg.from
         clearTimeout(clapTimeout)
         clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
-        if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
+        if (!audioEngineReady) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
       if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
@@ -688,7 +544,7 @@
 
   function onDeviceChange() {
     // Device list changed — reload and reconnect if our mic disappeared
-    connectMicWithFallback().catch(console.error)
+    audioEngine.connectMicWithFallback().catch(console.error)
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -774,9 +630,7 @@
     clearTimeout(clipTimer)
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
     room.disconnect()
-    micStream?.getTracks().forEach(t => t.stop())
-    silentSink?.disconnect()
-    audioCtx?.close()
+    audioEngine.close()
     navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange)
   })
 </script>
