@@ -1,4 +1,4 @@
-# Podpatch — Local Podcast Recorder
+# Home Recor — Local Podcast Recorder
 
 Record great-quality audio together, even when you're in different places. Every recording is saved straight to each person's own computer — nothing gets uploaded anywhere.
 
