@@ -3,7 +3,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
+  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
@@ -13,6 +13,7 @@
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
   import { createRoomConnection } from '$lib/room-connection.js'
   import { createClockSync } from '$lib/clock-sync.js'
+  import { createRecordingCheck } from '$lib/recording-check.js'
 
   function focus(el) { el.focus() }
 
@@ -66,19 +67,12 @@
   let writtenRing = null
 
   // ─── Record-start listen-back check ──────────────────────────────────
-  const CHECK_SENTENCES = [
-    'The quick brown fox jumps over the lazy dog.',
-    'Pack my box with five dozen liquor jugs.',
-    'Sphinx of black quartz, judge my vow.',
-    'How vexingly quick daft zebras jump.',
-    'Bright vixens jump; dozy fowl quack.'
-  ]
-  const CHECK_PREVIEW_MAX_SAMPLES = 30 * 48000 // cap buffering at 30s regardless of sample rate specifics
+  // State machine (sentence pick, preview buffer + cap) lives in
+  // $lib/recording-check.js; these two stay local reactive mirrors — same
+  // reason as clockOffset above, plain reassignment so Svelte tracks it.
+  const recordingCheck = createRecordingCheck()
   let checkModalOpen = false
   let checkSentence = ''
-  let collectingPreview = false
-  let previewChunks = []
-  let previewSampleCount = 0
 
   // ─── Clap state ─────────────────────────────────────────────────────
   let lastClapFrom = null
@@ -533,34 +527,27 @@
    */
   function handleWritten(i16) {
     writtenRing?.push(i16)
-    if (collectingPreview && previewSampleCount < CHECK_PREVIEW_MAX_SAMPLES) {
-      previewChunks.push(i16)
-      previewSampleCount += i16.length
-    }
+    recordingCheck.handleWritten(i16)
   }
 
   function startRecordingCheck() {
-    checkSentence = CHECK_SENTENCES[Math.floor(Math.random() * CHECK_SENTENCES.length)]
-    previewChunks = []
-    previewSampleCount = 0
-    collectingPreview = true
+    recordingCheck.start()
+    checkSentence = recordingCheck.sentence
     checkModalOpen = true
   }
 
   function buildCheckPreview() {
-    return buildWavBlob(previewChunks, recordingSampleRate)
+    return recordingCheck.buildPreview(recordingSampleRate)
   }
 
   function confirmRecordingCheck() {
+    recordingCheck.confirm()
     checkModalOpen = false
-    collectingPreview = false
-    previewChunks = []
   }
 
   async function rejectRecordingCheck() {
+    recordingCheck.reject()
     checkModalOpen = false
-    collectingPreview = false
-    previewChunks = []
     await stopRecording()
   }
 
@@ -627,9 +614,8 @@
     // still up (not via its own "something's wrong" path) should still
     // close it cleanly rather than leave it showing over an idle room.
     if (checkModalOpen) {
+      recordingCheck.close()
       checkModalOpen = false
-      collectingPreview = false
-      previewChunks = []
     }
 
     // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
