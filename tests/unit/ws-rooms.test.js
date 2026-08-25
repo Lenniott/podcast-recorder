@@ -124,6 +124,23 @@ describe('setupWss — connection handling', () => {
     expect(host.recording).toBe(true)
   })
 
+  it('same-clientId reconnect drops recording until the client resends it', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    const afterJoin = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterJoin.peers.find(p => p.name === 'Host').recording).toBe(false)
+
+    ws2.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+    const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterResync.peers.find(p => p.name === 'Host').recording).toBe(true)
+  })
+
   it('removes peer and updates presence on disconnect', () => {
     const ws1 = mockWs()
     const ws2 = mockWs()

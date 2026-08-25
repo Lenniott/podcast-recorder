@@ -1,20 +1,54 @@
 import { expect } from '@playwright/test'
 
 /**
+ * Keep a handle on live WebSockets so a test can close the room socket
+ * without waiting for the Vite proxy to idle-timeout it.
+ */
+export async function trackLiveSockets(page) {
+  await page.addInitScript(() => {
+    const NativeWS = window.WebSocket
+    window.WebSocket = class extends NativeWS {
+      constructor(...args) {
+        super(...args)
+        // Only track the app's own room socket (/ws?slug=...) — the page
+        // also has Vite's dev-server HMR socket running over WebSocket.
+        // Tracking that too meant closeLiveSockets() was closing Vite's
+        // connection as a side effect ("server connection lost, polling
+        // for restart"), which has nothing to do with what this is for.
+        const url = String(args[0] ?? '')
+        if (!url.includes('/ws?slug=')) return
+        window.__prLiveSockets = window.__prLiveSockets || []
+        window.__prLiveSockets.push(this)
+        this.addEventListener('close', () => {
+          window.__prLiveSockets = (window.__prLiveSockets || []).filter((s) => s !== this)
+        })
+      }
+    }
+  })
+}
+
+export async function closeLiveSockets(page) {
+  await page.evaluate(() => {
+    for (const ws of window.__prLiveSockets || []) {
+      try { ws.close() } catch {}
+    }
+  })
+}
+
+/**
  * Stub the YouTube IFrame API so Watch Together can load without hitting youtube.com.
  * Must be installed before navigation (page.addInitScript).
  */
 export async function stubYouTubeApi(page) {
   await page.addInitScript(() => {
-    // File System Access API is required to pass the room's browser gate.
-    if (!('showSaveFilePicker' in window)) {
-      window.showSaveFilePicker = async () => ({
-        createWritable: async () => ({
-          write: async () => {},
-          close: async () => {}
-        })
+    // Always stub — Chromium now ships File System Access, and a real picker
+    // would abort startRecording() (AbortError) so the record button never flips.
+    window.showSaveFilePicker = async () => ({
+      createWritable: async () => ({
+        write: async () => {},
+        close: async () => {}
       })
-    }
+    })
 
     class FakePlayer {
       constructor(_el, opts) {

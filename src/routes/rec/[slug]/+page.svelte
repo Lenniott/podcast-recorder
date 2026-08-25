@@ -3,11 +3,15 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
+  import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
+  import { createCaptureWriter } from '$lib/capture-writer.js'
+  import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
+  import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  import { createRoomConnection } from '$lib/room-connection.js'
 
   function focus(el) { el.focus() }
 
@@ -15,7 +19,6 @@
   export let form   // action result
 
   // ─── WebSocket state ────────────────────────────────────────────────
-  let ws = null
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost }]
   let roomTabs = null          // RoomTabs component instance
@@ -39,17 +42,42 @@
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
   let recordingTimer = null
-  let bytesWritten = 0
-  let dataByteCount = 0        // PCM bytes written (for WAV header patch)
+  let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
-  let recordingStartAudioTime = 0
-  let samplesWritten = 0
+  let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
+  // Set the instant the current mic stops flowing (device swap/dropout),
+  // cleared once audio is flowing again. Read by captureWriter.notifyDeviceGap()
+  // so silence is only ever written for a REAL gap, never inferred from
+  // how long a disk write took (see $lib/capture-writer.js for why that matters).
+  let micGapStartedAt = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
   let canvasCtx
   let animFrame
   let analyserData
+  // While recording, the waveform draws from this instead of analyserNode —
+  // it only ever holds audio the Capture Writer has confirmed was actually
+  // written to disk (fed via captureWriter's onWritten). The mic signal can
+  // look perfectly healthy while the file silently diverges from it; a
+  // display sourced from the mic can never catch that. See
+  // $lib/written-audio-ring.js.
+  let writtenRing = null
+
+  // ─── Record-start listen-back check ──────────────────────────────────
+  const CHECK_SENTENCES = [
+    'The quick brown fox jumps over the lazy dog.',
+    'Pack my box with five dozen liquor jugs.',
+    'Sphinx of black quartz, judge my vow.',
+    'How vexingly quick daft zebras jump.',
+    'Bright vixens jump; dozy fowl quack.'
+  ]
+  const CHECK_PREVIEW_MAX_SAMPLES = 30 * 48000 // cap buffering at 30s regardless of sample rate specifics
+  let checkModalOpen = false
+  let checkSentence = ''
+  let collectingPreview = false
+  let previewChunks = []
+  let previewSampleCount = 0
 
   // ─── Clap state ─────────────────────────────────────────────────────
   let lastClapFrom = null
@@ -235,6 +263,10 @@
   async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
     if (!audioCtx) return
 
+    // Marks the start of a real capture gap unless one is already running
+    // (e.g. track.onended already marked it more precisely — see below).
+    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
+
     micSource?.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
 
@@ -254,9 +286,14 @@
 
     micStream = await navigator.mediaDevices.getUserMedia(constraints)
 
-    // Instant detection: fires before devicechange, keeps recording alive
+    // Instant detection: fires before devicechange, keeps recording alive.
+    // Mark the gap the moment audio actually stops, not once the fallback
+    // logic gets around to reacting to it.
     micStream.getAudioTracks().forEach(track => {
-      track.onended = () => connectMicWithFallback()
+      track.onended = () => {
+        micGapStartedAt = audioCtx?.currentTime ?? null
+        connectMicWithFallback()
+      }
     })
 
     micSource = audioCtx.createMediaStreamSource(micStream)
@@ -264,6 +301,19 @@
     gainNode.connect(workletNode)
     gainNode.connect(analyserNode)
     injectReconnectMarker()
+    resolveMicGap()
+  }
+
+  /**
+   * Report a resolved capture gap to the Capture Writer as real, measured
+   * wall-clock silence — the only path allowed to write silence into the
+   * take. See $lib/capture-writer.js for why write-latency must never do this.
+   */
+  function resolveMicGap() {
+    if (micGapStartedAt == null) return
+    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
+    micGapStartedAt = null
+    if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
   }
 
   /**
@@ -303,12 +353,18 @@
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
       })
-      micStream.getAudioTracks().forEach(track => { track.onended = () => connectMicWithFallback() })
+      micStream.getAudioTracks().forEach(track => {
+        track.onended = () => {
+          micGapStartedAt = audioCtx?.currentTime ?? null
+          connectMicWithFallback()
+        }
+      })
       micSource = audioCtx.createMediaStreamSource(micStream)
       micSource.connect(gainNode)
       gainNode.connect(workletNode)
       gainNode.connect(analyserNode)
       injectReconnectMarker()
+      resolveMicGap()
 
       // Figure out what we actually got
       await loadDevices()
@@ -340,6 +396,7 @@
     silentSink.gain.value = 0
     analyserNode.fftSize = 2048
     analyserData = new Float32Array(analyserNode.fftSize)
+    writtenRing = createWrittenAudioRing(analyserNode.fftSize)
     gainNode = audioCtx.createGain()
     gainNode.gain.value = gainValue
     // Keep the worklet graph "live" without sending audible audio to speakers.
@@ -372,23 +429,12 @@
           clipTimer = setTimeout(() => { isClipping = false }, 2000)
         }
       }
-      if (e.data.type === 'data' && fileWritable && recordingState === 'recording') {
+      if (e.data.type === 'data' && captureWriter && recordingState === 'recording') {
         const i16 = float32ToInt16(e.data.buffer)
-        // Keep timeline continuous across reconnects/device swaps by
-        // backfilling missing wall-clock capture time as digital silence.
-        const elapsedSec = (audioCtx?.currentTime || 0) - recordingStartAudioTime
-        const expectedSamples = Math.max(0, Math.round(elapsedSec * recordingSampleRate))
-        const gapSamples = expectedSamples - (samplesWritten + i16.length)
-        if (gapSamples > 0) {
-          const silence = new Int16Array(gapSamples)
-          await fileWritable.write(silence.buffer)
-          samplesWritten += gapSamples
-          dataByteCount += silence.byteLength
-        }
-        await fileWritable.write(i16.buffer)
-        samplesWritten += i16.length
-        dataByteCount += i16.buffer.byteLength
-        bytesWritten = dataByteCount + 44
+        // Queued internally and flushed in the background — a slow disk
+        // just makes the queue longer, it can never fabricate silence.
+        // Real gaps only ever come from notifyDeviceGap() (see connectMic).
+        bytesWritten += captureWriter.writeChunk(i16)
       }
     }
 
@@ -420,7 +466,15 @@
       const H = canvas.height
       canvasCtx.clearRect(0, 0, W, H)
 
-      analyserNode.getFloatTimeDomainData(analyserData)
+      // While recording, draw from confirmed-written audio, not the live
+      // mic — see writtenRing's declaration for why. Pre-recording (mic
+      // check before pressing Start, when nothing has been written yet),
+      // the live mic signal is the only thing there is to show.
+      if (recordingState === 'recording' && writtenRing) {
+        writtenRing.read(analyserData)
+      } else {
+        analyserNode.getFloatTimeDomainData(analyserData)
+      }
 
       // Background
       canvasCtx.fillStyle = '#0e0e10'
@@ -467,6 +521,46 @@
   // RECORDING
   // ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Fires once per chunk, only after captureWriter has actually confirmed
+   * it was written (see capture-writer.js's onWritten). Feeds the live
+   * waveform always; feeds the listen-back check's buffer only while that
+   * check is open, capped so a host who leaves it open doesn't grow it
+   * unbounded.
+   */
+  function handleWritten(i16) {
+    writtenRing?.push(i16)
+    if (collectingPreview && previewSampleCount < CHECK_PREVIEW_MAX_SAMPLES) {
+      previewChunks.push(i16)
+      previewSampleCount += i16.length
+    }
+  }
+
+  function startRecordingCheck() {
+    checkSentence = CHECK_SENTENCES[Math.floor(Math.random() * CHECK_SENTENCES.length)]
+    previewChunks = []
+    previewSampleCount = 0
+    collectingPreview = true
+    checkModalOpen = true
+  }
+
+  function buildCheckPreview() {
+    return buildWavBlob(previewChunks, recordingSampleRate)
+  }
+
+  function confirmRecordingCheck() {
+    checkModalOpen = false
+    collectingPreview = false
+    previewChunks = []
+  }
+
+  async function rejectRecordingCheck() {
+    checkModalOpen = false
+    collectingPreview = false
+    previewChunks = []
+    await stopRecording()
+  }
+
   async function startRecording() {
     if (!audioCtx || !workletNode) {
       try {
@@ -504,16 +598,20 @@
 
     // Write placeholder WAV header (will patch at end with real size)
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
-    dataByteCount = 0
-    samplesWritten = 0
     bytesWritten = 44
-    recordingStartAudioTime = audioCtx?.currentTime || 0
+    micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
+    captureWriter = createCaptureWriter({
+      sampleRate: recordingSampleRate,
+      write: (buf) => fileWritable.write(buf),
+      onWritten: handleWritten
+    })
 
     recordingState = 'recording'
     recordingSeconds = 0
 
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
+    startRecordingCheck()
   }
 
   async function stopRecording() {
@@ -522,8 +620,21 @@
     clearInterval(recordingTimer)
     wsNotifyState('stopped')
 
-    // Give the worklet a moment to flush the last chunk
+    // Stopping via the regular Stop button while the listen-back check is
+    // still up (not via its own "something's wrong" path) should still
+    // close it cleanly rather than leave it showing over an idle room.
+    if (checkModalOpen) {
+      checkModalOpen = false
+      collectingPreview = false
+      previewChunks = []
+    }
+
+    // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
+    // then drain every write the Capture Writer has queued — however many
+    // there are, not a guessed fixed delay.
     await new Promise(r => setTimeout(r, 300))
+    const { dataByteCount } = await captureWriter.stop()
+    captureWriter = null
 
     // Patch the WAV header with the real data size
     await fileWritable.seek(0)
@@ -552,8 +663,7 @@
   }
 
   function sendClap() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'clap' }))
+    room.send({ type: 'clap' })
     // Server echoes back to all (including sender) which triggers tone injection
   }
 
@@ -564,7 +674,7 @@
       const seq = ++_pingSeq
       const sentAt = Date.now()
       _pendingPings.set(seq, sentAt)
-      ws.send(JSON.stringify({ type: 'ping', seq, sentAt }))
+      room.send({ type: 'ping', seq, sentAt })
     }
   }
 
@@ -591,38 +701,25 @@
   // ───────────────────────────────────────────────────────────────────
 
   function wsNotifyState(state) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'recording_state', state }))
+    room.send({ type: 'recording_state', state })
   }
 
   function wsSend(payload) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify(payload))
+    room.send(payload)
   }
 
   const pendingClaps = []
 
-  function connectWs() {
-    if (sessionDestroyed || !data.authenticated) return
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
-
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    wsStatus = 'connecting'
-    const socket = new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
-    ws = socket
-
-    socket.onopen = () => {
-      if (ws !== socket) return
-      wsStatus = 'connected'
-      socket.send(JSON.stringify({ type: 'join', name: getJoinName(), clientId }))
-      try { roomTabs?.resyncDuck?.() } catch {}
+  const room = createRoomConnection({
+    createSocket() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
+    },
+    onOpen() {
+      room.send({ type: 'join', name: getJoinName(), clientId })
       syncClock()
-    }
-
-    socket.onmessage = (e) => {
-      let msg
-      try { msg = JSON.parse(e.data) } catch { return }
-
+    },
+    onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
       if (msg.type === 'pong') {
         const sentAt = _pendingPings.get(msg.seq)
@@ -647,19 +744,22 @@
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
+    },
+    onStatusChange(status) {
+      wsStatus = status
     }
+  })
 
-    socket.onclose = () => {
-      if (ws !== socket || sessionDestroyed) return
-      wsStatus = 'disconnected'
-      // Auto-reconnect after 3s (recording continues locally regardless)
-      setTimeout(connectWs, 3000)
-    }
+  room.registerResync(() => {
+    roomTabs?.resyncDuck?.()
+  })
+  room.registerResync(() => {
+    if (recordingState === 'recording') wsNotifyState('recording')
+  })
 
-    socket.onerror = () => {
-      if (ws !== socket) return
-      wsStatus = 'disconnected'
-    }
+  function connectWs() {
+    if (sessionDestroyed || !data.authenticated) return
+    room.connect()
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -738,6 +838,16 @@
     })
   }
 
+  // room-connection.js deliberately doesn't know about auth — its own
+  // auto-reconnect loop just keeps retrying on its own schedule, forever,
+  // with no way to ask "should I still be doing this?" connectWs()'s guard
+  // only covers the first manual connect; if auth is ever invalidated while
+  // this component stays mounted (session expiry, not just navigating
+  // away), this is what actually stops the loop.
+  $: if (browser && sessionStarted && !data.authenticated) {
+    room.disconnect()
+  }
+
   // Sidebar collapse changes the canvas's on-screen size — re-run the
   // backing-resolution reset once the DOM has caught up.
   $: if (browser) {
@@ -756,7 +866,7 @@
     clearTimeout(peakHoldTimer)
     clearTimeout(clipTimer)
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
-    ws?.close()
+    room.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
     audioCtx?.close()
@@ -952,6 +1062,14 @@
   </main>
 
 </div>
+
+<RecordingCheckModal
+  open={checkModalOpen}
+  sentence={checkSentence}
+  onListen={buildCheckPreview}
+  onConfirm={confirmRecordingCheck}
+  onReject={rejectRecordingCheck}
+/>
 {/if}
 
 <style>
