@@ -44,3 +44,24 @@ test('recording pill survives a mid-take socket close and reconnect', async ({ b
   await guest.close()
   await host.close()
 })
+
+test('active local recording warns before leaving the room', async ({ page }) => {
+  await stubYouTubeApi(page)
+  const password = 'rec-leave'
+  const roomUrl = await createRoom(page, { name: `E2E Rec Leave ${Date.now()}`, password })
+
+  await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+
+  let sawBeforeUnload = false
+  page.once('dialog', async (dialog) => {
+    sawBeforeUnload = dialog.type() === 'beforeunload'
+    await dialog.dismiss()
+  })
+
+  await page.goto('/').catch(() => {})
+
+  expect(sawBeforeUnload).toBe(true)
+  await expect(page).toHaveURL(roomUrl)
+})

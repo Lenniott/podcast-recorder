@@ -1,5 +1,6 @@
 <script>
   import { enhance } from '$app/forms'
+  import { beforeNavigate } from '$app/navigation'
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
@@ -138,12 +139,18 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
+  let serverCopyUploadState = 'idle' // idle | uploading | catching_up | finalizing | complete | failed
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
 
   // ─── Derived ────────────────────────────────────────────────────────
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
+  $: hasIncompleteServerCopyUpload =
+    serverCopyUploadState === 'uploading' ||
+    serverCopyUploadState === 'catching_up' ||
+    serverCopyUploadState === 'finalizing'
+  $: hasBlockingExitWork = recordingState !== 'idle' || hasIncompleteServerCopyUpload
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -176,6 +183,40 @@
     const n = (myName || '').trim()
     if (!n) return
     sessionStorage.setItem(participantNameStorageKey, n)
+  }
+
+  function exitWarningMessage() {
+    if (recordingState === 'recording' || recordingState === 'stopping') {
+      return 'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
+    }
+    if (hasIncompleteServerCopyUpload) {
+      return 'Your recording is saved locally, but the server copy is still uploading. Leave anyway?'
+    }
+    return ''
+  }
+
+  function handleBeforeUnload(event) {
+    if (!hasBlockingExitWork) return
+    event.preventDefault()
+    // Browsers ignore custom text now, but setting returnValue is still what
+    // asks them to show their native leave-site confirmation.
+    event.returnValue = ''
+    return ''
+  }
+
+  if (browser) {
+    beforeNavigate((navigation) => {
+      if (!hasBlockingExitWork) return
+
+      if (navigation.willUnload) {
+        navigation.cancel()
+        return
+      }
+
+      if (!window.confirm(exitWarningMessage())) {
+        navigation.cancel()
+      }
+    })
   }
 
   function copyRoomLink() {
@@ -817,6 +858,8 @@
 
   onMount(async () => {
     if (browser) {
+      window.addEventListener('beforeunload', handleBeforeUnload)
+
       // Only *restore* a previously-known name — never unconditionally
       // reset myName to '' when neither source has one. This ran
       // unconditionally before, which could race a fast programmatic fill
@@ -866,6 +909,7 @@
     clearTimeout(peakHoldTimer)
     clearTimeout(clipTimer)
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
+    window.removeEventListener('beforeunload', handleBeforeUnload)
     room.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
