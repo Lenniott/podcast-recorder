@@ -6,8 +6,8 @@ Record lossless audio together, remotely. Audio never leaves your machine.
 
 - Host creates an episode (name + password) → gets a shareable URL
 - Guest visits the URL, enters the password
-- Both choose their microphone and hit **Start Recording**
-- Browser writes WAV directly to local disk via File System Access API
+- Both choose their microphone and hit **Start Recording** — read the on-screen line back to hear exactly what's being saved to disk before continuing
+- Browser writes WAV directly to local disk via File System Access API; the on-screen waveform reflects what's actually been saved, not just the live mic, so a problem with the recording itself is visible while it's happening
 - Hitting **👏 Clap** injects a 1kHz sync tone into both recordings simultaneously
 - Load both WAVs in any editor, line up the clap spike, done
 - **Shared tabs**: host and guest can both open tabs in a shared view — switching, adding, or closing a tab changes it for everyone. Each tab can hold a synced YouTube clip (paste a link — playback stays in sync for both; wear headphones, since the video's audio plays in each browser and is never mixed into the WAV) and always has a shared plain-text notes area underneath it, editable by both, with no save state.
@@ -142,7 +142,8 @@ Or in Portainer "Container console", change command from `bash` to `sh`.
 
 | Scenario | Behaviour |
 |---|---|
-| Internet drops | Recording continues locally. WS auto-reconnects when back. |
+| Internet drops | Recording continues locally. Connection reconnects automatically (with backoff) when back, and each person's Recording/Talk status is correctly restored on the other side — it doesn't get stuck showing "not recording." |
+| Disk write falls behind | Writes queue in the background rather than ever being inserted as fake silence — the saved file stays complete and in the right order regardless of how slow storage gets. |
 | Mic disconnected | `devicechange` event detected, mic auto-reconnects. Gap in audio, file stays intact. |
 | Browser tab crashes | WAV header won't be patched — file is incomplete. See note below. |
 | File too large | File System Access API streams directly to disk — no memory limit. |
@@ -158,32 +159,3 @@ Or in Portainer "Container console", change command from `bash` to `sh`.
 3. Find the spike — it's the 1kHz tone burst, visible as a clear vertical line in the waveform.
 4. Align the spikes. Tracks are now in sync.
 
----
-
-## File structure
-
-```
-src/
-  lib/
-    RoomSidebar.svelte     — Composes the left sidebar's four panels
-    RoomDetailsPanel.svelte, MicPanel.svelte, WaveformPanel.svelte,
-    RecordControls.svelte  — Presentational sidebar panels (state stays in +page.svelte)
-    RoomTabs.svelte         — Shared tab strip + active tab's video/text content
-    TabVideoPlayer.svelte   — Synced YouTube panel for one tab (IFrame API + controls)
-    tab-sync.js             — MAX_TABS/MAX_TAB_TEXT_LEN/nextTabTitle (shared client+server)
-    yt-sync.js              — parseYouTubeId + effectivePosition helpers
-    server/
-      db.js          — SQLite room CRUD
-      auth.js        — bcrypt password hashing, HMAC session tokens, slug generation
-      ws-rooms.js    — WebSocket room manager (presence, clap, tabs_state/tab_video/tab_text)
-  routes/
-    +page.svelte        — Create episode home page
-    rec/[slug]/
-      +page.svelte      — Recording room UI (wires clockOffset into RoomTabs)
-      +page.server.js   — Auth, load room data
-static/
-  worklet/
-    recorder-processor.js  — AudioWorklet: PCM capture + clap tone injection
-server.js           — Production: SvelteKit + WebSocket on one port
-server-ws-dev.js    — Dev: standalone WS server (proxied by Vite)
-```
