@@ -14,6 +14,7 @@
   import { createRoomConnection } from '$lib/room-connection.js'
   import { createClockSync } from '$lib/clock-sync.js'
   import { createRecordingCheck } from '$lib/recording-check.js'
+  import { createWaveformRenderer } from '$lib/waveform-renderer.js'
 
   function focus(el) { el.focus() }
 
@@ -54,10 +55,10 @@
   let micGapStartedAt = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
+  // Draw loop + resize live in $lib/waveform-renderer.js; canvas is bound
+  // here (RoomSidebar's bind:canvasEl) and read live by the renderer via
+  // getCanvas, same for analyserNode/writtenRing/recordingState below.
   let canvas
-  let canvasCtx
-  let animFrame
-  let analyserData
   // While recording, the waveform draws from this instead of analyserNode —
   // it only ever holds audio the Capture Writer has confirmed was actually
   // written to disk (fed via captureWriter's onWritten). The mic signal can
@@ -392,7 +393,6 @@
     silentSink = audioCtx.createGain()
     silentSink.gain.value = 0
     analyserNode.fftSize = 2048
-    analyserData = new Float32Array(analyserNode.fftSize)
     writtenRing = createWrittenAudioRing(analyserNode.fftSize)
     gainNode = audioCtx.createGain()
     gainNode.gain.value = gainValue
@@ -440,7 +440,7 @@
       const ev = pendingClaps.shift()
       injectClap(ev.from, ev.triggerAtMs)
     }
-    startWaveformLoop()
+    waveformRenderer.start()
   }
 
   async function ensureAudioRunning() {
@@ -454,65 +454,12 @@
   // WAVEFORM VISUALISATION
   // ───────────────────────────────────────────────────────────────────
 
-  function startWaveformLoop() {
-    function draw() {
-      animFrame = requestAnimationFrame(draw)
-      if (!canvas || !analyserNode) return
-
-      const W = canvas.width
-      const H = canvas.height
-      canvasCtx.clearRect(0, 0, W, H)
-
-      // While recording, draw from confirmed-written audio, not the live
-      // mic — see writtenRing's declaration for why. Pre-recording (mic
-      // check before pressing Start, when nothing has been written yet),
-      // the live mic signal is the only thing there is to show.
-      if (recordingState === 'recording' && writtenRing) {
-        writtenRing.read(analyserData)
-      } else {
-        analyserNode.getFloatTimeDomainData(analyserData)
-      }
-
-      // Background
-      canvasCtx.fillStyle = '#0e0e10'
-      canvasCtx.fillRect(0, 0, W, H)
-
-      // Centre line
-      canvasCtx.strokeStyle = '#2a2a2e'
-      canvasCtx.lineWidth = 1
-      canvasCtx.beginPath()
-      canvasCtx.moveTo(0, H / 2)
-      canvasCtx.lineTo(W, H / 2)
-      canvasCtx.stroke()
-
-      // Visual-only auto-gain: speech is far below 0 dBFS, so 1:1 mapping
-      // is a 2px wiggle on this short canvas. Recording path is unchanged.
-      let peak = 0
-      for (let i = 0; i < analyserData.length; i++) {
-        const a = Math.abs(analyserData[i])
-        if (a > peak) peak = a
-      }
-      const noiseFloor = 0.015 // ≈ -36 dBFS
-      const scale = peak < noiseFloor ? 1 : Math.min(24, 0.9 / peak)
-
-      const isRec = recordingState === 'recording'
-      canvasCtx.strokeStyle = isRec ? '#a855f7' : '#52525b'
-      canvasCtx.lineWidth = 1.5
-      canvasCtx.beginPath()
-
-      const sliceWidth = W / analyserData.length
-      let x = 0
-
-      for (let i = 0; i < analyserData.length; i++) {
-        const y = Math.max(0, Math.min(H, (analyserData[i] * scale * 0.5 + 0.5) * H))
-        if (i === 0) canvasCtx.moveTo(x, y)
-        else canvasCtx.lineTo(x, y)
-        x += sliceWidth
-      }
-      canvasCtx.stroke()
-    }
-    draw()
-  }
+  const waveformRenderer = createWaveformRenderer({
+    getCanvas: () => canvas,
+    getAnalyserNode: () => analyserNode,
+    getWrittenRing: () => writtenRing,
+    isRecording: () => recordingState === 'recording'
+  })
 
   // ───────────────────────────────────────────────────────────────────
   // RECORDING
@@ -748,26 +695,13 @@
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────
 
-  /**
-   * Canvas backing-resolution reset. `width`/`height` attributes (not CSS
-   * size) set the drawing buffer, so this needs re-running whenever the
-   * canvas's on-screen size changes — initial mount, and toggling the
-   * sidebar collapse (see the `sidebarCollapsed` reactive block below).
-   */
-  function resizeCanvas() {
-    if (!canvas) return
-    canvasCtx = canvasCtx || canvas.getContext('2d')
-    canvas.width  = canvas.offsetWidth
-    canvas.height = canvas.offsetHeight
-  }
-
   async function startSession() {
     if (!browser || !data.authenticated || sessionStarted || nameGateShow) return
     sessionStarted = true
     audioInitError = ''
     try {
       await tick()
-      resizeCanvas()
+      waveformRenderer.resizeCanvas()
 
       await requestMicPermission()
       if (micPermission === 'granted') {
@@ -825,7 +759,7 @@
   // backing-resolution reset once the DOM has caught up.
   $: if (browser) {
     sidebarCollapsed
-    tick().then(resizeCanvas)
+    tick().then(() => waveformRenderer.resizeCanvas())
   }
 
   $: if (data.participantName?.trim()) nameGateShow = false
@@ -833,7 +767,7 @@
   onDestroy(() => {
     if (!browser) return
     sessionDestroyed = true
-    cancelAnimationFrame(animFrame)
+    waveformRenderer.stop()
     clearInterval(recordingTimer)
     clearTimeout(clapTimeout)
     clearTimeout(peakHoldTimer)
