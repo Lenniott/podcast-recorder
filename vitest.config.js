@@ -7,6 +7,11 @@ export default defineConfig({
     setupFiles: ['tests/setup.js'],
     // Run each test file in isolation so db state doesn't leak
     pool: 'forks',
-    reporters: ['verbose']
+    reporters: ['verbose'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      include: ['src/**']
+    }
   }
 })

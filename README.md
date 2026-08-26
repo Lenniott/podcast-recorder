@@ -46,6 +46,16 @@ Open `http://localhost:5173`
 
 ---
 
+## Tests
+
+```bash
+npm test                 # unit tests (Vitest)
+npm run test:coverage    # same, plus a coverage/ HTML report
+npm run test:e2e         # Playwright (needs .env with SECRET)
+```
+
+---
+
 ## Production (hosting it on your own server)
 
 Clone the repo — Docker Compose needs to build the image from this repo's Dockerfile, so just pointing it at a compose file on its own isn't enough:

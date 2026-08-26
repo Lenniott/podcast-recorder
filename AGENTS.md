@@ -45,6 +45,7 @@ Don't hand-build a fix for a new flag; register it on the existing mechanism.
 ## Running things here
 
 - `npx vitest run` — unit tests, fast, no server needed.
+- `npm run test:coverage` — same unit tests plus a `coverage/` HTML report.
 - `npx svelte-check` — run `npx svelte-kit sync` first if `.svelte-kit/` is missing.
 - `npm run build` — production build check.
 - Playwright e2e needs a local `.env` with `SECRET` set (gitignored, not
