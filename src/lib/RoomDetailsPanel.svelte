@@ -88,7 +88,7 @@
               class:pill-copy-progress={copyStatus === "in_progress"}
               class:pill-copy-complete={copyStatus === "complete"}
               class:pill-copy-failed={copyStatus === "failed"}
-              title="Server copy is a convenience mirror — the local recording is the real one"
+              title="Server copy is just a convenience mirror of their local recording, not the recording itself. If it never completes, the local file is still safe on their device — ask them to send it another way."
             >
               {SERVER_COPY_LABEL[copyStatus]}{copyStatus === "in_progress" ? ` ${p.serverCopyPercent ?? 0}%` : ""}
             </span>

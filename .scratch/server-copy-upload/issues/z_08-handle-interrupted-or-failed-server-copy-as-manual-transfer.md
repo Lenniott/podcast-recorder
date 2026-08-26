@@ -4,13 +4,13 @@
 
 **Blocked by:** 07: Block on upload finish after recording stops.
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** Do not build resumability for this feature. If the participant leaves or upload cannot complete, the server copy is incomplete and the fallback is manual transfer of the local WAV. Failed server upload must be presented as loss of convenience, never loss of recording.
 
-- [ ] Leaving before server-copy completion leaves the server copy marked incomplete.
-- [ ] Rejoining the room does not pretend the previous incomplete upload can resume.
-- [ ] Host and guest see clear copy that the local WAV is the fallback and must be sent another way.
-- [ ] Incomplete server-copy files cannot be downloaded as if complete.
-- [ ] Expired-room cleanup removes incomplete server-copy files.
-- [ ] Tests cover interrupted upload, failed upload, and incomplete download refusal.
+- [x] Leaving before server-copy completion leaves the server copy marked incomplete.
+- [x] Rejoining the room does not pretend the previous incomplete upload can resume.
+- [x] Host and guest see clear copy that the local WAV is the fallback and must be sent another way.
+- [x] Incomplete server-copy files cannot be downloaded as if complete.
+- [x] Expired-room cleanup removes incomplete server-copy files.
+- [x] Tests cover interrupted upload, failed upload, and incomplete download refusal.

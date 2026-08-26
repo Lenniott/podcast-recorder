@@ -42,7 +42,7 @@ function toPercent(progress) {
   return Math.max(0, Math.min(100, Math.round(p * 100)))
 }
 
-/** @typedef {'idle' | 'uploading' | 'catching_up' | 'finalizing' | 'complete' | 'failed'} ServerCopyUploadState */
+/** @typedef {'idle' | 'uploading' | 'catching_up' | 'complete' | 'failed'} ServerCopyUploadState */
 
 /**
  * A finer-grained sibling of deriveServerCopyDisplay's four-state
@@ -61,4 +61,25 @@ export function deriveServerCopyUploadState(status, { isRecording = false } = {}
   if (status.failed) return 'failed'
   if (status.finalized) return 'complete'
   return isRecording ? 'uploading' : 'catching_up'
+}
+
+/**
+ * Ticket 08: whether to surface a one-time, explicit explanation that
+ * *this* participant's own server copy has permanently failed.
+ *
+ * The post-stop wait modal (ticket 07, $lib/ServerCopyWaitModal.svelte)
+ * only stays open for `isIncompleteServerCopyUpload` states
+ * ($lib/exit-guard.js), which deliberately excludes `failed` — there's
+ * nothing left to wait for, so it isn't blocking. But that also means the
+ * modal simply closes the instant a copy fails, exactly as if it had
+ * finished normally, with nothing beyond the sidebar pill to tell the user
+ * what actually happened. This is the trigger for a page-level one-time
+ * notice that fills that gap: fires once local recording has fully
+ * stopped (never interrupts an active take) and only once per take,
+ * governed by the caller's own `announced` flag — reset the same way the
+ * rest of this take's server-copy state resets whenever a new recording
+ * starts (see +page.svelte's startRecording()).
+ */
+export function shouldAnnounceServerCopyFailure({ recordingState, uploadState, announced = false } = {}) {
+  return recordingState === 'idle' && uploadState === 'failed' && !announced
 }

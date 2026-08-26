@@ -457,6 +457,43 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     expect(res.status).toBe(404)
   })
 
+  // Ticket 08: there is deliberately no resumable upload, so a participant
+  // who left/disconnected partway through never gets a second chance to
+  // finish this same server copy — it stays incomplete forever (only raw
+  // .pcm chunks on disk, no .wav — see server-copy-storage.js's
+  // finalize-or-nothing design). This pins down that the download route
+  // keeps refusing it exactly as if it were still uploading, even well
+  // after the participant is long gone and no further chunks/finalize
+  // requests will ever arrive.
+  it('rejects (404) a download for a copy interrupted mid-upload (participant left/disconnected) and never finalized', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const { POST: postChunk } = await loadChunksRoute()
+
+    // A few chunks land, matching a real multi-chunk upload in progress...
+    await postChunk({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      url: chunkUrl(0),
+      request: { arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer }
+    })
+    await postChunk({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      url: chunkUrl(4),
+      request: { arrayBuffer: async () => new Uint8Array([5, 6]).buffer }
+    })
+    // ...then the participant leaves/disconnects: no further chunks and no
+    // finalize request ever arrive. Nothing more happens to this copy.
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadDownloadRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl() })
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error).toBe('not-finalized')
+  })
+
   it('rejects (403) a download from a non-host, even with a valid participant session', async () => {
     const passwordHash = await finalizeAsParticipant()
     const guestToken = makeSessionToken(SLUG, passwordHash, SECRET)

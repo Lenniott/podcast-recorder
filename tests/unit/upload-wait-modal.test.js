@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createServerCopyUpload } from '../../src/lib/server-copy-upload.js'
-import { deriveServerCopyUploadState } from '../../src/lib/server-copy-status.js'
+import { deriveServerCopyUploadState, shouldAnnounceServerCopyFailure } from '../../src/lib/server-copy-status.js'
 import { isIncompleteServerCopyUpload } from '../../src/lib/exit-guard.js'
 
 // These tests exercise the exact chain the room page wires together for the
@@ -103,5 +103,56 @@ describe('post-stop upload-wait modal — open/closed derivation', () => {
   it('never opens when the local recording never had an incomplete upload to begin with', () => {
     const modalOpen = deriveModalOpen({ recordingState: 'idle', uploadStatus: null })
     expect(modalOpen).toBe(false)
+  })
+})
+
+// Ticket 08: once a copy has permanently failed, isIncompleteServerCopyUpload
+// is deliberately false for it (see exit-guard.js) — nothing left to wait
+// for — so the modal above closes exactly as if the copy had finished. This
+// pins down the page's other reaction to that same transition: a one-time
+// explanation ($lib/server-copy-status.js's shouldAnnounceServerCopyFailure)
+// so a failure is never left completely unremarked once the modal is gone.
+describe('post-stop server-copy failure notice — fires exactly where the wait modal goes silent', () => {
+  it('announces once the copy fails and recording has already stopped — right when the wait modal would otherwise just vanish', async () => {
+    const fetchImpl = vi.fn((url) => {
+      if (String(url).includes('/server-copy/session')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
+      }
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({}) })
+    })
+    let recordingState = 'recording'
+    let lastStatus = null
+    let modalOpen = false
+    let announced = false
+    // Mirrors +page.svelte's `$: ...` reactive statements, which re-run on
+    // ANY referenced dependency changing — not only on a fresh onProgress
+    // event. recordingState flipping to 'idle' on its own (with no further
+    // chunk activity, exactly like a copy that already gave up) must still
+    // trigger this recomputation, same as it would in the real component.
+    function recompute() {
+      const uploadState = deriveServerCopyUploadState(lastStatus, { isRecording: recordingState === 'recording' })
+      modalOpen = recordingState === 'idle' && isIncompleteServerCopyUpload(uploadState)
+      if (shouldAnnounceServerCopyFailure({ recordingState, uploadState, announced })) announced = true
+    }
+    const upload = createServerCopyUpload({
+      slug: SLUG,
+      clientId: CLIENT_ID,
+      fetchImpl,
+      onProgress: (status) => {
+        lastStatus = status
+        recompute()
+      }
+    })
+    await upload.start()
+
+    upload.handleWritten(i16(100))
+    await delay(10)
+    expect(announced).toBe(false) // still recording — never interrupts an active take
+
+    recordingState = 'idle' // the copy already failed while recording; only this changes now
+    recompute()
+
+    expect(modalOpen).toBe(false) // failed is not "incomplete" — the wait modal itself stays closed
+    expect(announced).toBe(true) // ...but the failure is still explicitly surfaced, exactly once
   })
 })

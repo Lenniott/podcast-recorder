@@ -41,14 +41,21 @@ export function deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCo
   return { blocking: false, severity: null, message: '' }
 }
 
-const INCOMPLETE_UPLOAD_STATES = new Set(['uploading', 'catching_up', 'finalizing'])
+const INCOMPLETE_UPLOAD_STATES = new Set(['uploading', 'catching_up'])
 
 /**
  * True for any $lib/server-copy-status.js ServerCopyUploadState that means
- * "the server copy has not reached ticket 05's definition of complete yet"
- * — i.e. accepted but not yet finalized. Shared by the exit guard above and
- * the post-stop blocking modal (ticket 07) so both agree on exactly the
- * same set of states without re-deriving it twice.
+ * "the server copy has not reached ticket 05's definition of complete yet,
+ * and still might" — i.e. accepted but not yet finalized. Shared by the
+ * exit guard above and the post-stop blocking modal (ticket 07) so both
+ * agree on exactly the same set of states without re-deriving it twice.
+ *
+ * Deliberately excludes `failed` (ticket 08): once a copy has permanently
+ * failed there is nothing left to wait for or warn about losing — leaving
+ * costs nothing further than it already has, so it must not block exit the
+ * way a still-possibly-finishing upload does. The one-time failure notice
+ * ($lib/server-copy-status.js's shouldAnnounceServerCopyFailure) is what
+ * tells the user about that instead.
  */
 export function isIncompleteServerCopyUpload(uploadState) {
   return INCOMPLETE_UPLOAD_STATES.has(uploadState)

@@ -44,10 +44,9 @@ describe('deriveExitGuard', () => {
 })
 
 describe('isIncompleteServerCopyUpload', () => {
-  it('is true for uploading, catching_up, and finalizing', () => {
+  it('is true for uploading and catching_up', () => {
     expect(isIncompleteServerCopyUpload('uploading')).toBe(true)
     expect(isIncompleteServerCopyUpload('catching_up')).toBe(true)
-    expect(isIncompleteServerCopyUpload('finalizing')).toBe(true)
   })
 
   it('is false for idle, complete, and failed', () => {

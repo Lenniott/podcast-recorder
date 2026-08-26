@@ -7,7 +7,11 @@
   import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
   import { createServerCopyUpload } from '$lib/server-copy-upload.js'
-  import { deriveServerCopyDisplay, deriveServerCopyUploadState } from '$lib/server-copy-status.js'
+  import {
+    deriveServerCopyDisplay,
+    deriveServerCopyUploadState,
+    shouldAnnounceServerCopyFailure
+  } from '$lib/server-copy-status.js'
   import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/exit-guard.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
@@ -152,12 +156,20 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
-  let serverCopyUploadState = 'idle' // idle | uploading | catching_up | finalizing | complete | failed
+  let serverCopyUploadState = 'idle' // idle | uploading | catching_up | complete | failed
   // Rounded percent for OUR OWN server-copy upload, kept in lockstep with
   // serverCopyUploadState below — this is what the post-stop blocking modal
   // (ticket 07) shows. Derived via deriveServerCopyDisplay, same as the
   // sidebar (ticket 06), so the two never disagree on what "percent" means.
   let serverCopyUploadPercent = 0
+  // Ticket 08: the wait modal only stays open for "still might finish"
+  // states (see exit-guard.js's isIncompleteServerCopyUpload) — `failed`
+  // isn't one of them, so it closes the instant a copy gives up, same as
+  // if it had completed. This flag gates the one-time alert that fills
+  // that gap (see the reactive block below) so it fires at most once per
+  // take; reset alongside the rest of this take's server-copy state in
+  // startRecording().
+  let serverCopyFailureAnnounced = false
   let allowNextGuardedNavigation = false
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
@@ -172,6 +184,23 @@
   // reached ticket 05's definition of complete yet. Scoped to this
   // participant only — the sidebar (ticket 06) is the all-participants view.
   $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload
+  // Ticket 08: fills the gap left by the wait modal above closing silently
+  // on failure — see shouldAnnounceServerCopyFailure's doc comment. A
+  // plain `$:` block (not something tied only to serverCopyUpload's own
+  // onProgress callback) so this still fires when recordingState alone
+  // flips to 'idle' after the copy had already failed while still
+  // recording, not only when a fresh progress event happens to land after.
+  $: if (shouldAnnounceServerCopyFailure({
+    recordingState,
+    uploadState: serverCopyUploadState,
+    announced: serverCopyFailureAnnounced
+  })) {
+    serverCopyFailureAnnounced = true
+    alert(
+      "Your server copy could not finish uploading and won't complete. " +
+      "Your recording is already saved on this device — you'll need to send that file to the host another way."
+    )
+  }
   // Single source of truth for both severity tiers of the exit guard — see
   // $lib/exit-guard.js for why active-recording always wins when both are
   // true, so the two warnings can never collide or double-fire.
@@ -627,10 +656,11 @@
   /**
    * The server-copy upload's onProgress callback. Derives the small
    * display-ready {state, percent} shape (see $lib/server-copy-status.js)
-   * and, only when it actually changed, tells the room about it — the
-   * same threshold-based, percentage-only broadcast recording_state uses
-   * for local recording. Both peers then read the identical value back off
-   * `peers` via the room's own presence broadcast (see ws-rooms.js).
+   * once, and, only when it actually changed, tells the room about it —
+   * the same threshold-based, percentage-only broadcast recording_state
+   * uses for local recording. Both peers then read the identical value
+   * back off `peers` via the room's own presence broadcast (see
+   * ws-rooms.js).
    */
   function handleServerCopyProgress(status) {
     // Shared vocabulary from $lib/server-copy-status.js — distinguishes
@@ -640,12 +670,18 @@
     // accurate. isRecording is the one thing the status object alone can't
     // tell it.
     serverCopyUploadState = deriveServerCopyUploadState(status, { isRecording: recordingState === 'recording' })
-    serverCopyUploadPercent = deriveServerCopyDisplay(status).percent
-    sendServerCopyProgress(status)
+    const display = deriveServerCopyDisplay(status)
+    serverCopyUploadPercent = display.percent
+    sendServerCopyProgress(display)
   }
 
-  function sendServerCopyProgress(status, { force = false } = {}) {
-    const { state, percent } = deriveServerCopyDisplay(status)
+  // Takes the already-derived {state, percent} display shape (see
+  // $lib/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
+  // upload status, so every caller derives it exactly once — callers that
+  // don't already have a display value in hand (the reset below, the
+  // resync below) derive it themselves at the call site.
+  function sendServerCopyProgress(display, { force = false } = {}) {
+    const { state, percent } = display
     if (!force && lastSentServerCopy?.state === state && lastSentServerCopy?.percent === percent) return
     lastSentServerCopy = { state, percent }
     room.send({ type: 'server_copy_progress', state, percent })
@@ -723,7 +759,8 @@
     lastSentServerCopy = null
     serverCopyUploadState = 'idle'
     serverCopyUploadPercent = 0
-    sendServerCopyProgress(null, { force: true })
+    serverCopyFailureAnnounced = false
+    sendServerCopyProgress(deriveServerCopyDisplay(null), { force: true })
     serverCopyUpload = createServerCopyUpload({
       slug: data.slug,
       clientId,
@@ -902,7 +939,7 @@
     // re-announce itself here just like the recording resync above, or the
     // server-copy pill would silently reset to "unavailable" after any
     // reconnect and stay wrong for the rest of the session.
-    if (serverCopyUpload) sendServerCopyProgress(serverCopyUpload.getStatus(), { force: true })
+    if (serverCopyUpload) sendServerCopyProgress(deriveServerCopyDisplay(serverCopyUpload.getStatus()), { force: true })
   })
 
   function connectWs() {

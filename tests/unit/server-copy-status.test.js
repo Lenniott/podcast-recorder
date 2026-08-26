@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { deriveServerCopyDisplay, deriveServerCopyUploadState } from '../../src/lib/server-copy-status.js'
+import {
+  deriveServerCopyDisplay,
+  deriveServerCopyUploadState,
+  shouldAnnounceServerCopyFailure
+} from '../../src/lib/server-copy-status.js'
 
 describe('deriveServerCopyDisplay', () => {
   it('reports unavailable when there is no status at all (never started)', () => {
@@ -83,5 +87,31 @@ describe('deriveServerCopyUploadState', () => {
   it('defaults isRecording to false when not passed', () => {
     const status = { accepted: true, failed: false, finalized: false }
     expect(deriveServerCopyUploadState(status)).toBe('catching_up')
+  })
+})
+
+describe('shouldAnnounceServerCopyFailure', () => {
+  it('is true once recording has fully stopped and the copy has failed, unannounced', () => {
+    expect(shouldAnnounceServerCopyFailure({ recordingState: 'idle', uploadState: 'failed' })).toBe(true)
+  })
+
+  it('is false while still recording, even if the copy has already failed — never interrupts an active take', () => {
+    expect(shouldAnnounceServerCopyFailure({ recordingState: 'recording', uploadState: 'failed' })).toBe(false)
+  })
+
+  it('is false once already announced — fires at most once per take', () => {
+    expect(
+      shouldAnnounceServerCopyFailure({ recordingState: 'idle', uploadState: 'failed', announced: true })
+    ).toBe(false)
+  })
+
+  it('is false for every non-failed upload state', () => {
+    for (const uploadState of ['idle', 'uploading', 'catching_up', 'complete']) {
+      expect(shouldAnnounceServerCopyFailure({ recordingState: 'idle', uploadState })).toBe(false)
+    }
+  })
+
+  it('is false with no arguments at all', () => {
+    expect(shouldAnnounceServerCopyFailure()).toBe(false)
   })
 })

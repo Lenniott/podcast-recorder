@@ -329,4 +329,61 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     await delay(10)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
+
+  it('never finalizes after the connection drops mid-upload (simulating the participant disconnecting), and drops any chunk queued afterward', async () => {
+    const fetchImpl = vi.fn((url) => {
+      if (String(url).includes('/server-copy/session')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
+      }
+      return Promise.reject(new Error('network down')) // the participant's connection drops mid-chunk
+    })
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+
+    upload.handleWritten(i16(100), 0)
+    await delay(20)
+    expect(upload.getStatus().failed).toBe(true)
+
+    const finalized = await upload.finish()
+    expect(finalized).toBe(false) // permanently incomplete — never resumes, never finalizes
+
+    // No resumable-upload protocol: a chunk queued after the interruption
+    // (e.g. the local writer producing more audio while the upload session
+    // has already given up) is never sent.
+    const chunkCallsBefore = fetchImpl.mock.calls.filter((c) => String(c[0]).includes('/server-copy/chunks')).length
+    upload.handleWritten(i16(100), 100)
+    await delay(20)
+    const chunkCallsAfter = fetchImpl.mock.calls.filter((c) => String(c[0]).includes('/server-copy/chunks')).length
+    expect(chunkCallsAfter).toBe(chunkCallsBefore)
+  })
+})
+
+describe('createServerCopyUpload — no resumability across instances (rejoin does not continue a stale attempt)', () => {
+  it('a fresh instance for the same room/clientId starts from a clean slate, independent of a previous failed one', async () => {
+    // What startRecording() does on every new take/rejoin (see ticket 08):
+    // create a brand-new createServerCopyUpload() instance rather than
+    // reusing or resuming a prior one. There is no shared module-level
+    // state, so a failed first instance can never leak into or block a
+    // second, later instance for the same slug/clientId.
+    const failingFetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }))
+    const first = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl: failingFetch })
+    await first.start()
+    first.handleWritten(i16(10), 0)
+    await delay(20)
+    expect(first.getStatus().failed).toBe(true)
+
+    const { fetchImpl: freshFetch } = makeFakeFetch()
+    const second = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl: freshFetch })
+
+    expect(second.getStatus()).toMatchObject({
+      accepted: false,
+      failed: false,
+      finalized: false,
+      ackedBytes: 0,
+      confirmedBytes: 0
+    })
+    const accepted = await second.start()
+    expect(accepted).toBe(true)
+    expect(second.getStatus().failed).toBe(false)
+  })
 })
