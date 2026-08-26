@@ -140,6 +140,7 @@
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
   let serverCopyUploadState = 'idle' // idle | uploading | catching_up | finalizing | complete | failed
+  let allowNextGuardedNavigation = false
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
 
@@ -150,7 +151,8 @@
     serverCopyUploadState === 'uploading' ||
     serverCopyUploadState === 'catching_up' ||
     serverCopyUploadState === 'finalizing'
-  $: hasBlockingExitWork = recordingState !== 'idle' || hasIncompleteServerCopyUpload
+  $: hasActiveLocalRecording = recordingState === 'recording' || recordingState === 'stopping'
+  $: hasBlockingExitWork = hasActiveLocalRecording || hasIncompleteServerCopyUpload
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -186,7 +188,7 @@
   }
 
   function exitWarningMessage() {
-    if (recordingState === 'recording' || recordingState === 'stopping') {
+    if (hasActiveLocalRecording) {
       return 'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
     }
     if (hasIncompleteServerCopyUpload) {
@@ -197,6 +199,10 @@
 
   function handleBeforeUnload(event) {
     if (!hasBlockingExitWork) return
+    if (allowNextGuardedNavigation) {
+      allowNextGuardedNavigation = false
+      return
+    }
     event.preventDefault()
     // Browsers ignore custom text now, but setting returnValue is still what
     // asks them to show their native leave-site confirmation.
@@ -204,9 +210,32 @@
     return ''
   }
 
+  function handleDocumentClick(event) {
+    if (!hasBlockingExitWork || event.defaultPrevented) return
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+
+    const link = event.target?.closest?.('a[href]')
+    if (!link || link.target || link.hasAttribute('download')) return
+
+    const url = new URL(link.href, window.location.href)
+    if (url.origin !== window.location.origin) return
+
+    if (!window.confirm(exitWarningMessage())) {
+      event.preventDefault()
+      return
+    }
+
+    allowNextGuardedNavigation = true
+  }
+
   if (browser) {
     beforeNavigate((navigation) => {
       if (!hasBlockingExitWork) return
+
+      if (allowNextGuardedNavigation) {
+        allowNextGuardedNavigation = false
+        return
+      }
 
       if (navigation.willUnload) {
         navigation.cancel()
@@ -859,6 +888,7 @@
   onMount(async () => {
     if (browser) {
       window.addEventListener('beforeunload', handleBeforeUnload)
+      document.addEventListener('click', handleDocumentClick, { capture: true })
 
       // Only *restore* a previously-known name — never unconditionally
       // reset myName to '' when neither source has one. This ran
@@ -910,6 +940,7 @@
     clearTimeout(clipTimer)
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
     window.removeEventListener('beforeunload', handleBeforeUnload)
+    document.removeEventListener('click', handleDocumentClick, { capture: true })
     room.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()

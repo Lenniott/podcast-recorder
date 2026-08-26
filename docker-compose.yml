@@ -14,6 +14,8 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - DB_PATH=/app/data/rooms.db
+      # Room metadata and server-copy files expire together after this many hours
+      - ROOM_MAX_AGE_HOURS=${ROOM_MAX_AGE_HOURS:-12}
       # Required for session / room tokens
       - SECRET=${SECRET}
       # Optional — leave empty for open “create episode” page

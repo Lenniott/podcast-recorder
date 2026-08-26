@@ -65,7 +65,7 @@
  *   { type: 'rejected',        message }
  */
 
-import { roomExists, getRoomBySlug } from './db.js'
+import { getActiveRoomBySlug } from './db.js'
 import { verifyHostClaimToken } from './auth.js'
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 
@@ -233,13 +233,13 @@ export function setupWss(wss) {
       return
     }
 
-    if (!roomExists(slug)) {
+    const roomRow = getActiveRoomBySlug(slug)
+    if (!roomRow) {
       send(ws, { type: 'error', message: 'Room not found' })
       ws.close(4004, 'Room not found')
       return
     }
 
-    const roomRow = getRoomBySlug(slug)
     const cookies = parseCookies(req.headers.cookie || '')
     const hostToken = cookies.get(`pr_host_${slug}`) || ''
     const connectionHostClaim = !!roomRow && verifyHostClaimToken(hostToken, slug, roomRow.password_hash, process.env.SECRET)

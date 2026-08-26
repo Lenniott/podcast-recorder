@@ -65,3 +65,55 @@ test('active local recording warns before leaving the room', async ({ page }) =>
   expect(sawBeforeUnload).toBe(true)
   await expect(page).toHaveURL(roomUrl)
 })
+
+test('idle local recording leaves the room without a warning', async ({ page }) => {
+  await stubYouTubeApi(page)
+  const password = 'rec-idle-leave'
+  await createRoom(page, { name: `E2E Rec Idle Leave ${Date.now()}`, password })
+
+  let dialogCount = 0
+  page.on('dialog', async (dialog) => {
+    dialogCount += 1
+    await dialog.dismiss()
+  })
+
+  await page.goto('/')
+
+  expect(dialogCount).toBe(0)
+  await expect(page.getByRole('button', { name: /Create Room/i })).toBeVisible()
+})
+
+test('active local recording warns before in-app navigation', async ({ page }) => {
+  await stubYouTubeApi(page)
+  const password = 'rec-spa-leave'
+  const roomUrl = await createRoom(page, { name: `E2E Rec SPA Leave ${Date.now()}`, password })
+
+  await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+
+  await page.evaluate(() => {
+    const link = document.createElement('a')
+    link.href = '/'
+    link.textContent = 'Leave room'
+    link.dataset.testid = 'leave-room-link'
+    link.style.position = 'fixed'
+    link.style.top = '8px'
+    link.style.left = '8px'
+    link.style.zIndex = '2000'
+    document.body.appendChild(link)
+  })
+
+  let message = ''
+  page.once('dialog', async (dialog) => {
+    message = dialog.message()
+    await dialog.dismiss()
+  })
+
+  await page.getByTestId('leave-room-link').click()
+
+  expect(message).toContain('Your local recording is still in progress')
+  expect(message).toContain('WAV is finalized')
+  expect(message).not.toContain('server copy')
+  await expect(page).toHaveURL(roomUrl)
+})

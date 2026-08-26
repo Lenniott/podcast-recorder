@@ -253,3 +253,29 @@ describe('createCaptureWriter — stop() drains the real queue instead of guessi
     expect(sink.written.length).toBe(2)
   })
 })
+
+describe('createCaptureWriter — pending', () => {
+  it('counts queued writes until they flush', async () => {
+    const releases = []
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: () => new Promise((resolve) => { releases.push(resolve) })
+    })
+
+    expect(writer.pending).toBe(0)
+    writer.writeChunk(realChunk())
+    writer.writeChunk(realChunk())
+    expect(writer.pending).toBe(2)
+
+    await delay(0)
+    expect(releases).toHaveLength(1)
+    releases[0]()
+    await delay(0)
+    expect(writer.pending).toBe(1)
+    expect(releases).toHaveLength(2)
+
+    releases[1]()
+    await writer.drain()
+    expect(writer.pending).toBe(0)
+  })
+})

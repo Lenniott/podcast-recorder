@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  roomExists: vi.fn(() => true),
-  getRoomBySlug: vi.fn(() => ({
+  getActiveRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
@@ -15,7 +14,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
 }))
 
-import { roomExists } from '../../src/lib/server/db.js'
+import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { MAX_TABS } from '../../src/lib/tab-sync.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
@@ -31,7 +30,7 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -66,6 +65,17 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
     host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
     const state = latest(host, 'tabs_state')
     expect(state.tabs.map((t) => t.title)).toEqual(['Tab 1', 'Tab 2'])
+  })
+
+  it('rejects a duplicate or empty tab id', () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    expect(host.sent.some((m) => m.type === 'error' && m.message === 'Invalid or duplicate tab id')).toBe(true)
+
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: '' }))
+    expect(host.sent.some((m) => m.type === 'error' && m.message === 'Invalid or duplicate tab id')).toBe(true)
   })
 
   it('rejects tab_create once the room is at MAX_TABS', () => {
@@ -168,7 +178,7 @@ describe('setupWss — tab_video (per-tab shared video, symmetric control)', () 
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -256,7 +266,7 @@ describe('setupWss — tab_text (shared textarea, symmetric)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')

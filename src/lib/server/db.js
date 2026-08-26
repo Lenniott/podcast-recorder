@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'fs'
 import { dirname } from 'path'
+import { isRoomExpired } from './room-lifetime.js'
+import { removeServerCopiesForRoom } from './server-copy-storage.js'
 
 let _db = null
 
@@ -61,8 +63,31 @@ export function getRoomBySlug(slug) {
   return getDb().prepare('SELECT * FROM rooms WHERE slug = ?').get(slug) || null
 }
 
+export function getActiveRoomBySlug(slug, { now = Date.now(), cleanupExpired = true } = {}) {
+  const room = getRoomBySlug(slug)
+  if (!room) return null
+  if (!isRoomExpired(room, now)) return room
+  if (cleanupExpired) deleteRoom(slug)
+  return null
+}
+
 export function roomExists(slug) {
-  return !!getDb().prepare('SELECT 1 FROM rooms WHERE slug = ?').get(slug)
+  return !!getActiveRoomBySlug(slug)
+}
+
+export function deleteRoom(slug) {
+  removeServerCopiesForRoom(slug)
+  return getDb().prepare('DELETE FROM rooms WHERE slug = ?').run(slug).changes
+}
+
+export function cleanupExpiredRooms({ now = Date.now() } = {}) {
+  const rooms = getDb().prepare('SELECT slug, created_at FROM rooms').all()
+  let deleted = 0
+  for (const room of rooms) {
+    if (!isRoomExpired(room, now)) continue
+    deleted += deleteRoom(room.slug)
+  }
+  return deleted
 }
 
 export default { getDb }

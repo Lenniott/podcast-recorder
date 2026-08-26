@@ -8,10 +8,11 @@
  */
 
 import Database from 'better-sqlite3'
-import { mkdirSync } from 'fs'
+import { mkdirSync, rmSync } from 'fs'
+import { dirname, resolve, sep } from 'path'
 
 const DB_PATH = process.env.DB_PATH || './data/rooms.db'
-mkdirSync('./data', { recursive: true })
+mkdirSync(dirname(DB_PATH), { recursive: true })
 
 const db = new Database(DB_PATH)
 const [,, command, arg] = process.argv
@@ -40,14 +41,27 @@ function deleteRoom(slug) {
     console.error(`Room not found: ${slug}`)
     process.exit(1)
   }
+  deleteServerCopies(slug)
   db.prepare('DELETE FROM rooms WHERE slug = ?').run(slug)
   console.log(`Deleted: ${slug} ("${room.name}")`)
 }
 
 function deleteAll() {
-  const { count } = db.prepare('SELECT COUNT(*) as count FROM rooms').get()
+  const rooms = db.prepare('SELECT slug FROM rooms').all()
+  for (const room of rooms) deleteServerCopies(room.slug)
   db.prepare('DELETE FROM rooms').run()
-  console.log(`Deleted ${count} room(s).`)
+  console.log(`Deleted ${rooms.length} room(s).`)
+}
+
+function getServerCopyRoomDir(slug) {
+  const root = resolve(process.env.SERVER_COPY_DIR || './data/server-copies')
+  const dir = resolve(root, String(slug || ''))
+  if (dir !== root && dir.startsWith(root + sep)) return dir
+  throw new Error('Invalid room slug for server-copy storage')
+}
+
+function deleteServerCopies(slug) {
+  rmSync(getServerCopyRoomDir(slug), { recursive: true, force: true })
 }
 
 function parseIndexSelection(selection, maxIndex) {
@@ -97,6 +111,7 @@ function deleteBySelection(selection) {
   const deleteStmt = db.prepare('DELETE FROM rooms WHERE slug = ?')
   for (const index of parsed.indices) {
     const room = rooms[index - 1]
+    deleteServerCopies(room.slug)
     deleteStmt.run(room.slug)
     console.log(`Deleted #${index}: ${room.slug} ("${room.name}")`)
   }

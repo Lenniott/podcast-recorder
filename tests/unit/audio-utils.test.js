@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildWavHeader,
+  buildWavBlob,
   float32ToInt16,
   gainToDb,
   dbToMeterPct
@@ -67,6 +68,25 @@ describe('buildWavHeader', () => {
     const view = new DataView(buildWavHeader(0))
     expect(view.getUint32(40, true)).toBe(0)
     expect(view.getUint32(4,  true)).toBe(36)
+  })
+})
+
+describe('buildWavBlob', () => {
+  it('wraps Int16 chunks in a playable WAV blob', async () => {
+    const blob = buildWavBlob([new Int16Array([1, -1, 2])], 48000)
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('audio/wav')
+    expect(blob.size).toBe(44 + 3 * Int16Array.BYTES_PER_ELEMENT)
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const riff = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])
+    expect(riff).toBe('RIFF')
+  })
+
+  it('falls back to the default sample rate for invalid rates', async () => {
+    const blob = buildWavBlob([new Int16Array([0])], 0)
+    const view = new DataView(await blob.arrayBuffer())
+    expect(view.getUint32(24, true)).toBe(48000)
   })
 })
 

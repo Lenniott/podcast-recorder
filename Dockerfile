@@ -30,6 +30,7 @@ VOLUME ["/app/data"]
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV DB_PATH=/app/data/rooms.db
+ENV ROOM_MAX_AGE_HOURS=12
 
 EXPOSE 3000
 

@@ -4,6 +4,8 @@ import {
   verifyPassword,
   makeSessionToken,
   verifySessionToken,
+  makeHostClaimToken,
+  verifyHostClaimToken,
   generateSlug
 } from '../../src/lib/server/auth.js'
 
@@ -64,6 +66,73 @@ describe('makeSessionToken / verifySessionToken', () => {
     expect(verifySessionToken(null, slug, phash, secret)).toBe(false)
     expect(verifySessionToken(undefined, slug, phash, secret)).toBe(false)
     expect(verifySessionToken('', slug, phash, secret)).toBe(false)
+    expect(verifySessionToken('zz', slug, phash, secret)).toBe(false)
+  })
+
+  it('uses process.env.SECRET when no secret argument is passed', () => {
+    const token = makeSessionToken(slug, phash)
+    expect(verifySessionToken(token, slug, phash)).toBe(true)
+  })
+
+  it('throws when SECRET is missing and no secret argument is passed', () => {
+    const previous = process.env.SECRET
+    delete process.env.SECRET
+    try {
+      expect(() => makeSessionToken(slug, phash)).toThrow('SECRET environment variable is not set')
+    } finally {
+      process.env.SECRET = previous
+    }
+  })
+})
+
+// ─── Host claim tokens ──────────────────────────────────────────────────────
+
+describe('makeHostClaimToken / verifyHostClaimToken', () => {
+  const slug   = 'testslug'
+  const phash  = '$2a$10$fakehashfortoken'
+  const secret = 'test-secret-do-not-use-in-prod'
+
+  it('verifies a valid token', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    expect(verifyHostClaimToken(token, slug, phash, secret)).toBe(true)
+  })
+
+  it('rejects a tampered token', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    const tampered = token.slice(0, -2) + '00'
+    expect(verifyHostClaimToken(tampered, slug, phash, secret)).toBe(false)
+  })
+
+  it('rejects a token from a different slug', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    expect(verifyHostClaimToken(token, 'otherslug', phash, secret)).toBe(false)
+  })
+
+  it('rejects a token from a different password hash', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    expect(verifyHostClaimToken(token, slug, 'differenthash', secret)).toBe(false)
+  })
+
+  it('rejects a token made with a different secret', () => {
+    const token = makeHostClaimToken(slug, phash, 'other-secret')
+    expect(verifyHostClaimToken(token, slug, phash, secret)).toBe(false)
+  })
+
+  it('rejects null / undefined inputs gracefully', () => {
+    expect(verifyHostClaimToken(null, slug, phash, secret)).toBe(false)
+    expect(verifyHostClaimToken(undefined, slug, phash, secret)).toBe(false)
+    expect(verifyHostClaimToken('', slug, phash, secret)).toBe(false)
+    expect(verifyHostClaimToken('zz', slug, phash, secret)).toBe(false)
+  })
+
+  it('is not interchangeable with a session token', () => {
+    const session = makeSessionToken(slug, phash, secret)
+    expect(verifyHostClaimToken(session, slug, phash, secret)).toBe(false)
+  })
+
+  it('uses process.env.SECRET when no secret argument is passed', () => {
+    const token = makeHostClaimToken(slug, phash)
+    expect(verifyHostClaimToken(token, slug, phash)).toBe(true)
   })
 })
 

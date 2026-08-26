@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  roomExists: vi.fn(() => true),  // default: room exists
-  getRoomBySlug: vi.fn(() => ({
+  getActiveRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
@@ -15,7 +14,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
 }))
 
-import { roomExists } from '../../src/lib/server/db.js'
+import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -28,7 +27,7 @@ describe('setupWss — connection handling', () => {
     _resetRooms()          // clear stale state from previous test
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
   })
 
   it('closes connection when no slug provided', () => {
@@ -40,14 +39,14 @@ describe('setupWss — connection handling', () => {
     // Re-setup to test this path
     const wss2 = mockWss()
     setupWss(wss2)
-    roomExists.mockReturnValue(false)
+    getActiveRoomBySlug.mockReturnValue(null)
     const ws2 = mockWs()
     wss2.connect(ws2, 'nonexistent')
     expect(ws2.closed).toBe(true)
   })
 
   it('closes connection when room does not exist', () => {
-    roomExists.mockReturnValue(false)
+    getActiveRoomBySlug.mockReturnValue(null)
     const ws = mockWs()
     wss.connect(ws, 'badslug')
     expect(ws.closed).toBe(true)
@@ -152,6 +151,40 @@ describe('setupWss — connection handling', () => {
     expect(lastPresence.peers.length).toBe(1)
     expect(lastPresence.peers[0].name).toBe('Guest')
   })
+
+  it('error before join is a no-op', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1')
+    ws.emit('error')
+    join(ws, 'Alice', 'c1')
+    expect(ws.closed).toBe(false)
+    expect(ws.sent.some((m) => m.type === 'presence')).toBe(true)
+  })
+
+  it('error after join drops the peer so a new client can take the slot', () => {
+    const host = mockWs()
+    const guest = mockWs()
+    const late = mockWs()
+    wss.connect(host, 'room1'); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    host.emit('error')
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.closed).toBe(false)
+    expect(late.sent.some((m) => m.type === 'rejected')).toBe(false)
+  })
+
+  it('error on a replaced socket does not drop the new peer', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    ws1.emit('error')
+    guest.sent.length = 0
+    ws2.emit('message', JSON.stringify({ type: 'clap' }))
+    expect(guest.sent.some((m) => m.type === 'clap')).toBe(true)
+  })
 })
 
 describe('setupWss — yt_duck (hold-to-talk)', () => {
@@ -165,7 +198,7 @@ describe('setupWss — yt_duck (hold-to-talk)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    roomExists.mockReturnValue(true)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
