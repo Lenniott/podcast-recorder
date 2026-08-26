@@ -4,13 +4,13 @@
 
 **Blocked by:** 04: Upload confirmed local recording to server copy.
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** A server copy is useful only if the host can retrieve it before the room expires. Finalization should be based on the explicit completed local recording length, not on the connection closing or a timer. Incomplete server copies are not recordings and must not be downloadable as if they are complete.
 
-- [ ] The server writes a valid WAV for a completed server copy.
-- [ ] A server copy is marked complete only after the final local recording length has been received and finalized.
-- [ ] The host can download completed participant WAV files before the room expires.
-- [ ] Downloads are unavailable for incomplete, expired, or deleted room copies.
-- [ ] Downloaded server-copy WAV duration and sample count match the uploaded confirmed local audio.
-- [ ] Tests cover successful finalization, incomplete-copy refusal, and host download authorization.
+- [x] The server writes a valid WAV for a completed server copy.
+- [x] A server copy is marked complete only after the final local recording length has been received and finalized.
+- [x] The host can download completed participant WAV files before the room expires.
+- [x] Downloads are unavailable for incomplete, expired, or deleted room copies.
+- [x] Downloaded server-copy WAV duration and sample count match the uploaded confirmed local audio.
+- [x] Tests cover successful finalization, incomplete-copy refusal, and host download authorization.

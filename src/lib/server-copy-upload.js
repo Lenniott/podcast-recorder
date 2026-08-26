@@ -39,22 +39,51 @@
  * offset-mismatch from the server), this session gives up permanently —
  * per design, there is no resumable upload (see ticket 08): the server
  * copy is simply left incomplete, and the local WAV remains the fallback.
+ *
+ * `finish()` is the explicit "the local recording's FINAL length is now
+ * known" signal (ticket 05) — call it once, after the local writer's
+ * stop() has resolved, never on the upload connection merely going idle
+ * or a timer. It waits for every chunk handleWritten has queued so far to
+ * finish uploading, then asks the server to finalize using this module's
+ * own `confirmedBytes` total (the same authoritative counter
+ * handleWritten has been accumulating all along, so there's no separate
+ * "final length" value that could ever disagree with it) plus the
+ * `sampleRate` the recording actually ran at, so the server can build a
+ * WAV header that matches. Resolves `true` only once the server confirms
+ * the copy is complete — never while chunks are still in flight, and
+ * never after this session has already failed.
  */
-export function createServerCopyUpload({ slug, clientId, fetchImpl = fetch, onProgress } = {}) {
+export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress } = {}) {
   if (!slug) throw new Error('createServerCopyUpload: slug is required')
   if (!clientId) throw new Error('createServerCopyUpload: clientId is required')
 
   let accepted = false
   let failed = false
+  let finalized = false
   let ackedBytes = 0
   let confirmedBytes = 0
   const queue = [] // ArrayBuffers awaiting upload, oldest-first
   let sending = false
+  let idleWaiters = [] // resolvers waiting for the queue to fully drain
 
   function fail(error) {
     failed = true
     queue.length = 0
     reportProgress(error)
+  }
+
+  function notifyIdleWaiters() {
+    if (queue.length > 0 || sending) return
+    const waiters = idleWaiters
+    idleWaiters = []
+    waiters.forEach((resolve) => resolve())
+  }
+
+  /** Resolves once nothing is queued or in flight — i.e. every chunk
+   *  handleWritten has seen so far has actually reached the server. */
+  function whenIdle() {
+    if (queue.length === 0 && !sending) return Promise.resolve()
+    return new Promise((resolve) => idleWaiters.push(resolve))
   }
 
   function reportProgress(error) {
@@ -94,6 +123,7 @@ export function createServerCopyUpload({ slug, clientId, fetchImpl = fetch, onPr
       }
     } finally {
       sending = false
+      notifyIdleWaiters()
     }
   }
 
@@ -147,10 +177,44 @@ export function createServerCopyUpload({ slug, clientId, fetchImpl = fetch, onPr
     return true
   }
 
+  /**
+   * The explicit finalize signal — see the module-level doc comment.
+   * Never sends the finalize request while chunks are still queued or in
+   * flight, never after this session has already failed or was never
+   * accepted, and is safe to call more than once (a second call after a
+   * successful finalize is a no-op success).
+   */
+  async function finish() {
+    if (finalized) return true
+    await whenIdle()
+    if (failed || !accepted) return false
+
+    let res
+    try {
+      res = await fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/finalize`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId, totalBytes: confirmedBytes, sampleRate })
+      })
+    } catch (e) {
+      fail(e)
+      return false
+    }
+    if (!res.ok) {
+      fail(new Error(`server-copy finalize was not accepted (status ${res.status})`))
+      return false
+    }
+    const data = await res.json().catch(() => ({}))
+    finalized = !!data.finalized
+    reportProgress()
+    return finalized
+  }
+
   function getStatus(error) {
     return {
       accepted,
       failed,
+      finalized,
       ackedBytes,
       confirmedBytes,
       progress: confirmedBytes === 0 ? 0 : Math.min(1, ackedBytes / confirmedBytes),
@@ -158,5 +222,5 @@ export function createServerCopyUpload({ slug, clientId, fetchImpl = fetch, onPr
     }
   }
 
-  return { start, handleWritten, getStatus }
+  return { start, handleWritten, finish, getStatus }
 }

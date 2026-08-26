@@ -15,8 +15,9 @@ function i16(n, fill = 1) {
   return arr
 }
 
-/** A fetch double that accepts a session and every chunk immediately,
- *  tracking bytes it has "received" per clientId like the real endpoint. */
+/** A fetch double that accepts a session, every chunk, and finalize
+ *  immediately, tracking bytes it has "received" per clientId like the
+ *  real endpoints. */
 function makeFakeFetch() {
   let bytesAcked = 0
   const calls = []
@@ -24,6 +25,9 @@ function makeFakeFetch() {
     calls.push({ url: String(url), init })
     if (String(url).includes('/server-copy/session')) {
       return { ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: bytesAcked }) }
+    }
+    if (String(url).includes('/server-copy/finalize')) {
+      return { ok: true, status: 200, json: async () => ({ finalized: true, bytesWritten: bytesAcked }) }
     }
     const body = init.body
     const len = body.byteLength ?? body.length
@@ -147,6 +151,94 @@ describe('createServerCopyUpload — progress tracking', () => {
     await delay(10)
 
     expect(upload.getStatus().progress).toBe(1)
+  })
+})
+
+describe('createServerCopyUpload — finalize signal', () => {
+  it('waits for all queued chunks to be acked, then sends the confirmed total as the explicit final length', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, sampleRate: 44100, fetchImpl })
+    await upload.start()
+
+    upload.handleWritten(i16(100), 0) // 200 confirmed bytes
+    const finalized = await upload.finish()
+
+    expect(finalized).toBe(true)
+    const finalizeCall = calls.find((c) => c.url.includes('/server-copy/finalize'))
+    expect(finalizeCall).toBeTruthy()
+    expect(JSON.parse(finalizeCall.init.body)).toEqual({ clientId: CLIENT_ID, totalBytes: 200, sampleRate: 44100 })
+    expect(upload.getStatus().finalized).toBe(true)
+  })
+
+  it('never finalizes before in-flight chunks have actually been acked', async () => {
+    let releaseChunk
+    const fetchImpl = vi.fn((url) => {
+      if (String(url).includes('/server-copy/session')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
+      }
+      if (String(url).includes('/server-copy/finalize')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ finalized: true }) })
+      }
+      return new Promise((resolve) => {
+        releaseChunk = () => resolve({ ok: true, status: 200, json: async () => ({ bytesWritten: 200 }) })
+      })
+    })
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+
+    upload.handleWritten(i16(100), 0) // chunk still in flight
+    let finished = false
+    const finishPromise = upload.finish().then(() => { finished = true })
+    await delay(20)
+
+    expect(finished).toBe(false) // must not finalize while a chunk is still unacked
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/server-copy/finalize'))).toBe(false)
+
+    releaseChunk()
+    await finishPromise
+    expect(finished).toBe(true)
+  })
+
+  it('never finalizes when the session was rejected — finish() reports failure instead of hanging', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 410, json: async () => ({ accepted: false }) }))
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+
+    const finalized = await upload.finish()
+
+    expect(finalized).toBe(false)
+  })
+
+  it('never finalizes once a chunk upload has failed', async () => {
+    const fetchImpl = vi.fn((url) => {
+      if (String(url).includes('/server-copy/session')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
+      }
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
+    })
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+
+    upload.handleWritten(i16(100), 0)
+    await delay(20)
+
+    const finalized = await upload.finish()
+    expect(finalized).toBe(false)
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/server-copy/finalize'))).toBe(false)
+  })
+
+  it('is idempotent — calling finish() again after a successful finalize does not re-request it', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+    upload.handleWritten(i16(10), 0)
+    await upload.finish()
+
+    const finalizeCallsBefore = calls.filter((c) => c.url.includes('/server-copy/finalize')).length
+    await upload.finish()
+    const finalizeCallsAfter = calls.filter((c) => c.url.includes('/server-copy/finalize')).length
+
+    expect(finalizeCallsAfter).toBe(finalizeCallsBefore)
   })
 })
 

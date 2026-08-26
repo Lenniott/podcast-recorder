@@ -7,8 +7,12 @@ import {
   removeServerCopiesForRoom,
   getServerCopyFilePath,
   getServerCopyBytesWritten,
-  appendServerCopyChunk
+  appendServerCopyChunk,
+  getServerCopyWavPath,
+  isServerCopyFinalized,
+  finalizeServerCopy
 } from '../../src/lib/server/server-copy-storage.js'
+import { buildWavHeader } from '../../src/lib/audio-utils.js'
 
 let root
 
@@ -117,5 +121,77 @@ describe('appendServerCopyChunk', () => {
   it('rejects an offset ahead of what is on disk (a gap) the same way', () => {
     expect(() => appendServerCopyChunk('room1', 'client1', Buffer.from([1]), 10))
       .toThrow(expect.objectContaining({ code: 'OFFSET_MISMATCH', currentBytes: 0 }))
+  })
+})
+
+describe('getServerCopyWavPath', () => {
+  it('resolves to <roomDir>/<clientId>.wav', () => {
+    expect(getServerCopyWavPath('room1', 'client1')).toBe(join(root, 'room1', 'client1.wav'))
+  })
+
+  it('rejects a clientId that would escape the room directory', () => {
+    expect(() => getServerCopyWavPath('room1', '../../evil')).toThrow()
+  })
+})
+
+describe('isServerCopyFinalized', () => {
+  it('is false when no finalized WAV exists yet, even with raw chunks on disk', () => {
+    appendServerCopyChunk('room1', 'client1', Buffer.from([1, 2]), 0)
+    expect(isServerCopyFinalized('room1', 'client1')).toBe(false)
+  })
+
+  it('is true once finalizeServerCopy has produced a WAV file', async () => {
+    appendServerCopyChunk('room1', 'client1', Buffer.from([1, 2]), 0)
+    await finalizeServerCopy('room1', 'client1', { sampleRate: 48000 })
+    expect(isServerCopyFinalized('room1', 'client1')).toBe(true)
+  })
+})
+
+describe('finalizeServerCopy', () => {
+  it('writes a RIFF/WAVE header (matching the local writer format) followed by the raw PCM bytes on disk', async () => {
+    const pcm = Buffer.from(new Int16Array([1, -1, 1000, -1000]).buffer)
+    appendServerCopyChunk('room1', 'client1', pcm, 0)
+
+    await finalizeServerCopy('room1', 'client1', { sampleRate: 44100 })
+
+    const wavBytes = readFileSync(getServerCopyWavPath('room1', 'client1'))
+    const expectedHeader = Buffer.from(buildWavHeader(pcm.length, 44100))
+    expect(wavBytes.subarray(0, 44)).toEqual(expectedHeader)
+    expect(wavBytes.subarray(44)).toEqual(pcm)
+    expect(wavBytes.length).toBe(44 + pcm.length)
+  })
+
+  it('defaults to 48000 Hz when no sample rate is given, matching the local writer default', async () => {
+    appendServerCopyChunk('room1', 'client1', Buffer.from([1, 2]), 0)
+    await finalizeServerCopy('room1', 'client1')
+
+    const wavBytes = readFileSync(getServerCopyWavPath('room1', 'client1'))
+    const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength)
+    expect(view.getUint32(24, true)).toBe(48000) // sampleRate field
+  })
+
+  it('produces a valid, empty-but-well-formed WAV when no bytes were ever uploaded', async () => {
+    await finalizeServerCopy('room1', 'never-uploaded', { sampleRate: 48000 })
+
+    const wavBytes = readFileSync(getServerCopyWavPath('room1', 'never-uploaded'))
+    expect(wavBytes.length).toBe(44)
+    expect(wavBytes.subarray(0, 4).toString('ascii')).toBe('RIFF')
+  })
+
+  it('rejects further chunk appends once finalized, and never modifies the finalized file', async () => {
+    appendServerCopyChunk('room1', 'client1', Buffer.from([1, 2]), 0)
+    await finalizeServerCopy('room1', 'client1')
+    const wavBefore = readFileSync(getServerCopyWavPath('room1', 'client1'))
+
+    let error
+    try {
+      appendServerCopyChunk('room1', 'client1', Buffer.from([9, 9]), 2)
+    } catch (e) {
+      error = e
+    }
+
+    expect(error).toBeTruthy()
+    expect(error.code).toBe('ALREADY_FINALIZED')
+    expect(readFileSync(getServerCopyWavPath('room1', 'client1'))).toEqual(wavBefore)
   })
 })
