@@ -140,6 +140,68 @@ describe('setupWss — connection handling', () => {
     expect(afterResync.peers.find(p => p.name === 'Host').recording).toBe(true)
   })
 
+  it('presence defaults a fresh peer to an unavailable server copy', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1')
+    join(ws, 'Alice', 'c1')
+    const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+    expect(presence.peers[0]).toMatchObject({ serverCopyState: 'unavailable', serverCopyPercent: 0 })
+  })
+
+  it('server_copy_progress updates peer and is visible to both peers via presence', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host',  'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 42 }))
+
+    for (const ws of [ws1, ws2]) {
+      const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+      const host = presence.peers.find(p => p.name === 'Host')
+      expect(host).toMatchObject({ serverCopyState: 'in_progress', serverCopyPercent: 42 })
+    }
+  })
+
+  it('server_copy_progress never carries recording along with it and vice versa', () => {
+    const ws1 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    ws1.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'complete', percent: 100 }))
+
+    const presence = ws1.sent.filter(m => m.type === 'presence').at(-1)
+    const host = presence.peers.find(p => p.name === 'Host')
+    expect(host.recording).toBe(true)
+    expect(host.serverCopyState).toBe('complete')
+    expect(host.serverCopyPercent).toBe(100)
+  })
+
+  it('rejects an unknown server_copy_progress state rather than trusting arbitrary client input', () => {
+    const ws1 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'totally-made-up', percent: 50 }))
+
+    const presence = ws1.sent.filter(m => m.type === 'presence').at(-1)
+    const host = presence.peers.find(p => p.name === 'Host')
+    expect(host.serverCopyState).toBe('unavailable')
+  })
+
+  it('same-clientId reconnect drops server-copy status until the client resends it', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 75 }))
+
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    const afterJoin = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterJoin.peers.find(p => p.name === 'Host')).toMatchObject({ serverCopyState: 'unavailable', serverCopyPercent: 0 })
+
+    ws2.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 75 }))
+    const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterResync.peers.find(p => p.name === 'Host')).toMatchObject({ serverCopyState: 'in_progress', serverCopyPercent: 75 })
+  })
+
   it('removes peer and updates presence on disconnect', () => {
     const ws1 = mockWs()
     const ws2 = mockWs()

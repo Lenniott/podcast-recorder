@@ -7,7 +7,7 @@
   export let isHostClaim = false;
   export let roomPassword = null;
   export let wsStatus = "disconnected"; // connected | connecting | disconnected
-  export let peers = []; // [{ clientId, name, recording, role }]
+  export let peers = []; // [{ clientId, name, recording, role, serverCopyState, serverCopyPercent }]
   export let clientId = null;
   export let copyLinkDone = false;
   export let onCopyLink = () => {};
@@ -22,6 +22,21 @@
     if (p.recording) return "recording";
     if (wsStatus !== "connected") return "offline";
     return "online";
+  }
+
+  // Server-copy upload is a convenience mirror of the local recording, not
+  // the recording itself — kept as a visually separate pill so it's never
+  // mistaken for "is this participant's audio safe" (that's `recording`).
+  // See $lib/server-copy-status.js for how a peer's state/percent is derived.
+  const SERVER_COPY_LABEL = {
+    unavailable: "No server copy",
+    in_progress: "Server copy",
+    complete: "Server copy complete",
+    failed: "Server copy failed",
+  };
+
+  function serverCopyStatus(p) {
+    return p.serverCopyState || "unavailable";
   }
 </script>
 
@@ -44,6 +59,7 @@
     <div class="presence" aria-live="polite">
       {#each peers as p (p.clientId)}
         {@const status = peerStatus(p)}
+        {@const copyStatus = serverCopyStatus(p)}
         <div
           class="peer"
           class:peer-you={p.clientId === clientId}
@@ -65,6 +81,16 @@
               class:pill-offline={status === "offline"}
             >
               {STATUS_LABEL[status]}
+            </span>
+            <span
+              class="pill pill-server-copy"
+              class:pill-copy-unavailable={copyStatus === "unavailable"}
+              class:pill-copy-progress={copyStatus === "in_progress"}
+              class:pill-copy-complete={copyStatus === "complete"}
+              class:pill-copy-failed={copyStatus === "failed"}
+              title="Server copy is a convenience mirror — the local recording is the real one"
+            >
+              {SERVER_COPY_LABEL[copyStatus]}{copyStatus === "in_progress" ? ` ${p.serverCopyPercent ?? 0}%` : ""}
             </span>
           </div>
         </div>
@@ -131,6 +157,8 @@
   .peer-status-container {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 6px;
   }
   .peer-you {
@@ -162,6 +190,26 @@
   .pill-offline {
     background: rgba(148, 163, 184, 0.14);
     color: var(--muted);
+  }
+
+  /* Server-copy pills use blue/teal tones, never red/green — visually
+     distinct from the recording pill's palette so the two are never
+     confused for one status. */
+  .pill-copy-unavailable {
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--muted);
+  }
+  .pill-copy-progress {
+    background: rgba(56, 189, 248, 0.18);
+    color: #7dd3fc;
+  }
+  .pill-copy-complete {
+    background: rgba(45, 212, 191, 0.18);
+    color: #5eead4;
+  }
+  .pill-copy-failed {
+    background: rgba(249, 115, 22, 0.18);
+    color: #fdba74;
   }
 
   .muted-text {

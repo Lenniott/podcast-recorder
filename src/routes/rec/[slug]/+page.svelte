@@ -6,6 +6,8 @@
   import { page } from '$app/stores'
   import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
+  import { createServerCopyUpload } from '$lib/server-copy-upload.js'
+  import { deriveServerCopyDisplay } from '$lib/server-copy-status.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
@@ -51,6 +53,15 @@
   // so silence is only ever written for a REAL gap, never inferred from
   // how long a disk write took (see $lib/capture-writer.js for why that matters).
   let micGapStartedAt = null
+  // Convenience mirror of the local recording — see $lib/server-copy-upload.js.
+  // Fed from captureWriter's own onWritten seam (via handleWritten below), so
+  // it can never race ahead of, or substitute for, local write confirmation.
+  // A failed/slow/rejected upload must never block or delay anything above.
+  let serverCopyUpload = null
+  // What we last told the room about our own server-copy status, so
+  // handleServerCopyProgress only sends when the rounded percent/state
+  // actually changes (threshold-based, not on every confirmed chunk).
+  let lastSentServerCopy = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
@@ -604,6 +615,43 @@
       previewChunks.push(i16)
       previewSampleCount += i16.length
     }
+    // Same seam, chained: the server-copy mirror only ever sees a chunk
+    // after it's already been handed to writtenRing/the preview buffer,
+    // i.e. after captureWriter has confirmed it hit local disk.
+    serverCopyUpload?.handleWritten(i16)
+  }
+
+  /**
+   * The server-copy upload's onProgress callback. Derives the small
+   * display-ready {state, percent} shape (see $lib/server-copy-status.js)
+   * and, only when it actually changed, tells the room about it — the
+   * same threshold-based, percentage-only broadcast recording_state uses
+   * for local recording. Both peers then read the identical value back off
+   * `peers` via the room's own presence broadcast (see ws-rooms.js).
+   */
+  function handleServerCopyProgress(status) {
+    serverCopyUploadState = deriveServerCopyUploadState(status)
+    sendServerCopyProgress(status)
+  }
+
+  /**
+   * Feeds the pre-existing exit-guard (`hasIncompleteServerCopyUpload`
+   * above) — distinguishes "still uploading while we're still recording"
+   * from "recording stopped locally, upload still catching up" so the
+   * warning text can be accurate either way.
+   */
+  function deriveServerCopyUploadState(status) {
+    if (!status || !status.accepted) return status?.failed ? 'failed' : 'idle'
+    if (status.failed) return 'failed'
+    if (status.finalized) return 'complete'
+    return recordingState === 'recording' ? 'uploading' : 'catching_up'
+  }
+
+  function sendServerCopyProgress(status, { force = false } = {}) {
+    const { state, percent } = deriveServerCopyDisplay(status)
+    if (!force && lastSentServerCopy?.state === state && lastSentServerCopy?.percent === percent) return
+    lastSentServerCopy = { state, percent }
+    room.send({ type: 'server_copy_progress', state, percent })
   }
 
   function startRecordingCheck() {
@@ -670,6 +718,22 @@
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
     micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
+
+    // Fresh take, fresh server-copy session — reset any status left over
+    // from a previous take before this one has told the server anything,
+    // so peers never see a stale "complete"/"failed" pill for a take that
+    // hasn't started yet.
+    lastSentServerCopy = null
+    serverCopyUploadState = 'idle'
+    sendServerCopyProgress(null, { force: true })
+    serverCopyUpload = createServerCopyUpload({
+      slug: data.slug,
+      clientId,
+      sampleRate: recordingSampleRate,
+      onProgress: handleServerCopyProgress
+    })
+    serverCopyUpload.start() // fire-and-forget — never gates local recording, see module doc
+
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
       write: (buf) => fileWritable.write(buf),
@@ -705,6 +769,14 @@
     await new Promise(r => setTimeout(r, 300))
     const { dataByteCount } = await captureWriter.stop()
     captureWriter = null
+
+    // The explicit "final length is now known" signal — see
+    // $lib/server-copy-upload.js's finish() doc. Must come after local
+    // write confirmation (captureWriter.stop() above), never before. Not
+    // awaited: a slow/failing/rejected server copy must never delay or
+    // gate the local WAV finalize below (that's ticket 07's blocking-modal
+    // job, not this one, and only in the UI layer, never here).
+    serverCopyUpload?.finish()
 
     // Patch the WAV header with the real data size
     await fileWritable.seek(0)
@@ -825,6 +897,14 @@
   })
   room.registerResync(() => {
     if (recordingState === 'recording') wsNotifyState('recording')
+  })
+  room.registerResync(() => {
+    // The server forgets peer state across a dropped connection (a fresh
+    // peer object is created on rejoin — see ws-rooms.js), so this must
+    // re-announce itself here just like the recording resync above, or the
+    // server-copy pill would silently reset to "unavailable" after any
+    // reconnect and stay wrong for the rest of the session.
+    if (serverCopyUpload) sendServerCopyProgress(serverCopyUpload.getStatus(), { force: true })
   })
 
   function connectWs() {

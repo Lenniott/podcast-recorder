@@ -14,6 +14,15 @@
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
  *   { type: 'recording_state', state }   — 'recording' | 'stopped'
+ *   { type: 'server_copy_progress', state, percent }
+ *                                        — this peer's server-copy upload status, sent by
+ *                                          $lib/server-copy-upload.js's caller (see the
+ *                                          room page) on every threshold-crossing progress
+ *                                          change and again on every reconnect (state is
+ *                                          not remembered across a dropped connection, same
+ *                                          as recording_state). state is one of
+ *                                          'unavailable' | 'in_progress' | 'complete' | 'failed';
+ *                                          percent is a rounded 0-100 integer, never a byte count.
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *   { type: 'tab_create', tabId, title? }
  *                                        — client-generated tabId (like clientId);
@@ -32,7 +41,7 @@
  *                                          UI remounts without a WS reconnect.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording}] }
+ *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent}] }
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
@@ -73,9 +82,11 @@ const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
 const TAB_VIDEO_LEAD_MS = 250 // same idea as clap: schedule apply slightly in the future
 const YT_VIDEO_ID = /^[\w-]{11}$/
+const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'failed'])
 
 // rooms: Map<slug, Map<clientId, peer>>
-// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking }
+// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
+//         serverCopyState, serverCopyPercent }
 const rooms = new Map()
 
 // tabRooms: Map<slug, {
@@ -100,7 +111,12 @@ function sendPresence(slug) {
     name: p.name,
     recording: p.recording,
     role: p.role || 'guest',
-    isHost: (p.role || 'guest') === 'host'
+    isHost: (p.role || 'guest') === 'host',
+    // Separate from `recording` on purpose — local recording and the
+    // server-copy upload are different guarantees and must never be
+    // merged into one status (see ticket 06).
+    serverCopyState: p.serverCopyState || 'unavailable',
+    serverCopyPercent: p.serverCopyPercent || 0
   }))
   const msg = { type: 'presence', peers }
   for (const peer of room.values()) send(peer.ws, msg)
@@ -258,7 +274,9 @@ export function setupWss(wss) {
       role: 'guest',
       claimedHost: connectionHostClaim,
       joinedAt: Date.now(),
-      talking: false
+      talking: false,
+      serverCopyState: 'unavailable',
+      serverCopyPercent: 0
     }
 
     ws.on('message', (raw) => {
@@ -330,6 +348,17 @@ export function setupWss(wss) {
         recomputeRoles(room)
         sendPresence(slug)
         broadcast(slug, { type: 'recording_state', name: peer.name, state: msg.state }, clientId)
+      }
+
+      if (msg.type === 'server_copy_progress' && clientId) {
+        // Trust only a known state enum and an in-range integer percent —
+        // this is client-reported, so don't let a bad/hostile value show
+        // as if it were a real upload status to the other peer.
+        if (!SERVER_COPY_STATES.has(msg.state)) return
+        const percent = Number(msg.percent)
+        peer.serverCopyState = msg.state
+        peer.serverCopyPercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : 0
+        sendPresence(slug)
       }
 
       if (msg.type === 'yt_duck' && clientId) {
