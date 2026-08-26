@@ -41,3 +41,24 @@ function toPercent(progress) {
   const p = Number.isFinite(progress) ? progress : 0
   return Math.max(0, Math.min(100, Math.round(p * 100)))
 }
+
+/** @typedef {'idle' | 'uploading' | 'catching_up' | 'finalizing' | 'complete' | 'failed'} ServerCopyUploadState */
+
+/**
+ * A finer-grained sibling of deriveServerCopyDisplay's four-state
+ * vocabulary, distinguishing "still uploading while the local recording is
+ * still running" from "local recording has stopped, server copy is still
+ * catching up" — the page needs that distinction for accurate warning copy
+ * and for the post-stop blocking modal (ticket 07), even though both read
+ * as the single "in_progress" display state in the sidebar.
+ *
+ * `isRecording` is the only thing this needs from the page beyond the
+ * upload's own status, since the status object alone can't say whether the
+ * local writer is still running.
+ */
+export function deriveServerCopyUploadState(status, { isRecording = false } = {}) {
+  if (!status || !status.accepted) return status?.failed ? 'failed' : 'idle'
+  if (status.failed) return 'failed'
+  if (status.finalized) return 'complete'
+  return isRecording ? 'uploading' : 'catching_up'
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveServerCopyDisplay } from '../../src/lib/server-copy-status.js'
+import { deriveServerCopyDisplay, deriveServerCopyUploadState } from '../../src/lib/server-copy-status.js'
 
 describe('deriveServerCopyDisplay', () => {
   it('reports unavailable when there is no status at all (never started)', () => {
@@ -45,5 +45,43 @@ describe('deriveServerCopyDisplay', () => {
   it('clamps percent into [0, 100] even given out-of-range progress', () => {
     expect(deriveServerCopyDisplay({ accepted: true, progress: -0.2 }).percent).toBe(0)
     expect(deriveServerCopyDisplay({ accepted: true, progress: 1.5 }).percent).toBe(100)
+  })
+})
+
+describe('deriveServerCopyUploadState', () => {
+  it('is idle when there is no session yet, or one that has not been accepted', () => {
+    expect(deriveServerCopyUploadState(null, { isRecording: true })).toBe('idle')
+    expect(deriveServerCopyUploadState({ accepted: false, failed: false }, { isRecording: true })).toBe('idle')
+  })
+
+  it('is failed when the session was rejected outright, even with nothing queued', () => {
+    expect(deriveServerCopyUploadState({ accepted: false, failed: true }, { isRecording: true })).toBe('failed')
+  })
+
+  it('is failed once a chunk upload has failed mid-transfer', () => {
+    const status = { accepted: true, failed: true, finalized: false }
+    expect(deriveServerCopyUploadState(status, { isRecording: true })).toBe('failed')
+    expect(deriveServerCopyUploadState(status, { isRecording: false })).toBe('failed')
+  })
+
+  it('is complete only once finalized, regardless of recording state', () => {
+    const status = { accepted: true, failed: false, finalized: true }
+    expect(deriveServerCopyUploadState(status, { isRecording: true })).toBe('complete')
+    expect(deriveServerCopyUploadState(status, { isRecording: false })).toBe('complete')
+  })
+
+  it('is "uploading" while accepted-but-not-finalized and the local recording is still active', () => {
+    const status = { accepted: true, failed: false, finalized: false }
+    expect(deriveServerCopyUploadState(status, { isRecording: true })).toBe('uploading')
+  })
+
+  it('is "catching_up" once the local recording has stopped but the copy has not finalized yet', () => {
+    const status = { accepted: true, failed: false, finalized: false }
+    expect(deriveServerCopyUploadState(status, { isRecording: false })).toBe('catching_up')
+  })
+
+  it('defaults isRecording to false when not passed', () => {
+    const status = { accepted: true, failed: false, finalized: false }
+    expect(deriveServerCopyUploadState(status)).toBe('catching_up')
   })
 })

@@ -7,13 +7,15 @@
   import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
   import { createServerCopyUpload } from '$lib/server-copy-upload.js'
-  import { deriveServerCopyDisplay } from '$lib/server-copy-status.js'
+  import { deriveServerCopyDisplay, deriveServerCopyUploadState } from '$lib/server-copy-status.js'
+  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/exit-guard.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  import ServerCopyWaitModal from '$lib/ServerCopyWaitModal.svelte'
   import { createRoomConnection } from '$lib/room-connection.js'
 
   function focus(el) { el.focus() }
@@ -151,6 +153,11 @@
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
   let serverCopyUploadState = 'idle' // idle | uploading | catching_up | finalizing | complete | failed
+  // Rounded percent for OUR OWN server-copy upload, kept in lockstep with
+  // serverCopyUploadState below — this is what the post-stop blocking modal
+  // (ticket 07) shows. Derived via deriveServerCopyDisplay, same as the
+  // sidebar (ticket 06), so the two never disagree on what "percent" means.
+  let serverCopyUploadPercent = 0
   let allowNextGuardedNavigation = false
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
@@ -158,12 +165,18 @@
   // ─── Derived ────────────────────────────────────────────────────────
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
-  $: hasIncompleteServerCopyUpload =
-    serverCopyUploadState === 'uploading' ||
-    serverCopyUploadState === 'catching_up' ||
-    serverCopyUploadState === 'finalizing'
+  $: hasIncompleteServerCopyUpload = isIncompleteServerCopyUpload(serverCopyUploadState)
   $: hasActiveLocalRecording = recordingState === 'recording' || recordingState === 'stopping'
-  $: hasBlockingExitWork = hasActiveLocalRecording || hasIncompleteServerCopyUpload
+  // The post-stop blocking modal (ticket 07): our own recording has fully
+  // stopped (local WAV already saved) but our own server copy hasn't
+  // reached ticket 05's definition of complete yet. Scoped to this
+  // participant only — the sidebar (ticket 06) is the all-participants view.
+  $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload
+  // Single source of truth for both severity tiers of the exit guard — see
+  // $lib/exit-guard.js for why active-recording always wins when both are
+  // true, so the two warnings can never collide or double-fire.
+  $: exitGuard = deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload })
+  $: hasBlockingExitWork = exitGuard.blocking
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
   $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
@@ -198,16 +211,6 @@
     sessionStorage.setItem(participantNameStorageKey, n)
   }
 
-  function exitWarningMessage() {
-    if (hasActiveLocalRecording) {
-      return 'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
-    }
-    if (hasIncompleteServerCopyUpload) {
-      return 'Your recording is saved locally, but the server copy is still uploading. Leave anyway?'
-    }
-    return ''
-  }
-
   function handleBeforeUnload(event) {
     if (!hasBlockingExitWork) return
     if (allowNextGuardedNavigation) {
@@ -231,7 +234,7 @@
     const url = new URL(link.href, window.location.href)
     if (url.origin !== window.location.origin) return
 
-    if (!window.confirm(exitWarningMessage())) {
+    if (!window.confirm(exitGuard.message)) {
       event.preventDefault()
       return
     }
@@ -253,7 +256,7 @@
         return
       }
 
-      if (!window.confirm(exitWarningMessage())) {
+      if (!window.confirm(exitGuard.message)) {
         navigation.cancel()
       }
     })
@@ -630,21 +633,15 @@
    * `peers` via the room's own presence broadcast (see ws-rooms.js).
    */
   function handleServerCopyProgress(status) {
-    serverCopyUploadState = deriveServerCopyUploadState(status)
+    // Shared vocabulary from $lib/server-copy-status.js — distinguishes
+    // "still uploading while we're still recording" from "recording
+    // stopped locally, upload still catching up" so both the exit-guard
+    // warning text and the post-stop blocking modal (ticket 07) stay
+    // accurate. isRecording is the one thing the status object alone can't
+    // tell it.
+    serverCopyUploadState = deriveServerCopyUploadState(status, { isRecording: recordingState === 'recording' })
+    serverCopyUploadPercent = deriveServerCopyDisplay(status).percent
     sendServerCopyProgress(status)
-  }
-
-  /**
-   * Feeds the pre-existing exit-guard (`hasIncompleteServerCopyUpload`
-   * above) — distinguishes "still uploading while we're still recording"
-   * from "recording stopped locally, upload still catching up" so the
-   * warning text can be accurate either way.
-   */
-  function deriveServerCopyUploadState(status) {
-    if (!status || !status.accepted) return status?.failed ? 'failed' : 'idle'
-    if (status.failed) return 'failed'
-    if (status.finalized) return 'complete'
-    return recordingState === 'recording' ? 'uploading' : 'catching_up'
   }
 
   function sendServerCopyProgress(status, { force = false } = {}) {
@@ -725,6 +722,7 @@
     // hasn't started yet.
     lastSentServerCopy = null
     serverCopyUploadState = 'idle'
+    serverCopyUploadPercent = 0
     sendServerCopyProgress(null, { force: true })
     serverCopyUpload = createServerCopyUpload({
       slug: data.slug,
@@ -1225,6 +1223,7 @@
   onConfirm={confirmRecordingCheck}
   onReject={rejectRecordingCheck}
 />
+<ServerCopyWaitModal open={showUploadWaitModal} percent={serverCopyUploadPercent} />
 {/if}
 
 <style>
