@@ -151,6 +151,40 @@ describe('setupWss — connection handling', () => {
     expect(lastPresence.peers.length).toBe(1)
     expect(lastPresence.peers[0].name).toBe('Guest')
   })
+
+  it('error before join is a no-op', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1')
+    ws.emit('error')
+    join(ws, 'Alice', 'c1')
+    expect(ws.closed).toBe(false)
+    expect(ws.sent.some((m) => m.type === 'presence')).toBe(true)
+  })
+
+  it('error after join drops the peer so a new client can take the slot', () => {
+    const host = mockWs()
+    const guest = mockWs()
+    const late = mockWs()
+    wss.connect(host, 'room1'); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    host.emit('error')
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.closed).toBe(false)
+    expect(late.sent.some((m) => m.type === 'rejected')).toBe(false)
+  })
+
+  it('error on a replaced socket does not drop the new peer', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    ws1.emit('error')
+    guest.sent.length = 0
+    ws2.emit('message', JSON.stringify({ type: 'clap' }))
+    expect(guest.sent.some((m) => m.type === 'clap')).toBe(true)
+  })
 })
 
 describe('setupWss — yt_duck (hold-to-talk)', () => {

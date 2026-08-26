@@ -11,8 +11,11 @@ const SITE_COOKIE = 'pr_site_auth'
 /** @type {Map<string, number[]>} */
 const postLog = new Map()
 
+const WINDOW_MS = 60_000
+const AUTH_ACTIONS = new Set(['/site_enter', '/enter'])
+
 // Clean up entries older than the window every few minutes
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const cutoff = Date.now() - WINDOW_MS
   for (const [key, times] of postLog) {
     const fresh = times.filter(t => t > cutoff)
@@ -20,9 +23,7 @@ setInterval(() => {
     else postLog.set(key, fresh)
   }
 }, 2 * 60 * 1000)
-
-const WINDOW_MS = 60_000
-const AUTH_ACTIONS = new Set(['/site_enter', '/enter'])
+cleanupTimer.unref?.()
 
 function parseInt_(val, fallback) {
   const n = Number.parseInt(String(val || ''), 10)
@@ -38,6 +39,17 @@ function getIp(event) {
     event.request.headers.get('x-real-ip') ||
     'unknown'
   )
+}
+
+// SvelteKit named actions are the first query key that starts with `/`
+// (see call_action in @sveltejs/kit). Other params may sit before that
+// (`?expired=1&/enter`), so we must not take keys()[0] blindly. A key
+// without the slash is a normal query param, not an action name.
+function formActionFromUrl(url) {
+  for (const key of url.searchParams.keys()) {
+    if (key.startsWith('/')) return key
+  }
+  return ''
 }
 
 function checkRateLimit(ip, isAuthAction) {
@@ -78,8 +90,7 @@ export async function handle({ event, resolve }) {
   // Rate-limit all POST actions (form submissions)
   if (event.request.method === 'POST') {
     const ip = getIp(event)
-    const action = event.url.searchParams.toString() // e.g. "/enter" or "/site_enter"
-    const isAuthAction = AUTH_ACTIONS.has(action)
+    const isAuthAction = AUTH_ACTIONS.has(formActionFromUrl(event.url))
     if (!checkRateLimit(ip, isAuthAction)) {
       throw error(429, 'Too many requests — slow down and try again in a minute.')
     }

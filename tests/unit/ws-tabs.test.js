@@ -67,6 +67,17 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
     expect(state.tabs.map((t) => t.title)).toEqual(['Tab 1', 'Tab 2'])
   })
 
+  it('rejects a duplicate or empty tab id', () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 't2' }))
+    expect(host.sent.some((m) => m.type === 'error' && m.message === 'Invalid or duplicate tab id')).toBe(true)
+
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: '' }))
+    expect(host.sent.some((m) => m.type === 'error' && m.message === 'Invalid or duplicate tab id')).toBe(true)
+  })
+
   it('rejects tab_create once the room is at MAX_TABS', () => {
     for (let i = 0; i < MAX_TABS - 1; i++) {
       host.emit('message', JSON.stringify({ type: 'tab_create', tabId: `extra-${i}` }))
