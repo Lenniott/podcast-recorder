@@ -502,6 +502,37 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     expect(upload.getStatus().failed).toBe(true)
   })
 
+  it('gives up via the elapsed-time bound when individual attempts are slow, before the attempt-count bound would ever be reached', async () => {
+    // The previous test only ever exercises RETRY_MAX_ATTEMPTS, because a
+    // fast-rejecting fetch reaches 5 attempts long before 20s of backoff
+    // delay accumulates. That leaves RETRY_MAX_ELAPSED_MS unexercised — a
+    // connection that's technically up but each attempt takes a long time
+    // to time out (rather than failing instantly) needs the elapsed-time
+    // bound specifically, not the attempt-count one, to ever give up.
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    let chunkAttempts = 0
+    const SLOW_ATTEMPT_MS = 6000 // 4 of these alone exceed RETRY_MAX_ELAPSED_MS (20s)
+    const fetchImpl = vi.fn((url) => {
+      if (String(url).includes('/server-copy/session')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
+      }
+      chunkAttempts++
+      return new Promise((_, reject) => setTimeout(() => reject(new Error('slow timeout')), SLOW_ATTEMPT_MS))
+    })
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+
+    upload.handleWritten(i16(100), 0)
+    await flushRetries()
+
+    // Stopped well short of the 5-attempt cap — proof it was the 20s
+    // elapsed-time bound that ended this, not the attempt-count bound.
+    expect(chunkAttempts).toBeLessThan(5)
+    expect(chunkAttempts).toBeGreaterThan(1)
+    expect(upload.getStatus().failed).toBe(true)
+  })
+
   it('fails a chunk upload immediately on a non-retryable 4xx (expired room), without spending any retry attempts', async () => {
     let chunkAttempts = 0
     const fetchImpl = vi.fn(async (url) => {
