@@ -1,28 +1,31 @@
 <script>
   import { onMount } from "svelte";
-  import { getTheme, toggleTheme } from "./theme.js";
+  import { getMode, cycleMode } from "./theme.js";
 
-  // Matches the boot script's default in app.html so there's nothing to
-  // reconcile on mount in the common case; onMount below still re-reads
-  // the real attribute in case a stored preference disagrees.
-  let theme = "dark";
+  // 'system' is the default and matches the boot script in app.html, so
+  // there's nothing to reconcile on mount in the common case; onMount below
+  // still re-reads the real value in case a stored preference disagrees.
+  let mode = "system";
+
+  const ICON = { system: "🖥️", light: "☀️", dark: "🌙" };
+  const NEXT = { system: "light", light: "dark", dark: "system" };
+  const LABEL = { system: "System", light: "Light", dark: "Dark" };
 
   onMount(() => {
-    theme = getTheme();
-    const onChange = (e) => { theme = e.detail; };
-    window.addEventListener("themechange", onChange);
-    return () => window.removeEventListener("themechange", onChange);
+    mode = getMode();
   });
+
+  $: title = `Theme: ${LABEL[mode]} (click for ${LABEL[NEXT[mode]]})`;
 </script>
 
 <button
   type="button"
   class="btn-ghost btn-icon theme-toggle"
-  on:click={() => (theme = toggleTheme())}
-  title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-  aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+  on:click={() => (mode = cycleMode())}
+  {title}
+  aria-label={title}
 >
-  {theme === "dark" ? "☀️" : "🌙"}
+  {ICON[mode]}
 </button>
 
 <style>
