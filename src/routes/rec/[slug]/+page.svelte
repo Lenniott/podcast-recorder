@@ -47,11 +47,20 @@
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
   let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
-  // Set the instant the current mic stops flowing (device swap/dropout),
-  // cleared once audio is flowing again. Read by captureWriter.notifyDeviceGap()
-  // so silence is only ever written for a REAL gap, never inferred from
-  // how long a disk write took (see $lib/capture-writer.js for why that matters).
-  let micGapStartedAt = null
+  // NOTE: mic reconnects do NOT call captureWriter.notifyDeviceGap(). gainNode
+  // stays connected to workletNode across every reconnect (only the
+  // micSource -> gainNode edge is ever touched — see connectMicNow) and
+  // workletNode is kept ticking for the whole session via silentSink ->
+  // audioCtx.destination. A GainNode with no live input still outputs real,
+  // correctly-timed zero samples every render quantum, so the worklet posts
+  // genuine digital silence through the ordinary writeChunk() path for the
+  // *entire* duration a mic is disconnected — automatically, and with better
+  // precision than any wall-clock measurement could give. Calling
+  // notifyDeviceGap() on top of that back-fills a SECOND helping of silence
+  // for time that's already on disk, stretching the take and producing the
+  // stutter this comment exists to stop someone reintroducing. Verified via
+  // a real AudioWorklet + gainNode-with-zero-inputs probe: the worklet kept
+  // posting 'data' chunks at the expected sample rate throughout.
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
@@ -331,8 +340,7 @@
   // independently calling back in here. Without this, both could complete:
   // two live MediaStreamSources would each get wired into gainNode and
   // mixed together — the doubled, "echoey" audio a dropout should never
-  // produce (a real gap is only ever allowed to write silence, via
-  // notifyDeviceGap — see $lib/capture-writer.js). See $lib/serial-queue.js.
+  // produce. See $lib/serial-queue.js.
   const serializeMicConnect = createSerialQueue()
 
   /** Serialized entry point — see serializeMicConnect above. */
@@ -351,10 +359,6 @@
    */
   async function connectMicNow(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
     if (!audioCtx) return
-
-    // Marks the start of a real capture gap unless one is already running
-    // (e.g. track.onended already marked it more precisely — see below).
-    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
 
     micSource?.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
@@ -376,13 +380,8 @@
     micStream = await navigator.mediaDevices.getUserMedia(constraints)
 
     // Instant detection: fires before devicechange, keeps recording alive.
-    // Mark the gap the moment audio actually stops, not once the fallback
-    // logic gets around to reacting to it.
     micStream.getAudioTracks().forEach(track => {
-      track.onended = () => {
-        micGapStartedAt = audioCtx?.currentTime ?? null
-        connectMicWithFallback()
-      }
+      track.onended = () => connectMicWithFallback()
     })
 
     micSource = audioCtx.createMediaStreamSource(micStream)
@@ -390,19 +389,6 @@
     gainNode.connect(workletNode)
     gainNode.connect(analyserNode)
     injectReconnectMarker()
-    resolveMicGap()
-  }
-
-  /**
-   * Report a resolved capture gap to the Capture Writer as real, measured
-   * wall-clock silence — the only path allowed to write silence into the
-   * take. See $lib/capture-writer.js for why write-latency must never do this.
-   */
-  function resolveMicGap() {
-    if (micGapStartedAt == null) return
-    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
-    micGapStartedAt = null
-    if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
   }
 
   /** Serialized entry point — see serializeMicConnect above. */
@@ -450,17 +436,13 @@
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
       })
       micStream.getAudioTracks().forEach(track => {
-        track.onended = () => {
-          micGapStartedAt = audioCtx?.currentTime ?? null
-          connectMicWithFallback()
-        }
+        track.onended = () => connectMicWithFallback()
       })
       micSource = audioCtx.createMediaStreamSource(micStream)
       micSource.connect(gainNode)
       gainNode.connect(workletNode)
       gainNode.connect(analyserNode)
       injectReconnectMarker()
-      resolveMicGap()
 
       // Figure out what we actually got
       await loadDevices()
@@ -529,7 +511,11 @@
         const i16 = float32ToInt16(e.data.buffer)
         // Queued internally and flushed in the background — a slow disk
         // just makes the queue longer, it can never fabricate silence.
-        // Real gaps only ever come from notifyDeviceGap() (see connectMic).
+        // This is also the ONLY place a mic gap's silence gets recorded:
+        // the worklet keeps posting these 'data' messages (real zero
+        // samples) throughout any reconnect, so a device gap needs no
+        // separate backfill — see the NOTE by captureWriter's declaration
+        // above for why.
         bytesWritten += captureWriter.writeChunk(i16)
       }
     }
@@ -695,7 +681,6 @@
     // Write placeholder WAV header (will patch at end with real size)
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
-    micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
       write: (buf) => fileWritable.write(buf),

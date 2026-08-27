@@ -29,6 +29,23 @@ pill) must be sourced from what was actually confirmed written
 can look perfectly healthy while the file quietly diverges from it — that gap is
 what let the original bug go unnoticed for an hour.
 
+`notifyDeviceGap` still exists and is still the only correct way to backfill a
+gap the write path genuinely never saw — but the mic-reconnect path in
+`src/routes/rec/[slug]/+page.svelte` (`connectMicNow`) does **not** call it.
+`gainNode` stays wired to `workletNode` across every reconnect (only
+`micSource`'s own edge is ever touched), and `workletNode` is kept ticking for
+the whole session via a silent path to `audioCtx.destination` — so a `GainNode`
+with no live input still posts real, correctly-timed zero samples the entire
+time a mic is disconnected, through the ordinary `writeChunk()` path. Calling
+`notifyDeviceGap` there too used to back-fill a *second* helping of silence for
+time already on disk — confirmed by a real-AudioContext probe to double the
+recorded length of every gap almost exactly. That's what "the same choppy
+recording" turned out to be on a loose connector reconnecting often. Don't
+reattach `notifyDeviceGap` to the reconnect path without re-checking this —
+see `tests/playwright/mic_gap_no_double_silence.spec.js` for the regression
+coverage and search history for `fix(recording): stop mic reconnects from
+double-recording gap silence`.
+
 ## Keeping host and guest in sync
 
 One WebSocket connection per browser, owned by `src/lib/room-connection.js`.
