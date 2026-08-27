@@ -6,6 +6,7 @@
   import { page } from '$app/stores'
   import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
+  import { createSerialQueue } from '$lib/serial-queue.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
   import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
@@ -324,13 +325,31 @@
     await connectMic(selectedDeviceId, { strictDevice: true })
   }
 
+  // Serializes every mic (re)connect attempt behind one queue. A loose
+  // external-mic connection can drop out in a way that fires BOTH
+  // track.onended AND a devicechange event for the very same blip, each
+  // independently calling back in here. Without this, both could complete:
+  // two live MediaStreamSources would each get wired into gainNode and
+  // mixed together — the doubled, "echoey" audio a dropout should never
+  // produce (a real gap is only ever allowed to write silence, via
+  // notifyDeviceGap — see $lib/capture-writer.js). See $lib/serial-queue.js.
+  const serializeMicConnect = createSerialQueue()
+
+  /** Serialized entry point — see serializeMicConnect above. */
+  function connectMic(deviceId = selectedDeviceId, opts = {}) {
+    return serializeMicConnect(() => connectMicNow(deviceId, opts))
+  }
+
   /**
    * Connect to a specific device by ID.
    * Uses `ideal` (not `exact`) so the browser can recover if the device
    * is momentarily unavailable rather than hard-throwing.
    * Attaches track.onended so we react the instant the mic is yanked.
+   * Only ever called from within serializeMicConnect (connectMic /
+   * connectMicWithFallback) — never call this directly, or two attempts
+   * can race and both end up wired into gainNode at once.
    */
-  async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
+  async function connectMicNow(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
     if (!audioCtx) return
 
     // Marks the start of a real capture gap unless one is already running
@@ -386,19 +405,26 @@
     if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
   }
 
+  /** Serialized entry point — see serializeMicConnect above. */
+  function connectMicWithFallback() {
+    return serializeMicConnect(() => connectMicWithFallbackNow())
+  }
+
   /**
    * Mic disappeared. Walk through every available device until one works.
    * Last resort: no deviceId at all (browser picks built-in).
    * Recording never stops — there will be a short gap in audio, nothing more.
+   * Only ever called from within serializeMicConnect (via connectMicWithFallback)
+   * — see connectMicNow's comment for why calling this directly is unsafe.
    */
-  async function connectMicWithFallback() {
+  async function connectMicWithFallbackNow() {
     await loadDevices()
 
     // Try the currently selected device first (it may have just blipped)
     const stillAvailable = devices.some(d => d.deviceId === selectedDeviceId)
     if (stillAvailable) {
       try {
-        await connectMic(selectedDeviceId, { strictDevice: true })
+        await connectMicNow(selectedDeviceId, { strictDevice: true })
         micFallback = false
         return
       } catch { /* fall through */ }
@@ -408,7 +434,7 @@
     for (const device of devices) {
       if (device.deviceId === selectedDeviceId) continue
       try {
-        await connectMic(device.deviceId)
+        await connectMicNow(device.deviceId)
         selectedDeviceId  = device.deviceId
         micFallback       = true
         micFallbackName   = device.label || 'Unknown microphone'
