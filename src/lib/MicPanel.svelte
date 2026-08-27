@@ -87,7 +87,7 @@
   .perm-warn,
   .fallback-warn {
     font-size: 12px;
-    color: #fbbf24;
+    color: var(--warn-text);
     margin: 0;
   }
 

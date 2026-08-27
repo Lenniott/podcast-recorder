@@ -57,6 +57,18 @@
   let canvasCtx
   let animFrame
   let analyserData
+  // The canvas is drawn imperatively (fillStyle/strokeStyle can't reference
+  // CSS custom properties directly), so its theme-dependent colors are read
+  // from the page's computed style — once up front, then again whenever the
+  // theme toggle fires — rather than every animation frame.
+  let waveformBg = '#0e0e10'
+  let waveformCenterLine = '#2a2a2e'
+  function refreshWaveformColors() {
+    if (!browser) return
+    const cs = getComputedStyle(document.documentElement)
+    waveformBg = cs.getPropertyValue('--bg-elevated').trim() || waveformBg
+    waveformCenterLine = cs.getPropertyValue('--border').trim() || waveformCenterLine
+  }
   // While recording, the waveform draws from this instead of analyserNode —
   // it only ever holds audio the Capture Writer has confirmed was actually
   // written to disk (fed via captureWriter's onWritten). The mic signal can
@@ -547,11 +559,11 @@
       }
 
       // Background
-      canvasCtx.fillStyle = '#0e0e10'
+      canvasCtx.fillStyle = waveformBg
       canvasCtx.fillRect(0, 0, W, H)
 
       // Centre line
-      canvasCtx.strokeStyle = '#2a2a2e'
+      canvasCtx.strokeStyle = waveformCenterLine
       canvasCtx.lineWidth = 1
       canvasCtx.beginPath()
       canvasCtx.moveTo(0, H / 2)
@@ -889,6 +901,8 @@
     if (browser) {
       window.addEventListener('beforeunload', handleBeforeUnload)
       document.addEventListener('click', handleDocumentClick, { capture: true })
+      refreshWaveformColors()
+      window.addEventListener('themechange', refreshWaveformColors)
 
       // Only *restore* a previously-known name — never unconditionally
       // reset myName to '' when neither source has one. This ran
@@ -941,6 +955,7 @@
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
     window.removeEventListener('beforeunload', handleBeforeUnload)
     document.removeEventListener('click', handleDocumentClick, { capture: true })
+    window.removeEventListener('themechange', refreshWaveformColors)
     room.disconnect()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
@@ -1184,8 +1199,8 @@
     font-size: 13px;
     font-weight: 500;
   }
-  .browser-item.ok  { background: rgba(34,197,94,.1);  color: #86efac; }
-  .browser-item.bad { background: rgba(239,68,68,.08); color: #fca5a5; }
+  .browser-item.ok  { background: rgba(34,197,94,.1);  color: var(--success-text); }
+  .browser-item.bad { background: rgba(239,68,68,.08); color: var(--danger-text); }
   .browser-note {
     font-size: 12px;
     color: var(--muted);
@@ -1206,7 +1221,7 @@
     background: rgba(239,68,68,.12);
     border: 1px solid rgba(239,68,68,.3);
     border-radius: var(--radius);
-    color: #fca5a5;
+    color: var(--danger-text);
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 16px;

@@ -5,6 +5,20 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Local podcast recorder — capture lossless audio together, remotely." />
+    <script>
+      // Runs before anything paints so the page never flashes the wrong
+      // theme. Kept tiny and inline (not a module) on purpose — a fetched
+      // script would arrive too late. Mirrored by $lib/theme.js at runtime.
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var theme = stored === 'light' || stored === 'dark'
+            ? stored
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {}
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

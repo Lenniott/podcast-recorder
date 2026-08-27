@@ -159,7 +159,7 @@
     font-size: 32px;
     font-weight: 700;
     letter-spacing: -.02em;
-    color: #fff;
+    color: var(--text);
   }
 
   .tagline {
@@ -197,7 +197,7 @@
     background: rgba(239, 68, 68, .12);
     border: 1px solid rgba(239, 68, 68, .3);
     border-radius: var(--radius);
-    color: #fca5a5;
+    color: var(--danger-text);
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 16px;
@@ -212,7 +212,7 @@
   .notice-warn {
     background: rgba(250,204,21,.1);
     border: 1px solid rgba(250,204,21,.25);
-    color: #fde047;
+    color: var(--warn-text);
   }
 
   .footer-note {

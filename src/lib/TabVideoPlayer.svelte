@@ -404,7 +404,7 @@
   }
 
   .watch-error {
-    color: #e5484d;
+    color: var(--danger-text);
     font-size: 12px;
     margin: 6px 0 0;
   }
@@ -415,7 +415,7 @@
     border-radius: 8px;
     background: rgba(245, 158, 11, 0.1);
     border: 1px solid rgba(245, 158, 11, 0.35);
-    color: #fbbf24;
+    color: var(--warn-text);
     font-size: 13px;
   }
 

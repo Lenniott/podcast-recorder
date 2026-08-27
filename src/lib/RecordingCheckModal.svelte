@@ -116,7 +116,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: #ef4444;
+    color: var(--danger-text);
     font-weight: 600;
     font-size: 12px;
     margin-bottom: 12px;
@@ -158,7 +158,7 @@
   }
 
   .check-error {
-    color: #fbbf24;
+    color: var(--warn-text);
     font-size: 12px;
     margin: 10px 0 0;
   }

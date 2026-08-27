@@ -1,19 +1,74 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/*
+ * Theme tokens — light (default) and dark. Which one applies is decided by
+ * the `data-theme` attribute on <html>, set before first paint by the
+ * boot script in app.html (localStorage override, else prefers-color-scheme)
+ * and flipped at runtime by $lib/theme.js / <ThemeToggle>. The
+ * `prefers-color-scheme` block below is only a safety net for the (rare)
+ * case that script never ran.
+ */
 :root {
+  --bg:        #f4f4f6;
+  --surface:   #ffffff;
+  --bg-elevated:#eef0f2;  /* panels/cards nested inside a --surface card */
+  --border:    #e0e0e5;
+  --text:      #18181b;
+  --muted:     #6b6b73;
+  --accent:    #0a4e3f;   /* purple — podcast vibes */
+  --accent-dim:#12705a;
+  --danger:    #ef4444;
+  --success:   #22c55e;
+  --warn:      #f59e0b;
+  /* Same-hue but contrast-tuned for use as plain text (not a filled swatch)
+     directly against --bg/--surface/--bg-elevated — see AGENTS.md-adjacent
+     note: the raw --danger/--warn/--success above stay identical across
+     themes because they're only ever used as filled dots/buttons, where
+     legibility isn't a background-contrast problem. Text needs its own. */
+  --danger-text: #dc2626;
+  --warn-text:   #92400e;
+  --success-text:#15803d;
+  --radius:    8px;
+  --font:      'Inter', system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0e0e10;
+    --surface:   #18181b;
+    --bg-elevated:#1f1f23;
+    --border:    #2a2a2e;
+    --text:      #e4e4e7;
+    --muted:     #71717a;
+    --accent:    #0a4e3f;
+    --accent-dim:#33685d;
+    --danger:    #ef4444;
+    --success:   #22c55e;
+    --warn:      #f59e0b;
+    --danger-text: #fca5a5;
+    --warn-text:   #fbbf24;
+    --success-text:#86efac;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
   --bg:        #0e0e10;
   --surface:   #18181b;
-  --bg-elevated:#1f1f23;  /* panels/cards nested inside a --surface card */
+  --bg-elevated:#1f1f23;
   --border:    #2a2a2e;
   --text:      #e4e4e7;
   --muted:     #71717a;
-  --accent:    #0a4e3f;   /* purple — podcast vibes */
+  --accent:    #0a4e3f;
   --accent-dim:#33685d;
   --danger:    #ef4444;
   --success:   #22c55e;
   --warn:      #f59e0b;
-  --radius:    8px;
-  --font:      'Inter', system-ui, -apple-system, sans-serif;
+  --danger-text: #fca5a5;
+  --warn-text:   #fbbf24;
+  --success-text:#86efac;
+  color-scheme: dark;
 }
 
 html, body {

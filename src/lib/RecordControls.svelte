@@ -167,7 +167,7 @@
   }
 
   .recording-stat {
-    color: #ef4444;
+    color: var(--danger-text);
     font-weight: 600;
   }
 
@@ -175,7 +175,7 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #ef4444;
+    background: var(--danger);
     animation: pulse 1.2s infinite;
   }
 
@@ -200,6 +200,6 @@
   }
 
   .warn-stat {
-    color: #fbbf24;
+    color: var(--warn-text);
   }
 </style>

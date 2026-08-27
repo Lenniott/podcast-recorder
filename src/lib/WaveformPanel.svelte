@@ -95,7 +95,7 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: #fff;
+    background: var(--text);
   }
 
   .db-labels {
@@ -119,7 +119,7 @@
   }
 
   .clip-badge {
-    color: #ef4444;
+    color: var(--danger-text);
     font-weight: 700;
   }
 
