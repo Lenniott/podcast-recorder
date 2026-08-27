@@ -12,7 +12,7 @@ remains the fallback).
 
 **Blocked by:** None (can start immediately; the whole series 02–08 is done).
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** `src/lib/server-copy-upload.js` currently treats any
 `fetch` rejection or non-OK response from `/server-copy/session`,
@@ -49,18 +49,18 @@ Distinguish retryable from non-retryable failures: a network error, timeout, or
 rejected, or any other 4xx that reflects real, permanent state should still
 fail immediately — don't retry a fundamentally-not-going-to-succeed request.
 
-- [ ] Chunk upload retries a transient failure (network error/timeout/5xx) with
+- [x] Chunk upload retries a transient failure (network error/timeout/5xx) with
       backoff instead of failing the whole session on first error.
-- [ ] Session-accept and finalize get the same transient-retry treatment.
-- [ ] Retries are bounded (max attempts and/or max elapsed time); exceeding the
+- [x] Session-accept and finalize get the same transient-retry treatment.
+- [x] Retries are bounded (max attempts and/or max elapsed time); exceeding the
       bound still reaches the existing permanent `failed` state from ticket 08.
-- [ ] A retry after a lost acknowledgement (server already durably has the
+- [x] A retry after a lost acknowledgement (server already durably has the
       bytes, client didn't see the response) is reconciled correctly and does
       not spuriously fail the session.
-- [ ] A non-retryable failure (expired/deleted room, explicit rejection) still
+- [x] A non-retryable failure (expired/deleted room, explicit rejection) still
       fails immediately without wasting retry attempts.
-- [ ] Retries never delay, block, or affect local recording — `handleWritten`
+- [x] Retries never delay, block, or affect local recording — `handleWritten`
       remains fire-and-forget exactly as before.
-- [ ] Tests cover: transient-then-success (retry recovers), retries exhausted
+- [x] Tests cover: transient-then-success (retry recovers), retries exhausted
       (still reaches permanent `failed`), lost-ack reconciliation, and a
       non-retryable failure short-circuiting retries.

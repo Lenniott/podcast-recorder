@@ -1,7 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createServerCopyUpload } from '../../src/lib/server-copy-upload.js'
 import { deriveServerCopyUploadState, shouldAnnounceServerCopyFailure } from '../../src/lib/server-copy-status.js'
 import { isIncompleteServerCopyUpload } from '../../src/lib/exit-guard.js'
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 // These tests exercise the exact chain the room page wires together for the
 // post-stop blocking modal (ticket 07): serverCopyUpload's real onProgress
@@ -114,6 +119,11 @@ describe('post-stop upload-wait modal — open/closed derivation', () => {
 // so a failure is never left completely unremarked once the modal is gone.
 describe('post-stop server-copy failure notice — fires exactly where the wait modal goes silent', () => {
   it('announces once the copy fails and recording has already stopped — right when the wait modal would otherwise just vanish', async () => {
+    // Ticket 09: a 500 is now retried with backoff before this session
+    // gives up, so this test drives fake timers through that retry
+    // window rather than assuming the very first 500 is already final.
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
     const fetchImpl = vi.fn((url) => {
       if (String(url).includes('/server-copy/session')) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ accepted: true, bytesWritten: 0 }) })
@@ -146,7 +156,7 @@ describe('post-stop server-copy failure notice — fires exactly where the wait 
     await upload.start()
 
     upload.handleWritten(i16(100))
-    await delay(10)
+    await vi.advanceTimersByTimeAsync(120_000) // drain every retry backoff; the chunk never recovers
     expect(announced).toBe(false) // still recording — never interrupts an active take
 
     recordingState = 'idle' // the copy already failed while recording; only this changes now

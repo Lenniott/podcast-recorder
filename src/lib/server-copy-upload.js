@@ -35,10 +35,19 @@
  * both are byte counters advanced only by confirmed events (a local write
  * resolving, a server ack), never by wall-clock time.
  *
- * Once a chunk upload fails (network error, non-OK response, or an
- * offset-mismatch from the server), this session gives up permanently —
+ * A chunk upload, session-accept, or finalize request that fails
+ * transiently (a network error, a timeout, a 5xx) is retried with
+ * backoff — see RETRY_MAX_ATTEMPTS / RETRY_MAX_ELAPSED_MS below — before
+ * this session gives up. A 4xx that reflects real, permanent state (an
+ * explicitly rejected session, an expired/deleted room, a malformed
+ * request) is never retried: it fails on the very first attempt, same as
+ * before this module had retries at all. Once retries are exhausted, or
+ * a non-retryable failure is seen, this session gives up permanently —
  * per design, there is no resumable upload (see ticket 08): the server
- * copy is simply left incomplete, and the local WAV remains the fallback.
+ * copy is simply left incomplete, and the local WAV remains the
+ * fallback. See sendWithRetry()'s doc comment for how a chunk retry
+ * reconciles with the server's real offset rather than assuming its own
+ * retried request was the first to ever reach the server.
  *
  * `finish()` is the explicit "the local recording's FINAL length is now
  * known" signal (ticket 05) — call it once, after the local writer's
@@ -53,6 +62,76 @@
  * the copy is complete — never while chunks are still in flight, and
  * never after this session has already failed.
  */
+
+/**
+ * Retry tuning for a transient chunk/session/finalize failure (network
+ * error, timeout, or 5xx) — bounded in both attempt count and total
+ * elapsed time, so a session that's actually dead (not just having a bad
+ * few seconds) still reaches the permanent failed state in well under a
+ * minute rather than retrying forever. Exponential backoff with equal
+ * jitter, the same shape as room-connection.js's WS reconnect backoff —
+ * reimplemented locally rather than imported, since this module is
+ * deliberately independent of the room socket (see the transport note
+ * in the module doc comment above).
+ */
+const RETRY_MAX_ATTEMPTS = 5
+const RETRY_MAX_ELAPSED_MS = 20_000
+const RETRY_BASE_DELAY_MS = 1000
+const RETRY_CAP_DELAY_MS = 8000
+
+function backoffDelayMs(attempt) {
+  const exp = Math.min(RETRY_CAP_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
+  return exp * (0.5 + Math.random() * 0.5)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isRetryableStatus(status) {
+  return status >= 500 && status <= 599
+}
+
+/**
+ * Runs one HTTP round trip via `sendRequest()`, retrying with backoff on
+ * a transient failure — a rejected fetch (network error/timeout) or a
+ * 5xx response — up to RETRY_MAX_ATTEMPTS times or RETRY_MAX_ELAPSED_MS
+ * total elapsed, whichever comes first. Any other outcome (a successful
+ * response, or a non-retryable non-OK one) is returned immediately
+ * without spending further attempts: a 400/401/409/410 reflects real,
+ * permanent state a blind retry can't fix. Callers that need to look
+ * closer at a particular non-retryable status before accepting that
+ * still get the raw Response to inspect — see pump()'s handling of the
+ * chunk endpoint's 409 below, which is "permanent" only in the sense
+ * that resending the exact same request won't help; the chunk itself
+ * may already be safely on the server, which pump() checks for by hand
+ * rather than this generic helper trying to guess.
+ *
+ * Never throws: a fetch rejection that survives every attempt resolves
+ * to `{ error }` rather than rejecting, so every caller gets a plain
+ * `{ res } | { error }` to branch on instead of needing its own
+ * try/catch around this.
+ */
+async function sendWithRetry(sendRequest) {
+  const startedAt = Date.now()
+  for (let attempt = 1; ; attempt++) {
+    let res
+    let error
+    try {
+      res = await sendRequest()
+    } catch (e) {
+      error = e
+    }
+
+    const retryable = error ? true : isRetryableStatus(res.status)
+    const exhausted = attempt >= RETRY_MAX_ATTEMPTS || Date.now() - startedAt >= RETRY_MAX_ELAPSED_MS
+    if (!retryable || exhausted) {
+      return error ? { error } : { res }
+    }
+    await sleep(backoffDelayMs(attempt))
+  }
+}
+
 export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress } = {}) {
   if (!slug) throw new Error('createServerCopyUpload: slug is required')
   if (!clientId) throw new Error('createServerCopyUpload: clientId is required')
@@ -102,17 +181,41 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       while (queue.length > 0 && !failed) {
         const chunk = queue[0]
         const offset = ackedBytes
-        let res
-        try {
-          res = await fetchImpl(
+        const { res, error } = await sendWithRetry(() =>
+          fetchImpl(
             `/rec/${encodeURIComponent(slug)}/server-copy/chunks?clientId=${encodeURIComponent(clientId)}&offset=${offset}`,
             { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: chunk }
           )
-        } catch (e) {
-          fail(e)
+        )
+        if (error) {
+          fail(error)
           break
         }
         if (!res.ok) {
+          // A 409 here is the server's strict expectedOffset check
+          // refusing this chunk — but that doesn't necessarily mean the
+          // chunk itself never landed. If an earlier attempt's
+          // *response* was what got lost (a network blip right after
+          // the server had already durably appended the bytes),
+          // sendWithRetry's retry re-sent this same offset, and the
+          // server correctly refused it as stale, reporting back the
+          // offset it actually has. Reconcile against that real offset
+          // before giving up: if it already covers this chunk, the
+          // chunk is done, not failed — advance past it exactly as a
+          // normal ack would, rather than treating "already done" as an
+          // error. Anything else (the server is genuinely behind what
+          // this offset assumed) is a real, unexplained divergence no
+          // retry can fix, so it still fails permanently.
+          if (res.status === 409) {
+            const data = await res.json().catch(() => ({}))
+            const serverOffset = typeof data.bytesWritten === 'number' ? data.bytesWritten : -1
+            if (serverOffset >= offset + chunk.byteLength) {
+              ackedBytes = serverOffset
+              queue.shift()
+              reportProgress()
+              continue
+            }
+          }
           fail(new Error(`server-copy chunk upload failed with status ${res.status}`))
           break
         }
@@ -151,15 +254,15 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
    * if handleWritten has already queued some.
    */
   async function start() {
-    let res
-    try {
-      res = await fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/session`, {
+    const { res, error } = await sendWithRetry(() =>
+      fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clientId })
       })
-    } catch (e) {
-      fail(e)
+    )
+    if (error) {
+      fail(error)
       return false
     }
     if (!res.ok) {
@@ -189,15 +292,15 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
     await whenIdle()
     if (failed || !accepted) return false
 
-    let res
-    try {
-      res = await fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/finalize`, {
+    const { res, error } = await sendWithRetry(() =>
+      fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/finalize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clientId, totalBytes: confirmedBytes, sampleRate })
       })
-    } catch (e) {
-      fail(e)
+    )
+    if (error) {
+      fail(error)
       return false
     }
     if (!res.ok) {
