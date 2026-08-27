@@ -75,7 +75,7 @@
  */
 
 import { getActiveRoomBySlug } from './db.js'
-import { verifyHostClaimToken } from './auth.js'
+import { getHostClaim } from './auth.js'
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 
 const MAX_PEERS = 2
@@ -257,8 +257,7 @@ export function setupWss(wss) {
     }
 
     const cookies = parseCookies(req.headers.cookie || '')
-    const hostToken = cookies.get(`pr_host_${slug}`) || ''
-    const connectionHostClaim = !!roomRow && verifyHostClaimToken(hostToken, slug, roomRow.password_hash, process.env.SECRET)
+    const connectionHostClaim = getHostClaim(slug, cookies, roomRow, process.env.SECRET)
 
     if (!rooms.has(slug)) rooms.set(slug, new Map())
     const room = rooms.get(slug)

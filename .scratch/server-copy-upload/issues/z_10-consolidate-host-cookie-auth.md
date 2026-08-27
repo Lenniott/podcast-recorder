@@ -7,7 +7,7 @@ same few lines copy-pasted across three files.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** Flagged independently by the agents that built
 tickets 05, 06, and 07 of the server-copy-upload series: `+page.server.js`,
@@ -18,18 +18,18 @@ it against `getActiveRoomBySlug`'s result. None of those tickets touched all
 three files at once, so the duplication was left for a dedicated pass. This
 ticket is that pass. Pure refactor — no behavior change.
 
-- [ ] A single shared function (e.g. `getHostClaim(slug, cookies, room)` or
+- [x] A single shared function (e.g. `getHostClaim(slug, cookies, room)` or
       similar, placed wherever this codebase's conventions put shared
       server-side auth helpers — check for an existing `src/lib/server/auth.js`
       home for it) implements the cookie-read + token-verify + room-match
       check once.
-- [ ] `+page.server.js`, `ws-rooms.js`, and `server-copy-session.js` all call
+- [x] `+page.server.js`, `ws-rooms.js`, and `server-copy-session.js` all call
       the shared helper instead of their own inline copies.
-- [ ] No behavior change: host-only routes/actions still authorize exactly the
+- [x] No behavior change: host-only routes/actions still authorize exactly the
       same requests they did before, and reject exactly the same ones.
-- [ ] Existing tests for all three call sites (host download, WS host actions,
+- [x] Existing tests for all three call sites (host download, WS host actions,
       server-copy host authorization) still pass unmodified in intent — update
       only what's mechanically necessary for the refactor, not the assertions
       themselves.
-- [ ] Tests directly cover the shared helper's own logic (valid claim, missing
+- [x] Tests directly cover the shared helper's own logic (valid claim, missing
       cookie, invalid/forged token, token for a different/expired room).

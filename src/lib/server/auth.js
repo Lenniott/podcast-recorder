@@ -51,6 +51,30 @@ export function verifyHostClaimToken(token, slug, passwordHash, secret = getSecr
   }
 }
 
+/**
+ * Shared "is this connection the host?" check, used everywhere host
+ * identity is established: `/rec/[slug]`'s page load
+ * (`src/routes/rec/[slug]/+page.server.js`), the WS room server
+ * (`src/lib/server/ws-rooms.js`), and the server-copy download gate
+ * (`src/lib/server/server-copy-session.js`'s `authorizeServerCopyHostRequest`).
+ *
+ * Reads the `pr_host_<slug>` cookie, verifies it with `verifyHostClaimToken`
+ * against `room`'s password hash, and returns a plain boolean — never
+ * throws, never redirects, never shapes a response. `room` may be `null`
+ * (an unknown, expired, or deleted room), in which case this always
+ * returns `false`. Each call site decides what to do with the result
+ * (redirect, WS role, HTTP status) since that differs by context.
+ *
+ * `cookies` needs only a `.get(name)` method — both SvelteKit's `Cookies`
+ * and the plain `Map` `ws-rooms.js` parses request headers into satisfy
+ * this.
+ */
+export function getHostClaim(slug, cookies, room, secret = getSecret()) {
+  if (!room) return false
+  const token = cookies.get(`pr_host_${slug}`)
+  return verifyHostClaimToken(token, slug, room.password_hash, secret)
+}
+
 export function generateSlug() {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789'
   const bytes = randomBytes(10)

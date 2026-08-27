@@ -13,10 +13,9 @@
  */
 import { env } from '$env/dynamic/private'
 import { getActiveRoomBySlug } from './db.js'
-import { verifySessionToken, verifyHostClaimToken } from './auth.js'
+import { verifySessionToken, getHostClaim } from './auth.js'
 
 const AUTH_COOKIE = (slug) => `pr_auth_${slug}`
-const HOST_COOKIE = (slug) => `pr_host_${slug}`
 
 // Matches the clientIds the client actually generates (see rec/[slug]/+page.svelte:
 // two base-36 random strings concatenated) — also doubles as the file-path
@@ -50,18 +49,17 @@ export function authorizeServerCopyRequest({ slug, cookies }) {
  * Host-only authorization gate for the server-copy download route
  * (`server-copy/download`). Same room-active check as
  * authorizeServerCopyRequest above, but instead of any participant's
- * session cookie, requires the room's host-claim cookie — the same
- * `pr_host_<slug>` token verified the same way `/rec/[slug]`'s page load
- * (`+page.server.js`) and the WS room server (`ws-rooms.js`) already
- * establish "this connection is the host," reused here rather than
- * inventing a third definition of "host."
+ * session cookie, requires the room's host-claim cookie — checked via the
+ * shared `getHostClaim` helper (`./auth.js`), the same one `/rec/[slug]`'s
+ * page load (`+page.server.js`) and the WS room server (`ws-rooms.js`)
+ * already use to establish "this connection is the host," reused here
+ * rather than inventing a third definition of "host."
  */
 export function authorizeServerCopyHostRequest({ slug, cookies }) {
   const room = getActiveRoomBySlug(slug)
   if (!room) return { ok: false, status: 410, reason: 'room-unavailable' }
 
-  const token = cookies.get(HOST_COOKIE(slug))
-  if (!verifyHostClaimToken(token, slug, room.password_hash, env.SECRET)) {
+  if (!getHostClaim(slug, cookies, room, env.SECRET)) {
     return { ok: false, status: 403, reason: 'not-host' }
   }
 

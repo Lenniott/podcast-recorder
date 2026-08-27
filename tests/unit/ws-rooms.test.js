@@ -11,7 +11,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
 
 // ─── Mock auth so a known cookie value grants the host claim ────────────────
 vi.mock('../../src/lib/server/auth.js', () => ({
-  verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
+  getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token')
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
@@ -50,6 +50,22 @@ describe('setupWss — connection handling', () => {
     const ws = mockWs()
     wss.connect(ws, 'badslug')
     expect(ws.closed).toBe(true)
+  })
+
+  it('grants the host role to the peer holding a valid host-claim cookie', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1', { asHost: true })
+    join(ws, 'Alice', 'c1')
+    const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+    expect(presence.peers[0]).toMatchObject({ name: 'Alice', isHost: true, role: 'host' })
+  })
+
+  it('does not grant the host role without the host-claim cookie', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1') // no asHost — no pr_host_ cookie sent
+    join(ws, 'Alice', 'c1')
+    const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+    expect(presence.peers[0]).toMatchObject({ name: 'Alice', isHost: false, role: 'guest' })
   })
 
   it('sends presence after join', () => {

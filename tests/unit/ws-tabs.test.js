@@ -11,7 +11,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
 
 // ─── Mock auth so a known cookie value grants the host claim ────────────────
 vi.mock('../../src/lib/server/auth.js', () => ({
-  verifyHostClaimToken: vi.fn((token) => token === 'valid-host-token')
+  getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token')
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
