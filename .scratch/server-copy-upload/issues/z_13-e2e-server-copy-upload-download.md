@@ -14,7 +14,7 @@ button) — both change wiring this suite depends on (the token the client
 needs to upload at all, and the control this suite needs to click). Check for
 `z_11-...` and `z_12-...` in this directory before starting.
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** Read `tests/playwright/recording_status.spec.js`
 and `tests/playwright/helpers.js` first — they are the direct precedent for
@@ -57,31 +57,31 @@ increases or reaches high values → complete) the way the unit tests already
 do in `server-copy-status.test.js`, just observed through the real UI instead
 of a pure function.
 
-- [ ] A full happy-path spec: host and guest both record, sidebar percent
+- [x] A full happy-path spec: host and guest both record, sidebar percent
       pill progresses and both browsers see matching status (ticket 06's
       "both peers see the same state" claim, verified for real), copy
       reaches `complete` on both browsers after stopping.
-- [ ] The post-stop wait modal (ticket 07) appears when a copy is still
+- [x] The post-stop wait modal (ticket 07) appears when a copy is still
       incomplete right after stopping, shows a percentage, and auto-closes
       once the copy completes — observed with a real (if brief) window where
       upload hasn't caught up to a just-stopped recording.
-- [ ] The incomplete-upload exit warning is distinct from the active-recording
+- [x] The incomplete-upload exit warning is distinct from the active-recording
       warning (softer message, mentions sending the file another way) —
       mirroring `recording_status.spec.js`'s existing active-recording
       warning test but for this severity.
-- [ ] The host can click a real download control (ticket 12) once a
+- [x] The host can click a real download control (ticket 12) once a
       participant's copy is `complete` and receives an actual file download
       — verify via Playwright's download event (`page.waitForEvent('download')`
       or equivalent) that a file arrives, is non-trivially sized, and is a
       WAV (check the response/suggested filename and, if easy, the RIFF/WAVE
       header bytes of the downloaded file).
-- [ ] A guest does not see/can't use the download control (ticket 12's
+- [x] A guest does not see/can't use the download control (ticket 12's
       host-only requirement, verified end-to-end).
-- [ ] An interrupted-upload spec: chunk requests are blocked mid-recording,
+- [x] An interrupted-upload spec: chunk requests are blocked mid-recording,
       the sidebar settles into the `failed` state on both browsers, the local
       recording and its exit-guard behavior are completely unaffected, and no
       download control appears for that participant.
-- [ ] All new specs pass reliably under `npm run test:e2e` (run it more than
+- [x] All new specs pass reliably under `npm run test:e2e` (run it more than
       once locally if timing looks borderline — this suite's own comments
       note real flake sources around cold `npm run dev` starts; don't paper
       over a genuine race with a longer sleep instead of the right wait
