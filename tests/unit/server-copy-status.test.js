@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   deriveServerCopyDisplay,
   deriveServerCopyUploadState,
-  shouldAnnounceServerCopyFailure
+  shouldAnnounceServerCopyFailure,
+  canShowServerCopyDownload
 } from '../../src/lib/server-copy-status.js'
 
 describe('deriveServerCopyDisplay', () => {
@@ -113,5 +114,25 @@ describe('shouldAnnounceServerCopyFailure', () => {
 
   it('is false with no arguments at all', () => {
     expect(shouldAnnounceServerCopyFailure()).toBe(false)
+  })
+})
+
+describe('canShowServerCopyDownload', () => {
+  it('is true only when the viewer is host and the copy is complete', () => {
+    expect(canShowServerCopyDownload({ isHost: true, state: 'complete' })).toBe(true)
+  })
+
+  it('is false for a host when the copy is not complete', () => {
+    for (const state of ['unavailable', 'in_progress', 'failed']) {
+      expect(canShowServerCopyDownload({ isHost: true, state })).toBe(false)
+    }
+  })
+
+  it('is false for a non-host even when the copy is complete', () => {
+    expect(canShowServerCopyDownload({ isHost: false, state: 'complete' })).toBe(false)
+  })
+
+  it('is false with no arguments at all', () => {
+    expect(canShowServerCopyDownload()).toBe(false)
   })
 })

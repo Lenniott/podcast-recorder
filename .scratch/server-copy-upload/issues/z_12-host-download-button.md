@@ -12,7 +12,7 @@ server-copy clientId to owner) lands, since both touch `+page.svelte` and
 sequencing avoids overlapping edits — check `.scratch/server-copy-upload/issues/`
 for `z_11-...` before starting.
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Architectural context:** `RoomDetailsPanel.svelte` already renders each
 participant's server-copy state as a pill (`pill-copy-unavailable` /
@@ -33,15 +33,28 @@ whatever exact query shape the route already expects — check
 than anything fetch+blob-based. No new styling system, no modal — this is a
 small addition to an existing component, not a new feature area.
 
-- [ ] The host sees a download control next to/within each participant's
+- [x] The host sees a download control next to/within each participant's
       server-copy pill once that participant's copy is `complete`.
-- [ ] The control is host-only — a guest viewing the same room does not see
+- [x] The control is host-only — a guest viewing the same room does not see
       it (or sees it disabled), even though guests see the same pill states.
-- [ ] Clicking it downloads that participant's actual completed WAV via the
+- [x] Clicking it downloads that participant's actual completed WAV via the
       existing download route — no new server-side logic, this is UI-only.
-- [ ] No download control appears for `unavailable`, `in_progress`, or
+- [x] No download control appears for `unavailable`, `in_progress`, or
       `failed` states.
-- [ ] Existing pill states/percent display are unaffected — this only adds
+- [x] Existing pill states/percent display are unaffected — this only adds
       to the `complete` case.
-- [ ] `npx svelte-check` and `npm run build` stay clean; existing sidebar
+- [x] `npx svelte-check` and `npm run build` stay clean; existing sidebar
       tests/behavior are unaffected.
+
+**Implementation note:** gating logic (host + `complete` state → show
+control) was extracted as a pure, unit-tested function,
+`canShowServerCopyDownload({ isHost, state })` in
+`src/lib/server-copy-status.js`, rather than left as inline markup
+conditions — consistent with how this file already holds the other pure
+server-copy display rules. `RoomDetailsPanel.svelte` renders the control as
+a plain `<a href="/rec/[slug]/server-copy/download?clientId=...">` (with
+`download`), tagged `data-testid="server-copy-download"` for ticket 13's
+Playwright suite to select on. Real click-through/interaction coverage is
+ticket 13's job, not this one's — this repo has no Svelte component test
+harness (confirmed by prior tickets in this series), so validation here is
+manual reasoning plus `svelte-check`/`vitest`/`build`.

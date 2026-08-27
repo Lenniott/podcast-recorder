@@ -1,4 +1,6 @@
 <script>
+  import { canShowServerCopyDownload } from "./server-copy-status.js";
+
   // Presentational extraction of the room page's old <header> block. All
   // state/handlers stay owned by the room page — this component just
   // renders them, so the audio/WS pipeline itself is untouched.
@@ -92,6 +94,17 @@
             >
               {SERVER_COPY_LABEL[copyStatus]}{copyStatus === "in_progress" ? ` ${p.serverCopyPercent ?? 0}%` : ""}
             </span>
+            {#if canShowServerCopyDownload({ isHost: isHostClaim, state: copyStatus })}
+              <a
+                class="pill pill-server-copy-download"
+                data-testid="server-copy-download"
+                href="/rec/{slug}/server-copy/download?clientId={encodeURIComponent(p.clientId)}"
+                download
+                title="Download {p.name}'s completed server copy"
+              >
+                ⬇ Download
+              </a>
+            {/if}
           </div>
         </div>
       {/each}
@@ -210,6 +223,19 @@
   .pill-copy-failed {
     background: rgba(249, 115, 22, 0.18);
     color: #fdba74;
+  }
+
+  /* Host-only download control for a completed server copy — same pill
+     footprint as the status pills beside it, just interactive. */
+  .pill-server-copy-download {
+    background: rgba(45, 212, 191, 0.28);
+    color: #5eead4;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+  }
+  .pill-server-copy-download:hover {
+    background: rgba(45, 212, 191, 0.4);
   }
 
   .muted-text {

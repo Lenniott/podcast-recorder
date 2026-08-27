@@ -83,3 +83,20 @@ export function deriveServerCopyUploadState(status, { isRecording = false } = {}
 export function shouldAnnounceServerCopyFailure({ recordingState, uploadState, announced = false } = {}) {
   return recordingState === 'idle' && uploadState === 'failed' && !announced
 }
+
+/**
+ * Ticket 12: whether a participant row should offer the host a download
+ * control for that participant's server copy.
+ *
+ * The download route (`server-copy/download/+server.js`) already enforces
+ * both halves of this on the server — host-only via
+ * `authorizeServerCopyHostRequest`, complete-only via
+ * `isServerCopyFinalized` — so this function doesn't guard anything the
+ * route itself doesn't; it exists only so the sidebar never offers a
+ * control the current viewer can't use (a guest) or that can't succeed yet
+ * (not `complete`), kept as one pure, testable rule rather than inline
+ * markup conditions.
+ */
+export function canShowServerCopyDownload({ isHost, state } = {}) {
+  return isHost === true && state === 'complete'
+}
