@@ -10,10 +10,23 @@
  * retention clock to maintain. On top of that, the caller must hold the
  * same per-room session cookie the rest of the app already uses to gate
  * access to `/rec/[slug]` — no new auth mechanism.
+ *
+ * That room cookie is identical for every participant in the room, so on
+ * its own it only proves "this caller is in the room" — never "this
+ * caller owns the `clientId` in the request" (ticket 11: bind
+ * server-copy clientId to owner). `clientId` is client-generated and
+ * broadcast to every peer as ordinary presence data, so it is not a
+ * secret either. The missing piece is `token`: a `(slug, clientId)`-scoped
+ * capability token minted by the WS room server the moment a connection's
+ * `'join'` claims that `clientId` (`./ws-rooms.js`) and handed back only
+ * on that same connection (see `./auth.js`'s `makeServerCopyToken` doc
+ * comment). Verifying it here is what actually closes the IDOR: a request
+ * is authorized only if the caller both holds the room cookie AND holds
+ * the capability token for the exact `clientId` it's acting on.
  */
 import { env } from '$env/dynamic/private'
 import { getActiveRoomBySlug } from './db.js'
-import { verifySessionToken, getHostClaim } from './auth.js'
+import { verifySessionToken, verifyServerCopyToken, getHostClaim } from './auth.js'
 
 const AUTH_COOKIE = (slug) => `pr_auth_${slug}`
 
@@ -31,15 +44,27 @@ export function isValidServerCopyClientId(clientId) {
  * Returns `{ ok: true, room }` for an authorized request, or
  * `{ ok: false, status, reason }` for one that must be rejected — `status`
  * is the HTTP status the route should respond with (410 for an
- * unavailable/expired/deleted room, 401 for a missing/invalid session).
+ * unavailable/expired/deleted room, 401 for a missing/invalid session or
+ * a `clientId`/`token` mismatch — see the module doc comment above for
+ * why both are required).
+ *
+ * `clientId`/`token` are optional parameters so callers testing only the
+ * room-active/room-cookie checks don't have to pass them — but omitting
+ * either one always fails the ownership check below, same as a wrong
+ * value would. (`authorizeServerCopyHostRequest` below is untouched by
+ * ticket 11 — it never dealt in per-`clientId` ownership.)
  */
-export function authorizeServerCopyRequest({ slug, cookies }) {
+export function authorizeServerCopyRequest({ slug, cookies, clientId, token }) {
   const room = getActiveRoomBySlug(slug)
   if (!room) return { ok: false, status: 410, reason: 'room-unavailable' }
 
-  const token = cookies.get(AUTH_COOKIE(slug))
-  if (!verifySessionToken(token, slug, room.password_hash, env.SECRET)) {
+  const sessionToken = cookies.get(AUTH_COOKIE(slug))
+  if (!verifySessionToken(sessionToken, slug, room.password_hash, env.SECRET)) {
     return { ok: false, status: 401, reason: 'unauthorized' }
+  }
+
+  if (!verifyServerCopyToken(token, slug, clientId, env.SECRET)) {
+    return { ok: false, status: 401, reason: 'clientid-mismatch' }
   }
 
   return { ok: true, room }

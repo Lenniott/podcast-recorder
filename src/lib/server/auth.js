@@ -19,36 +19,65 @@ export async function verifyPassword(password, hash) {
   return bcryptCompare(password, hash)
 }
 
+// Shared shape behind every HMAC token this module issues (session,
+// host-claim, server-copy): hash a fixed message under SECRET to make it,
+// timing-safe-compare against a freshly recomputed expectation to verify
+// it. Consolidated here so the three token kinds below can't drift on
+// this mechanics — each pair only supplies its own message format.
+function hmacHex(secret, message) {
+  return createHmac('sha256', secret).update(message).digest('hex')
+}
+
+function timingSafeEqualHex(token, expectedHex) {
+  try {
+    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expectedHex, 'hex'))
+  } catch {
+    return false
+  }
+}
+
 export function makeSessionToken(slug, passwordHash, secret = getSecret()) {
-  return createHmac('sha256', secret)
-    .update(`${slug}:${passwordHash}`)
-    .digest('hex')
+  return hmacHex(secret, `${slug}:${passwordHash}`)
 }
 
 export function verifySessionToken(token, slug, passwordHash, secret = getSecret()) {
   if (!token || !slug || !passwordHash) return false
-  const expected = makeSessionToken(slug, passwordHash, secret)
-  try {
-    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))
-  } catch {
-    return false
-  }
+  return timingSafeEqualHex(token, makeSessionToken(slug, passwordHash, secret))
 }
 
 export function makeHostClaimToken(slug, passwordHash, secret = getSecret()) {
-  return createHmac('sha256', secret)
-    .update(`host:${slug}:${passwordHash}`)
-    .digest('hex')
+  return hmacHex(secret, `host:${slug}:${passwordHash}`)
 }
 
 export function verifyHostClaimToken(token, slug, passwordHash, secret = getSecret()) {
   if (!token || !slug || !passwordHash) return false
-  const expected = makeHostClaimToken(slug, passwordHash, secret)
-  try {
-    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))
-  } catch {
-    return false
-  }
+  return timingSafeEqualHex(token, makeHostClaimToken(slug, passwordHash, secret))
+}
+
+/**
+ * `(slug, clientId)`-scoped capability token — the fix for ticket 11
+ * (bind server-copy clientId to owner). Minted once by the WS room server
+ * (`./ws-rooms.js`) the moment a connection's `'join'` establishes its
+ * `clientId`, and sent back *only* on that connection — never broadcast,
+ * since `clientId` itself is broadcast presence data and is not a secret.
+ * The client threads it through every `server-copy/{session,chunks,
+ * finalize}` request (`$lib/server-copy-upload.js`), and
+ * `authorizeServerCopyRequest` (`./server-copy-session.js`) verifies it
+ * against the `clientId` in the request, proving the caller is the
+ * connection that actually owns that `clientId` — something the room's
+ * shared session cookie alone can never prove, since every participant
+ * holds the identical cookie.
+ *
+ * Stateless by design, same as every other token here: no server-side
+ * session store, verifiable from `(slug, clientId, secret)` alone.
+ */
+export function makeServerCopyToken(slug, clientId, secret = getSecret()) {
+  return hmacHex(secret, `servercopy:${slug}:${clientId}`)
+}
+
+export function verifyServerCopyToken(token, slug, clientId, secret = getSecret()) {
+  if (!token || !slug || !clientId) return false
+  return timingSafeEqualHex(token, makeServerCopyToken(slug, clientId, secret))
 }
 
 /**

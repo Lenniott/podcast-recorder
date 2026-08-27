@@ -156,6 +156,13 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
+  // The clientId-owning capability token (ticket 11), captured off the
+  // WS-exclusive 'server_copy_token' reply to our own 'join' — never
+  // broadcast, so this is the only place it ever arrives. May still be
+  // null if startRecording() runs before this round trip completes;
+  // createServerCopyUpload/start() degrade gracefully in that case
+  // rather than throwing or hanging (see that module's doc comment).
+  let serverCopyToken = null
   let serverCopyUploadState = 'idle' // idle | uploading | catching_up | complete | failed
   // Rounded percent for OUR OWN server-copy upload, kept in lockstep with
   // serverCopyUploadState below — this is what the post-stop blocking modal
@@ -765,7 +772,8 @@
       slug: data.slug,
       clientId,
       sampleRate: recordingSampleRate,
-      onProgress: handleServerCopyProgress
+      onProgress: handleServerCopyProgress,
+      token: serverCopyToken
     })
     serverCopyUpload.start() // fire-and-forget — never gates local recording, see module doc
 
@@ -898,6 +906,10 @@
     },
     onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
+      // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
+      // Guard on clientId anyway: never let a stale/mismatched token from
+      // a previous identity get applied to this one.
+      if (msg.type === 'server_copy_token' && msg.clientId === clientId) serverCopyToken = msg.token
       if (msg.type === 'pong') {
         const sentAt = _pendingPings.get(msg.seq)
         if (sentAt !== undefined) {

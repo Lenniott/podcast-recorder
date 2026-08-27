@@ -11,7 +11,8 @@ vi.mock('../../src/lib/server/db.js', () => ({
 
 // ─── Mock auth so a known cookie value grants the host claim ────────────────
 vi.mock('../../src/lib/server/auth.js', () => ({
-  getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token')
+  getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token'),
+  makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
@@ -66,6 +67,33 @@ describe('setupWss — connection handling', () => {
     join(ws, 'Alice', 'c1')
     const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
     expect(presence.peers[0]).toMatchObject({ name: 'Alice', isHost: false, role: 'guest' })
+  })
+
+  it('sends a clientId-scoped server_copy_token only to the connection that just joined with it (ticket 11)', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+
+    const tokenMsg1 = ws1.sent.find((m) => m.type === 'server_copy_token')
+    expect(tokenMsg1).toMatchObject({ clientId: 'c1', token: 'token:room1:c1' })
+
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+
+    // The second peer's join must never leak a token to the first peer
+    // (or vice versa) — this is the one channel that has to stay
+    // exclusive to the connection that owns each clientId.
+    expect(ws1.sent.filter((m) => m.type === 'server_copy_token')).toHaveLength(1)
+    const tokenMsg2 = ws2.sent.find((m) => m.type === 'server_copy_token')
+    expect(tokenMsg2).toMatchObject({ clientId: 'c2', token: 'token:room1:c2' })
+    expect(ws1.sent.some((m) => m.type === 'server_copy_token' && m.clientId === 'c2')).toBe(false)
+  })
+
+  it('does not re-mint/resend a server_copy_token on a name-only subsequent join', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1'); join(ws, 'Alice', 'c1')
+    join(ws, 'Alice Renamed', 'c1') // same clientId — name update, not a first join
+
+    expect(ws.sent.filter((m) => m.type === 'server_copy_token')).toHaveLength(1)
   })
 
   it('sends presence after join', () => {

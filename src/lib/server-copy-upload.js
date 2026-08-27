@@ -132,9 +132,17 @@ async function sendWithRetry(sendRequest) {
   }
 }
 
-export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress } = {}) {
+export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress, token } = {}) {
   if (!slug) throw new Error('createServerCopyUpload: slug is required')
   if (!clientId) throw new Error('createServerCopyUpload: clientId is required')
+  // `token` (ticket 11) is the clientId-owning capability token the WS
+  // room server hands back on 'join' — see $lib/server/auth.js's
+  // makeServerCopyToken doc comment. It's intentionally optional here,
+  // not asserted like slug/clientId above: a caller starting an upload
+  // before its own join has round-tripped simply has no token yet, and
+  // that must degrade gracefully (the server rejects the session request
+  // for real, same as any other not-yet-accepted session — see start()),
+  // never throw synchronously here.
 
   let accepted = false
   let failed = false
@@ -181,9 +189,10 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       while (queue.length > 0 && !failed) {
         const chunk = queue[0]
         const offset = ackedBytes
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         const { res, error } = await sendWithRetry(() =>
           fetchImpl(
-            `/rec/${encodeURIComponent(slug)}/server-copy/chunks?clientId=${encodeURIComponent(clientId)}&offset=${offset}`,
+            `/rec/${encodeURIComponent(slug)}/server-copy/chunks?clientId=${encodeURIComponent(clientId)}&offset=${offset}${tokenParam}`,
             { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: chunk }
           )
         )
@@ -258,7 +267,7 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId })
+        body: JSON.stringify({ clientId, token })
       })
     )
     if (error) {
@@ -296,7 +305,7 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/finalize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId, totalBytes: confirmedBytes, sampleRate })
+        body: JSON.stringify({ clientId, totalBytes: confirmedBytes, sampleRate, token })
       })
     )
     if (error) {

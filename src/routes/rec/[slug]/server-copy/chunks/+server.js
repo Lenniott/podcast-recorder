@@ -5,9 +5,11 @@
  * bytes, exactly what capture-writer.js handed to its onWritten seam — see
  * $lib/server-copy-upload.js) to that participant's server-copy file.
  *
- * Rejects the same way as the session endpoint for an inactive room or a
- * missing/invalid room cookie (ticket 02: upload/download only for an
- * active room). `offset` must equal the byte count already durably on
+ * Rejects the same way as the session endpoint for an inactive room, a
+ * missing/invalid room cookie, or a `clientId`/`token` mismatch (ticket
+ * 02: upload/download only for an active room; ticket 11: the caller
+ * must own the `clientId` it's uploading to — see `authorizeServerCopyRequest`'s
+ * doc comment). `offset` must equal the byte count already durably on
  * disk for this participant, or the append is refused outright
  * (server-copy-storage's OFFSET_MISMATCH) — this is a strict, ordered,
  * non-resumable append, never a random-access write, so a duplicate or
@@ -19,13 +21,15 @@ import { appendServerCopyChunk } from '$lib/server/server-copy-storage.js'
 
 export async function POST({ params, request, cookies, url }) {
   const { slug } = params
-  const auth = authorizeServerCopyRequest({ slug, cookies })
-  if (!auth.ok) return json({ error: auth.reason }, { status: auth.status })
-
   const clientId = url.searchParams.get('clientId')
+  const token = url.searchParams.get('token')
+
   if (!isValidServerCopyClientId(clientId)) {
     return json({ error: 'invalid-client-id' }, { status: 400 })
   }
+
+  const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
+  if (!auth.ok) return json({ error: auth.reason }, { status: auth.status })
 
   const offset = Number.parseInt(url.searchParams.get('offset'), 10)
   if (!Number.isInteger(offset) || offset < 0) {

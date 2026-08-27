@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { hashPassword, makeSessionToken, makeHostClaimToken } from '../../src/lib/server/auth.js'
+import { hashPassword, makeSessionToken, makeHostClaimToken, makeServerCopyToken } from '../../src/lib/server/auth.js'
 import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
 import {
   authorizeServerCopyRequest,
@@ -10,6 +10,7 @@ import {
 const SECRET = 'test-secret-do-not-use-in-prod'
 const SLUG = 'roomslug01'
 const ROOM_PASS = 'room-pass'
+const CLIENT_ID = 'client123abc'
 
 function makeCookies(seed = {}) {
   const jar = new Map(Object.entries(seed))
@@ -69,15 +70,59 @@ describe('authorizeServerCopyRequest', () => {
     expect(result.status).toBe(401)
   })
 
-  it('accepts a valid session cookie for an active room and returns the room row', async () => {
+  it('accepts a valid session cookie plus a valid clientId-owning token for an active room', async () => {
     const passwordHash = await seedRoom()
-    const token = makeSessionToken(SLUG, passwordHash, SECRET)
+    const sessionToken = makeSessionToken(SLUG, passwordHash, SECRET)
     const result = authorizeServerCopyRequest({
       slug: SLUG,
-      cookies: makeCookies({ [`pr_auth_${SLUG}`]: token })
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: sessionToken }),
+      clientId: CLIENT_ID,
+      token: makeServerCopyToken(SLUG, CLIENT_ID, SECRET)
     })
     expect(result.ok).toBe(true)
     expect(result.room.slug).toBe(SLUG)
+  })
+
+  // Ticket 11: the room cookie alone (same for every participant) must
+  // never be enough — the caller also has to hold the capability token
+  // for the specific clientId it's acting on.
+  it('rejects a valid session cookie without a clientId-owning token', async () => {
+    const passwordHash = await seedRoom()
+    const sessionToken = makeSessionToken(SLUG, passwordHash, SECRET)
+    const result = authorizeServerCopyRequest({
+      slug: SLUG,
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: sessionToken }),
+      clientId: CLIENT_ID
+      // no token — as if a second room participant reused this clientId
+    })
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe(401)
+  })
+
+  it('rejects a token that is valid for a different clientId', async () => {
+    const passwordHash = await seedRoom()
+    const sessionToken = makeSessionToken(SLUG, passwordHash, SECRET)
+    const result = authorizeServerCopyRequest({
+      slug: SLUG,
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: sessionToken }),
+      clientId: CLIENT_ID,
+      token: makeServerCopyToken(SLUG, 'someone-elses-client-id', SECRET)
+    })
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe(401)
+  })
+
+  it('rejects a forged/tampered token', async () => {
+    const passwordHash = await seedRoom()
+    const sessionToken = makeSessionToken(SLUG, passwordHash, SECRET)
+    const result = authorizeServerCopyRequest({
+      slug: SLUG,
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: sessionToken }),
+      clientId: CLIENT_ID,
+      token: 'deadbeef'.repeat(8)
+    })
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe(401)
   })
 })
 

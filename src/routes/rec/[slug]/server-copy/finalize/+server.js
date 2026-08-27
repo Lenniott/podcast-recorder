@@ -22,7 +22,8 @@
  * WAV is never silently rebuilt/overwritten.
  *
  * Same authorization as session/chunks — the uploading participant's own
- * room cookie, not a host-only check (that's the download route).
+ * room cookie AND their `clientId`-owning capability token (ticket 11),
+ * not a host-only check (that's the download route).
  */
 import { json } from '@sveltejs/kit'
 import { authorizeServerCopyRequest, isValidServerCopyClientId } from '$lib/server/server-copy-session.js'
@@ -34,16 +35,18 @@ import {
 
 export async function POST({ params, request, cookies }) {
   const { slug } = params
-  const auth = authorizeServerCopyRequest({ slug, cookies })
-  if (!auth.ok) return json({ finalized: false, reason: auth.reason }, { status: auth.status })
 
   let body
   try { body = await request.json() } catch { body = {} }
   const clientId = body?.clientId
+  const token = body?.token
 
   if (!isValidServerCopyClientId(clientId)) {
     return json({ finalized: false, reason: 'invalid-client-id' }, { status: 400 })
   }
+
+  const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
+  if (!auth.ok) return json({ finalized: false, reason: auth.reason }, { status: auth.status })
 
   const totalBytes = body?.totalBytes
   if (!Number.isInteger(totalBytes) || totalBytes < 0) {

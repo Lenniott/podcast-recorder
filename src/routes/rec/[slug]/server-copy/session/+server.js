@@ -11,6 +11,11 @@
  * (`getServerCopyBytesWritten`), so "acceptance" is just this request
  * succeeding, and there's nothing to lose or reconcile if the room's
  * WebSocket reconnects in the meantime — this endpoint doesn't touch it.
+ *
+ * `body.token` is the `clientId`-scoped capability token minted over the
+ * room's WebSocket on `'join'` (ticket 11) — `authorizeServerCopyRequest`
+ * checks it proves the caller actually owns `body.clientId`, not just
+ * that they hold the room's (shared, non-owner-specific) session cookie.
  */
 import { json } from '@sveltejs/kit'
 import { authorizeServerCopyRequest, isValidServerCopyClientId } from '$lib/server/server-copy-session.js'
@@ -18,16 +23,18 @@ import { getServerCopyBytesWritten } from '$lib/server/server-copy-storage.js'
 
 export async function POST({ params, request, cookies }) {
   const { slug } = params
-  const auth = authorizeServerCopyRequest({ slug, cookies })
-  if (!auth.ok) return json({ accepted: false, reason: auth.reason }, { status: auth.status })
 
   let body
   try { body = await request.json() } catch { body = {} }
   const clientId = body?.clientId
+  const token = body?.token
 
   if (!isValidServerCopyClientId(clientId)) {
     return json({ accepted: false, reason: 'invalid-client-id' }, { status: 400 })
   }
+
+  const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
+  if (!auth.ok) return json({ accepted: false, reason: auth.reason }, { status: auth.status })
 
   return json({ accepted: true, bytesWritten: getServerCopyBytesWritten(slug, clientId) })
 }

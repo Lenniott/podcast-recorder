@@ -644,6 +644,58 @@ describe('createServerCopyUpload — lost-ack reconciliation on chunk retry', ()
   })
 })
 
+describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
+  it('includes the token on the session, chunk, and finalize requests when one is provided', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const TOKEN = 'the-owning-token'
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, sampleRate: 44100, fetchImpl, token: TOKEN })
+    await upload.start()
+
+    const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
+    expect(JSON.parse(sessionCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
+
+    upload.handleWritten(i16(10), 0)
+    await upload.finish()
+
+    const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
+    expect(chunkCall.url).toContain(`token=${TOKEN}`)
+
+    const finalizeCall = calls.find((c) => c.url.includes('/server-copy/finalize'))
+    expect(JSON.parse(finalizeCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
+  })
+
+  it('degrades gracefully — never throws or hangs — when start() is called before a token has arrived', async () => {
+    // Mirrors the real server's behavior once ticket 11 is wired up: no
+    // token means authorizeServerCopyRequest rejects with 401, which is
+    // just an ordinary not-yet-accepted session to this module — never a
+    // throw, never a hang, and it never blocks handleWritten from being
+    // called safely afterward (matches the existing "rejected session"
+    // fallback behavior covered elsewhere in this file).
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ accepted: false, reason: 'clientid-mismatch' }) }))
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl }) // no token
+
+    const accepted = await upload.start()
+
+    expect(accepted).toBe(false)
+    expect(() => upload.handleWritten(i16(10), 0)).not.toThrow()
+    expect(upload.getStatus().failed).toBe(true)
+  })
+
+  it('omits the token param/field entirely (not the literal string "undefined") when none is provided', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl }) // no token
+    await upload.start()
+    upload.handleWritten(i16(10), 0)
+    await delay(20)
+
+    const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
+    expect(JSON.parse(sessionCall.init.body)).not.toHaveProperty('token')
+
+    const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
+    expect(chunkCall.url).not.toContain('token=')
+  })
+})
+
 describe('createServerCopyUpload — no resumability across instances (rejoin does not continue a stale attempt)', () => {
   it('a fresh instance for the same room/clientId starts from a clean slate, independent of a previous failed one', async () => {
     // What startRecording() does on every new take/rejoin (see ticket 08):

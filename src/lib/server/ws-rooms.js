@@ -42,6 +42,18 @@
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent}] }
+ *   { type: 'server_copy_token', clientId, token }
+ *                                        — sent ONLY to the connection whose 'join' just
+ *                                          claimed this clientId, never broadcast (ticket
+ *                                          11: bind server-copy clientId to owner). `token`
+ *                                          is a stateless (slug, clientId)-scoped capability
+ *                                          token (auth.js's makeServerCopyToken) the client
+ *                                          must present on every server-copy/{session,chunks,
+ *                                          finalize} request alongside this clientId — it's
+ *                                          what proves the caller actually owns the clientId,
+ *                                          since clientId itself is broadcast presence data
+ *                                          and the room's session cookie is identical for
+ *                                          every participant.
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
@@ -75,7 +87,7 @@
  */
 
 import { getActiveRoomBySlug } from './db.js'
-import { getHostClaim } from './auth.js'
+import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 
 const MAX_PEERS = 2
@@ -320,6 +332,12 @@ export function setupWss(wss) {
         if (firstJoin && clientId) {
           replayTabsTo(ws, ensureTabRoom(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
+          // Exclusive to this connection — never broadcast (see the
+          // 'server_copy_token' protocol doc above and ticket 11). This is
+          // the one channel that can prove "this connection owns
+          // clientId," since clientId is otherwise just broadcast
+          // presence data.
+          send(ws, { type: 'server_copy_token', clientId, token: makeServerCopyToken(slug, clientId, process.env.SECRET) })
         }
       }
 

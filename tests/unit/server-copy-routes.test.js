@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { hashPassword, makeSessionToken, makeHostClaimToken } from '../../src/lib/server/auth.js'
+import { hashPassword, makeSessionToken, makeHostClaimToken, makeServerCopyToken } from '../../src/lib/server/auth.js'
 import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
 import { getServerCopyFilePath } from '../../src/lib/server/server-copy-storage.js'
 import { buildWavHeader } from '../../src/lib/audio-utils.js'
@@ -54,8 +54,16 @@ async function hostCookies() {
   return makeCookies({ [`pr_host_${SLUG}`]: token })
 }
 
-function chunkUrl(offset) {
-  return new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${CLIENT_ID}&offset=${offset}`)
+// The clientId-scoped capability token (ticket 11) a real client only
+// ever gets back from the WS room server's 'join' ack — minted here
+// directly so route tests can drive a legitimate, same-owner request
+// without spinning up a WS connection.
+function serverCopyToken(clientId = CLIENT_ID) {
+  return makeServerCopyToken(SLUG, clientId, SECRET)
+}
+
+function chunkUrl(offset, { clientId = CLIENT_ID, token = serverCopyToken(clientId) } = {}) {
+  return new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${clientId}&offset=${offset}&token=${token}`)
 }
 
 function downloadUrl(clientId = CLIENT_ID) {
@@ -88,7 +96,7 @@ describe('POST /rec/[slug]/server-copy/session', () => {
     const res = await POST({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken() }) }
     })
 
     expect(res.status).toBe(200)
@@ -233,7 +241,7 @@ describe('POST /rec/[slug]/server-copy/chunks', () => {
     const res = await POST({
       params: { slug: SLUG },
       cookies,
-      url: new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=..%2F..%2Fevil&offset=0`),
+      url: new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=..%2F..%2Fevil&offset=0&token=irrelevant`),
       request: { arrayBuffer: async () => new Uint8Array([1]).buffer }
     })
 
@@ -247,7 +255,7 @@ describe('POST /rec/[slug]/server-copy/chunks', () => {
     const res = await POST({
       params: { slug: SLUG },
       cookies,
-      url: new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${CLIENT_ID}`),
+      url: new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${CLIENT_ID}&token=${serverCopyToken()}`),
       request: { arrayBuffer: async () => new Uint8Array([1]).buffer }
     })
 
@@ -285,7 +293,7 @@ describe('POST /rec/[slug]/server-copy/finalize', () => {
     const res = await postFinalize({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 4, sampleRate: 44100 }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 4, sampleRate: 44100, token: serverCopyToken() }) }
     })
 
     expect(res.status).toBe(200)
@@ -311,7 +319,7 @@ describe('POST /rec/[slug]/server-copy/finalize', () => {
     const res = await postFinalize({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 999 }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 999, token: serverCopyToken() }) }
     })
 
     expect(res.status).toBe(409)
@@ -331,13 +339,13 @@ describe('POST /rec/[slug]/server-copy/finalize', () => {
     await postFinalize({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2 }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2, token: serverCopyToken() }) }
     })
 
     const res2 = await postFinalize({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2 }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2, token: serverCopyToken() }) }
     })
 
     expect(res2.status).toBe(200)
@@ -390,10 +398,78 @@ describe('POST /rec/[slug]/server-copy/finalize', () => {
     const res = await POST({
       params: { slug: SLUG },
       cookies,
-      request: { json: async () => ({ clientId: CLIENT_ID }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken() }) }
     })
 
     expect(res.status).toBe(400)
+  })
+})
+
+describe('security: a same-room participant cannot act on another clientId (ticket 11)', () => {
+  // The room's session cookie (pr_auth_<slug>) is identical for every
+  // participant — it proves room membership, not which clientId the
+  // caller owns. Before ticket 11, that was the *only* check these routes
+  // did, so any participant holding the shared cookie could read/write/
+  // finalize any other participant's server copy just by naming their
+  // clientId. OWNER_CLIENT_ID is the legitimate owner's clientId; every
+  // request below is made with only the shared room cookie (no token for
+  // OWNER_CLIENT_ID), exactly as an intruding second participant would.
+  const OWNER_CLIENT_ID = 'owner-client-1'
+
+  it('rejects a session request for someone else\'s clientId using only the shared room cookie', async () => {
+    const { POST } = await loadSessionRoute()
+    const cookies = await authedCookies() // the one cookie every room participant holds
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      request: { json: async () => ({ clientId: OWNER_CLIENT_ID }) }
+    })
+
+    expect(res.status).toBe(401)
+    expect((await res.json()).accepted).toBe(false)
+  })
+
+  it('rejects a chunk upload for someone else\'s clientId using only the shared room cookie, and writes nothing', async () => {
+    const { POST } = await loadChunksRoute()
+    const cookies = await authedCookies()
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      url: new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${OWNER_CLIENT_ID}&offset=0`),
+      request: { arrayBuffer: async () => new Uint8Array([9, 9, 9, 9]).buffer }
+    })
+
+    expect(res.status).toBe(401)
+    expect(() => readFileSync(getServerCopyFilePath(SLUG, OWNER_CLIENT_ID))).toThrow()
+  })
+
+  it('rejects finalizing someone else\'s clientId using only the shared room cookie', async () => {
+    const { POST } = await loadFinalizeRoute()
+    const cookies = await authedCookies()
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      request: { json: async () => ({ clientId: OWNER_CLIENT_ID, totalBytes: 0 }) }
+    })
+
+    expect(res.status).toBe(401)
+    expect((await res.json()).finalized).toBe(false)
+  })
+
+  it('still rejects (401) even with a well-formed but forged/tampered token', async () => {
+    const { POST } = await loadSessionRoute()
+    const cookies = await authedCookies()
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      request: { json: async () => ({ clientId: OWNER_CLIENT_ID, token: 'deadbeef'.repeat(8) }) }
+    })
+
+    expect(res.status).toBe(401)
   })
 })
 
@@ -420,7 +496,7 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     await postFinalize({
       params: { slug: SLUG },
       cookies: participantCookies,
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: pcm.byteLength, sampleRate }) }
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: pcm.byteLength, sampleRate, token: serverCopyToken() }) }
     })
     return hash
   }
