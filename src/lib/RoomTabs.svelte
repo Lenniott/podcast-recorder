@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick } from "svelte";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
+  import { getNotesTextSize, setNotesTextSize, SIZES as NOTES_TEXT_SIZES } from "./notes-text-size.js";
 
   // (payload) => void — JSON-sends over the room WS. The room's single
   // WebSocket connection is owned by the page, not this component.
@@ -33,6 +34,15 @@
 
   let textDebounceTimer = null;
 
+  // Shared notes text size — a per-browser display preference (like theme),
+  // never sent over the WS. See $lib/notes-text-size.js.
+  let notesFontSize = 16;
+
+  function setNotesFontSize(size) {
+    notesFontSize = size;
+    setNotesTextSize(size);
+  }
+
   $: activeVideoPlaying = !!tabVideos[activeTabId]?.playing;
 
   // HMR / parent remount resets this component's lets to empty, but the WS
@@ -40,6 +50,7 @@
   // Ask the server for the room's current tabs/video/text on every mount.
   onMount(() => {
     send({ type: "tabs_sync" });
+    notesFontSize = getNotesTextSize();
   });
 
   // ─── Inbound — called by the page's ws.onmessage, one method per type ──
@@ -183,8 +194,26 @@
         </TabVideoPlayer>
       {/key}
 
+      <div class="notes-toolbar">
+        <span class="notes-toolbar-label">Text size</span>
+        <div class="text-size-group" role="group" aria-label="Notes text size">
+          {#each NOTES_TEXT_SIZES as size (size)}
+            <button
+              type="button"
+              class="btn-ghost btn-sm text-size-btn"
+              class:is-active={notesFontSize === size}
+              aria-pressed={notesFontSize === size}
+              on:click={() => setNotesFontSize(size)}
+            >
+              {size}
+            </button>
+          {/each}
+        </div>
+      </div>
+
       <textarea
         class="shared-textarea"
+        style="font-size: {notesFontSize}px"
         placeholder="Shared notes — visible to everyone in the room…"
         value={tabTexts[activeTabId] ?? ""}
         on:input={onTextInput}
@@ -276,6 +305,32 @@
     touch-action: none;
   }
 
+  .notes-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .notes-toolbar-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .text-size-group {
+    display: flex;
+    gap: 2px;
+  }
+
+  .text-size-btn {
+    min-width: 30px;
+    font-variant-numeric: tabular-nums;
+  }
+  .text-size-btn.is-active {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
   .shared-textarea {
     width: 100%;
     min-height: 80vh;
@@ -287,7 +342,7 @@
     border: 1px solid var(--border);
     background: var(--bg-elevated);
     color: var(--text);
-    font: inherit;
+    font-family: inherit;
     line-height: 1.5;
   }
   .shared-textarea:focus {
