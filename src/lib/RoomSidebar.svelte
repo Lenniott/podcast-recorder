@@ -83,21 +83,39 @@
       {/if}
     </button>
   </div>
-  {#if !collapsed}
-    <section class="sidebar-section">
-      <RoomDetailsPanel
-        {roomName}
-        {slug}
-        {isHostClaim}
-        {roomPassword}
-        {wsStatus}
-        {peers}
-        {clientId}
-        {copyLinkDone}
-        {onCopyLink}
+
+  <div class="record-controls-container">
+    <section class="sidebar-section room-visualization">
+      <WaveformPanel
+        bind:canvasEl
+        {meterPct}
+        {peakPct}
+        {dbLevel}
+        {peakHoldDb}
+        {isClipping}
+        {lastClapFrom}
+        compact={collapsed}
       />
     </section>
 
+    <section class="sidebar-section">
+      <RecordControls
+        {recordingState}
+        {canRecord}
+        {micPermission}
+        {wsStatus}
+        {myPeerIsRecording}
+        {recordingSeconds}
+        {bytesWritten}
+        {onToggleRecording}
+        {onClap}
+        {formatTime}
+        {formatBytes}
+        compact={collapsed}
+      />
+    </section>
+  </div>
+  {#if !collapsed}
     <section class="sidebar-section">
       <MicPanel
         {devices}
@@ -112,37 +130,20 @@
         {onGainInput}
       />
     </section>
+    <section class="sidebar-section">
+      <RoomDetailsPanel
+        {roomName}
+        {slug}
+        {isHostClaim}
+        {roomPassword}
+        {wsStatus}
+        {peers}
+        {clientId}
+        {copyLinkDone}
+        {onCopyLink}
+      />
+    </section>
   {/if}
-
-  <section class="sidebar-section">
-    <WaveformPanel
-      bind:canvasEl
-      {meterPct}
-      {peakPct}
-      {dbLevel}
-      {peakHoldDb}
-      {isClipping}
-      {lastClapFrom}
-      compact={collapsed}
-    />
-  </section>
-
-  <section class="sidebar-section">
-    <RecordControls
-      {recordingState}
-      {canRecord}
-      {micPermission}
-      {wsStatus}
-      {myPeerIsRecording}
-      {recordingSeconds}
-      {bytesWritten}
-      {onToggleRecording}
-      {onClap}
-      {formatTime}
-      {formatBytes}
-      compact={collapsed}
-    />
-  </section>
 </aside>
 
 <style>
@@ -150,12 +151,10 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
-    position: sticky;
-    top: 20px;
-    max-height: calc(100vh - 40px);
+    min-height: 0;
+    height: 100%;
     overflow-y: auto;
-    padding: 8px;
-    border-radius: 10px;
+    padding: 16px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
   }
@@ -182,5 +181,12 @@
   }
   .room-sidebar.collapsed .collapse-toggle {
     align-self: center;
+  }
+
+  .record-controls-container {
+    margin-bottom: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 </style>

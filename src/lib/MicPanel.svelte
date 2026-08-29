@@ -14,6 +14,22 @@
   export let gainDb = 0;
   export let onChangeMic = () => {};
   export let onGainInput = () => {};
+
+  const GAIN_DB_MIN = -12;
+  const GAIN_DB_MAX = 12;
+  const GAIN_MARKS = [
+    { label: "-12", pct: 0 },
+    { label: "-6", pct: 25 },
+    { label: "0", pct: 50 },
+    { label: "+6", pct: 75 },
+    { label: "+12", pct: 100 },
+  ];
+
+  function onGainSlider(e) {
+    const db = +e.currentTarget.value;
+    gainValue = 10 ** (db / 20);
+    onGainInput();
+  }
 </script>
 
 <div class="mic-panel">
@@ -50,15 +66,18 @@
     </label>
     <input
       id="gain-slider"
+      class="gain-slider"
       type="range"
-      min="0.25"
-      max="4"
-      step="0.05"
-      bind:value={gainValue}
-      on:input={onGainInput}
+      min={GAIN_DB_MIN}
+      max={GAIN_DB_MAX}
+      step="0.1"
+      value={Number.isFinite(gainDb) ? gainDb : 0}
+      on:input={onGainSlider}
     />
     <div class="gain-markers">
-      <span>-12</span><span>-6</span><span>0</span><span>+6</span><span>+12</span>
+      {#each GAIN_MARKS as mark}
+        <span style="left: {mark.pct}%">{mark.label}</span>
+      {/each}
     </div>
   </div>
 </div>
@@ -112,16 +131,52 @@
     margin-left: 6px;
   }
 
-  .gain-row input[type="range"] {
+  .gain-slider {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
+    height: 6px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--border);
     accent-color: var(--accent-dim);
+  }
+  .gain-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--border);
+  }
+  .gain-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    border: 2px solid var(--text);
+  }
+  .gain-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    border: 2px solid var(--text);
   }
 
   .gain-markers {
-    display: flex;
-    justify-content: space-between;
+    position: relative;
+    height: 14px;
+    margin-top: 4px;
+    margin-left: 8px;
+    margin-right: 8px;
     font-size: 10px;
     color: var(--muted);
-    margin-top: 2px;
+  }
+  .gain-markers span {
+    position: absolute;
+    transform: translateX(-50%);
+    font-variant-numeric: tabular-nums;
   }
 </style>

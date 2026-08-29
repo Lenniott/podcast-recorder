@@ -30,17 +30,17 @@
     </div>
     {#if !compact}
       <div class="db-labels">
-        <span style="left: 0%">-60</span>
-        <span style="left: 60%">-24</span>
-        <span style="left: 70%">-18</span>
-        <span style="left: 80%">-12</span>
-        <span style="left: 90%">-6</span>
-        <span style="left: 95%">-3</span>
-        <span style="left: 100%">0</span>
+        <span style="left: 4%">-60</span>
+        <span style="left: 50%">-24</span>
+        <span style="left: 62%">-18</span>
+        <span style="left: 74%">-12</span>
+        <span style="left: 86%">-6</span>
+        <span style="left: 92%">-3</span>
+        <span style="left: 98%">0</span>
       </div>
       <div class="db-readout">
-        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "—"} dBFS</span>
-        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "—"}</span>
+        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "-00.0"} dBFS</span>
+        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "-00.0"}</span>
         {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
       </div>
     {/if}

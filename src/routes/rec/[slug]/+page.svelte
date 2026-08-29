@@ -1237,15 +1237,17 @@
   }
 
   /* ── Room layout ── */
+  /* Viewport shell: the document does not scroll. Only .room-main does.
+     Sticky/fixed on the sidebar was fighting this grid and showed a strip
+     of --bg when you rubber-banded the page. */
   .room {
-    min-height: 100vh;
+    height: 100vh;
     display: grid;
     grid-template-columns: 240px 1fr;
     gap: 20px;
     max-width: 1400px;
     margin: 0 auto;
-    padding: 20px;
-    align-items: start;
+    overflow: hidden;
   }
 
   .room.sidebar-collapsed {
@@ -1253,13 +1255,18 @@
   }
 
   .room-main {
-    min-width: 0; /* let the grid column shrink below its content's intrinsic width */
+    min-width: 0;
+    min-height: 0;
+    padding: 20px 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   @media (max-width: 720px) {
     .room,
     .room.sidebar-collapsed {
       grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
     }
   }
 </style>

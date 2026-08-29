@@ -230,6 +230,9 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-width: 750px;
+    margin-right: auto;
+    margin-left: auto;
   }
 
   .tab-strip {
