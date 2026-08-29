@@ -1,4 +1,6 @@
 <script>
+  import { Check, Play, X } from "$lib/icons";
+
   // Sits over the room the instant recording actually starts. Recording is
   // already running for real — nothing here is a throwaway test take. It
   // asks you to read a line out loud, then plays back exactly what got
@@ -63,7 +65,7 @@
 
       <div class="check-actions">
         <button type="button" class="btn-secondary" on:click={handleListen}>
-          ▶ Listen back
+          <Play /> Listen back
         </button>
         {#if hasListened}
           <audio bind:this={audioEl} src={previewUrl} controls></audio>
@@ -79,10 +81,10 @@
           <p class="check-verdict-q">Sound good?</p>
           <div class="check-verdict-actions">
             <button type="button" class="btn-primary" on:click={handleConfirm}>
-              ✓ Sounds good — keep going
+              <Check /> Sounds good — keep going
             </button>
             <button type="button" class="btn-ghost" on:click={handleReject}>
-              ✗ Something's wrong — stop and fix it
+              <X /> Something's wrong — stop and fix it
             </button>
           </div>
         </div>

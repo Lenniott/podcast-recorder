@@ -8,7 +8,7 @@ test('Talk only appears while playing and ducks volume while held', async ({ pag
 
   await expect(page.getByRole('button', { name: 'Talk' })).toHaveCount(0)
 
-  await page.getByRole('button', { name: '▶ Play' }).click()
+  await page.getByRole('button', { name: 'Play' }).click()
   const talk = page.getByRole('button', { name: 'Talk' })
   await expect(talk).toBeVisible()
 

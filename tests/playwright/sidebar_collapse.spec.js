@@ -7,7 +7,7 @@ test('collapsing hides the mic panel but keeps record and clap', async ({ page }
 
   await expect(page.getByRole('combobox', { name: 'Microphone' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '👏 Clap' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Clap' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
 
@@ -18,5 +18,5 @@ test('collapsing hides the mic panel but keeps record and clap', async ({ page }
 
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.getByRole('combobox', { name: 'Microphone' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '👏 Clap' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Clap' })).toBeVisible()
 })

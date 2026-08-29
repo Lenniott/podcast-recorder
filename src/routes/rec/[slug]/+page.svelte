@@ -12,6 +12,7 @@
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  import { Ban, Check, Lock, User, X } from '$lib/icons'
   import { createRoomConnection } from '$lib/room-connection.js'
 
   function focus(el) { el.focus() }
@@ -975,7 +976,7 @@
 {#if !data.authenticated}
 <main class="gate-wrap">
   <div class="card gate-card">
-    <div class="gate-icon">🔒</div>
+    <div class="gate-icon"><Lock size={36} /></div>
     <h2>{data.roomName}</h2>
     <p class="sub">Enter the room code to join.</p>
 
@@ -1050,20 +1051,20 @@
 {:else if !browserSupported}
 <main class="gate-wrap">
   <div class="card gate-card browser-card">
-    <div class="gate-icon">🚫</div>
+    <div class="gate-icon"><Ban size={36} /></div>
     <h2>Browser not supported</h2>
     <p class="sub">
       Recording requires the <strong>File System Access API</strong> to stream
       audio directly to your disk. Your current browser doesn't support it.
     </p>
     <div class="browser-list">
-      <div class="browser-item ok">✓ Chrome</div>
-      <div class="browser-item ok">✓ Edge</div>
-      <div class="browser-item ok">✓ Brave</div>
-      <div class="browser-item ok">✓ Opera</div>
-      <div class="browser-item bad">✗ Safari</div>
-      <div class="browser-item bad">✗ Firefox</div>
-      <div class="browser-item bad">✗ DuckDuckGo</div>
+      <div class="browser-item ok"><Check /> Chrome</div>
+      <div class="browser-item ok"><Check /> Edge</div>
+      <div class="browser-item ok"><Check /> Brave</div>
+      <div class="browser-item ok"><Check /> Opera</div>
+      <div class="browser-item bad"><X /> Safari</div>
+      <div class="browser-item bad"><X /> Firefox</div>
+      <div class="browser-item bad"><X /> DuckDuckGo</div>
     </div>
     <p class="browser-note">
       Open this link in Chrome or Edge and you're good to go.<br/>
@@ -1079,7 +1080,7 @@
 {:else if nameGateShow}
 <main class="gate-wrap">
   <div class="card gate-card">
-    <div class="gate-icon">👤</div>
+    <div class="gate-icon"><User size={36} /></div>
     <h2>{data.roomName}</h2>
     <p class="sub">How should we show you to others in this room?</p>
 
@@ -1183,7 +1184,7 @@
     white-space: nowrap;
     border: 0;
   }
-  .gate-icon { font-size: 36px; margin-bottom: 12px; }
+  .gate-icon { display: flex; justify-content: center; margin-bottom: 12px; color: var(--text); }
 
   .browser-card { max-width: 440px; }
   .browser-list {
@@ -1194,6 +1195,9 @@
     text-align: left;
   }
   .browser-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 7px 12px;
     border-radius: var(--radius);
     font-size: 13px;

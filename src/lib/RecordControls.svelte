@@ -1,4 +1,6 @@
 <script>
+  import { AlertTriangle, Clap } from "$lib/icons";
+
   // Presentational extraction of the room page's old .controls + .stats-bar
   // blocks. Recording state itself stays owned by the room page.
   export let recordingState = "idle"; // idle | recording | stopping
@@ -45,7 +47,7 @@
       title="Clap — inject a 1kHz sync tone"
       aria-label="Clap"
     >
-      👏
+      <Clap />
     </button>
   </div>
 {:else}
@@ -73,9 +75,9 @@
         class="btn-ghost clap-btn"
         on:click={onClap}
         disabled={wsStatus !== "connected"}
-        title="Inject a 1kHz sync tone into both recordings"
+        title="Adds a 1kHz sync tone marker to both recordings"
       >
-        👏 Clap
+        <Clap /> Sync Tone Marker
       </button>
     </div>
     <div class="stats-bar">
@@ -94,7 +96,7 @@
       {/if}
 
       {#if myPeerIsRecording && recordingState === "idle"}
-        <div class="stat warn-stat">⚠️ Guest is recording — are you?</div>
+        <div class="stat warn-stat"><AlertTriangle /> Guest is recording — are you?</div>
       {/if}
     </div>
   </div>

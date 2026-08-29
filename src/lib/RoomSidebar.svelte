@@ -1,8 +1,10 @@
 <script>
+  import { ChevronLeft, ChevronRight } from "$lib/icons";
   import RoomDetailsPanel from "./RoomDetailsPanel.svelte";
   import MicPanel from "./MicPanel.svelte";
   import WaveformPanel from "./WaveformPanel.svelte";
   import RecordControls from "./RecordControls.svelte";
+  import { Mic } from "$lib/icons";
 
   // Composes the four sidebar panels in the sketch's order: room details,
   // mic selection, waveform, then record/clap. Purely a forwarding wrapper —
@@ -60,19 +62,40 @@
 </script>
 
 <aside class="room-sidebar" class:collapsed>
-  <button
-    type="button"
-    class="btn-ghost btn-icon btn-sm collapse-toggle"
-    on:click={() => (collapsed = !collapsed)}
-    aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-    title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-  >
-    {collapsed ? "»" : "«"}
-  </button>
-
+  <div class="room-sidebar-header">
+    {#if !collapsed}
+      <div class="room-sidebar-header-name">
+        <span class="room-sidebar-header-icon"><Mic /></span>
+        {roomName}
+      </div>
+    {/if}
+    <button
+      type="button"
+      class="btn-ghost btn-icon btn-sm collapse-toggle"
+      on:click={() => (collapsed = !collapsed)}
+      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+    >
+      {#if collapsed}
+        <ChevronRight />
+      {:else}
+        <ChevronLeft />
+      {/if}
+    </button>
+  </div>
   {#if !collapsed}
     <section class="sidebar-section">
-      <RoomDetailsPanel {roomName} {slug} {isHostClaim} {roomPassword} {wsStatus} {peers} {clientId} {copyLinkDone} {onCopyLink} />
+      <RoomDetailsPanel
+        {roomName}
+        {slug}
+        {isHostClaim}
+        {roomPassword}
+        {wsStatus}
+        {peers}
+        {clientId}
+        {copyLinkDone}
+        {onCopyLink}
+      />
     </section>
 
     <section class="sidebar-section">
@@ -92,7 +115,16 @@
   {/if}
 
   <section class="sidebar-section">
-    <WaveformPanel bind:canvasEl {meterPct} {peakPct} {dbLevel} {peakHoldDb} {isClipping} {lastClapFrom} compact={collapsed} />
+    <WaveformPanel
+      bind:canvasEl
+      {meterPct}
+      {peakPct}
+      {dbLevel}
+      {peakHoldDb}
+      {isClipping}
+      {lastClapFrom}
+      compact={collapsed}
+    />
   </section>
 
   <section class="sidebar-section">
@@ -122,20 +154,30 @@
     top: 20px;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
-  }
-
-  .sidebar-section {
-    padding: 14px;
+    padding: 8px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
   }
+  .room-sidebar-header {
+    display: flex;
+    align-items: center;
+  }
 
-  .room-sidebar.collapsed .sidebar-section {
-    padding: 10px;
+  .room-sidebar-header-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .room-sidebar-header-icon {
+    display: inline-flex;
+    color: var(--muted);
   }
 
   .collapse-toggle {
+    margin-left: auto;
     align-self: flex-end;
   }
   .room-sidebar.collapsed .collapse-toggle {

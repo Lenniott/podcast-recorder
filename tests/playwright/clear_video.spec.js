@@ -10,5 +10,5 @@ test('Clear video returns to the paste-URL row', async ({ page }) => {
 
   await expect(page.getByPlaceholder('Paste a YouTube link or video id')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Watch' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '▶ Play' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Play' })).toHaveCount(0)
 })

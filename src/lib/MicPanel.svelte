@@ -1,4 +1,6 @@
 <script>
+  import { AlertTriangle } from "$lib/icons";
+
   // Presentational extraction of the room page's old .mic-bar block. Device
   // enumeration, permission requests, and the audio graph itself stay owned
   // by the room page (rec/[slug]/+page.svelte) — this is markup only.
@@ -28,7 +30,7 @@
   </select>
 
   {#if micPermission === "denied"}
-    <p class="perm-warn">⚠️ Mic access denied. Check browser permissions.</p>
+    <p class="perm-warn"><AlertTriangle /> Mic access denied. Check browser permissions.</p>
   {/if}
   {#if audioInitError}
     <p class="muted-text">{audioInitError}</p>
@@ -36,7 +38,7 @@
 
   {#if micFallback}
     <p class="fallback-warn">
-      ⚠️ Original mic disconnected — switched to <strong>{micFallbackName}</strong>.
+      <AlertTriangle /> Original mic disconnected — switched to <strong>{micFallbackName}</strong>.
       Recording continues. Reconnect your mic or pick a new one above.
     </p>
   {/if}
@@ -86,6 +88,9 @@
 
   .perm-warn,
   .fallback-warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
     font-size: 12px;
     color: var(--warn-text);
     margin: 0;

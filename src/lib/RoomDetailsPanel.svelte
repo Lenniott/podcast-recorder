@@ -1,8 +1,9 @@
 <script>
+  import { Clipboard, ClipboardCheck } from "$lib/icons";
+
   // Presentational extraction of the room page's old <header> block. All
   // state/handlers stay owned by the room page — this component just
   // renders them, so the audio/WS pipeline itself is untouched.
-  export let roomName;
   export let slug;
   export let isHostClaim = false;
   export let roomPassword = null;
@@ -27,10 +28,19 @@
 
 <div class="room-details">
   <div class="rd-slug-row">
-    <div class="rd-name"><span class="rd-icon">🎙️</span> {roomName}</div>
     <span class="rd-slug">/rec/{slug}</span>
-    <button type="button" class="btn-ghost btn-sm" on:click={onCopyLink}>
-      {copyLinkDone ? "👍" : "📋"}
+    <button
+      type="button"
+      class="btn-ghost btn-sm btn-icon"
+      on:click={onCopyLink}
+      title={copyLinkDone ? "Copied" : "Copy link"}
+      aria-label={copyLinkDone ? "Copied" : "Copy link"}
+    >
+      {#if copyLinkDone}
+        <ClipboardCheck />
+      {:else}
+        <Clipboard />
+      {/if}
     </button>
   </div>
 
@@ -81,11 +91,6 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-  }
-
-  .rd-name {
-    font-size: 15px;
-    font-weight: 600;
   }
 
   .rd-slug-row {

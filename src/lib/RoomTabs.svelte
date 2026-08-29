@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from "svelte";
+  import { Plus } from "$lib/icons";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
   import { getNotesTextSize, setNotesTextSize, SIZES as NOTES_TEXT_SIZES } from "./notes-text-size.js";
 
@@ -166,7 +167,7 @@
         {/if}
       </div>
     {/each}
-    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab">+</button>
+    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab"><Plus /></button>
   </div>
 
   <div class="tab-content">

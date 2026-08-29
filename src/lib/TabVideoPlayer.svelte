@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, tick } from "svelte";
+  import { Headphones, Pause, Play, Volume2, VolumeX } from "$lib/icons";
   import { parseYouTubeId, effectivePosition } from "./yt-sync.js";
 
   // Scopes every outgoing message to this tab. The parent (RoomTabs) owns
@@ -298,7 +299,8 @@
     </div>
 
     <div class="headphones-banner">
-      🎧 Use headphones — YouTube audio plays in each browser and can bleed into
+      <span class="inline-icon"><Headphones /></span>
+      Use headphones — YouTube audio plays in each browser and can bleed into
       your mic if speakers are on.
     </div>
 
@@ -318,7 +320,11 @@
     <div class="watch-controls">
       <slot name="controls-left" />
       <button type="button" class="btn-secondary watch-play-btn" on:click={togglePlay}>
-        {playing ? "⏸ Pause" : "▶ Play"}
+        {#if playing}
+          <Pause /> Pause
+        {:else}
+          <Play /> Play
+        {/if}
       </button>
       <span class="watch-time"
         >{fmt(scrubbing ? scrubSec : currentSec)} / {fmt(durationSec)}</span
@@ -347,7 +353,11 @@
         title={muted ? "Unmute" : "Mute"}
         aria-label={muted ? "Unmute" : "Mute"}
       >
-        {muted ? "🔇" : "🔊"}
+        {#if muted}
+          <VolumeX />
+        {:else}
+          <Volume2 />
+        {/if}
       </button>
       <input
         type="range"
@@ -410,6 +420,9 @@
   }
 
   .headphones-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
     margin-bottom: 12px;
     padding: 10px 12px;
     border-radius: 8px;

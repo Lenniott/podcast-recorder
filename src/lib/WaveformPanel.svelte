@@ -1,4 +1,5 @@
 <script>
+  import { Clap } from "$lib/icons";
   import { METER_MIN } from "./meter.js";
 
   // Presentational extraction of the room page's old .waveform-wrap block.
@@ -46,7 +47,7 @@
   </div>
 
   {#if lastClapFrom && !compact}
-    <div class="clap-flash">👏 Sync clap — {lastClapFrom}</div>
+    <div class="clap-flash"><Clap /> from {lastClapFrom}</div>
   {/if}
 </div>
 
@@ -127,6 +128,9 @@
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 4px 10px;
     border-radius: 999px;
     background: rgba(245, 158, 11, 0.9);

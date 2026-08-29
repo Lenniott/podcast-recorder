@@ -7,7 +7,7 @@ test('Watch loads a video and shows Play', async ({ page }) => {
 
   await loadVideo(page)
 
-  await expect(page.getByRole('button', { name: '▶ Play' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Play' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Clear video' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Mute' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Talk' })).toHaveCount(0)
