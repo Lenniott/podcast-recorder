@@ -29,6 +29,10 @@ function guestPeerRow(page) {
   return page.locator('.peer', { hasText: 'Alex' })
 }
 
+function peerRow(page, name) {
+  return page.locator('.peer', { hasText: name })
+}
+
 /**
  * Adds artificial per-request latency (never a failure — every request
  * still `route.continue()`s) to a participant's chunk uploads. On this
@@ -47,6 +51,87 @@ async function slowServerCopyChunks(page, delayMs) {
     await new Promise((r) => setTimeout(r, delayMs))
     await route.continue()
   })
+}
+
+function readMonoPcm16Wav(filePath) {
+  const wav = readFileSync(filePath)
+  expect(wav.toString('ascii', 0, 4)).toBe('RIFF')
+  expect(wav.toString('ascii', 8, 12)).toBe('WAVE')
+
+  const channels = wav.readUInt16LE(22)
+  const sampleRate = wav.readUInt32LE(24)
+  const bitsPerSample = wav.readUInt16LE(34)
+  expect(channels).toBe(1)
+  expect(bitsPerSample).toBe(16)
+
+  let offset = 12
+  while (offset + 8 <= wav.length) {
+    const id = wav.toString('ascii', offset, offset + 4)
+    const size = wav.readUInt32LE(offset + 4)
+    if (id === 'data') {
+      const sampleCount = Math.floor(size / 2)
+      const samples = new Int16Array(sampleCount)
+      for (let i = 0; i < sampleCount; i++) {
+        samples[i] = wav.readInt16LE(offset + 8 + i * 2)
+      }
+      return { sampleRate, samples }
+    }
+    offset += 8 + size + (size % 2)
+  }
+  throw new Error(`No data chunk found in WAV: ${filePath}`)
+}
+
+function goertzelPower(samples, start, windowSize, sampleRate, freq) {
+  const coeff = 2 * Math.cos((2 * Math.PI * freq) / sampleRate)
+  let s1 = 0
+  let s2 = 0
+  for (let i = 0; i < windowSize; i++) {
+    const x = samples[start + i] / 32768
+    const s0 = x + coeff * s1 - s2
+    s2 = s1
+    s1 = s0
+  }
+  return s1 * s1 + s2 * s2 - coeff * s1 * s2
+}
+
+function countClapToneBursts({ sampleRate, samples }) {
+  const windowSize = Math.min(2048, samples.length)
+  const step = 512
+  const minClusterGapSeconds = 0.18
+  const bursts = []
+
+  for (let start = 0; start + windowSize <= samples.length; start += step) {
+    let sumSq = 0
+    for (let i = 0; i < windowSize; i++) {
+      const x = samples[start + i] / 32768
+      sumSq += x * x
+    }
+    const rms = Math.sqrt(sumSq / windowSize)
+
+    const target = goertzelPower(samples, start, windowSize, sampleRate, 1200)
+    const lower = goertzelPower(samples, start, windowSize, sampleRate, 900)
+    const upper = goertzelPower(samples, start, windowSize, sampleRate, 1500)
+    const toneScore = target / (Math.max(lower, upper) + 1e-9)
+    if (rms < 0.08 || toneScore < 8) continue
+
+    const seconds = start / sampleRate
+    if (bursts.length === 0 || seconds - bursts[bursts.length - 1] > minClusterGapSeconds) {
+      bursts.push(seconds)
+    } else {
+      bursts[bursts.length - 1] = seconds
+    }
+  }
+
+  return bursts.length
+}
+
+async function downloadServerCopy(page, name) {
+  const downloadLink = peerRow(page, name).locator('[data-testid="server-copy-download"]')
+  await expect(downloadLink).toBeVisible({ timeout: 15_000 })
+  const [download] = await Promise.all([page.waitForEvent('download'), downloadLink.click()])
+  const filePath = await download.path()
+  expect(filePath).toBeTruthy()
+  return filePath
 }
 
 test('server copy percent pill progresses on both browsers and reaches complete after stopping', async ({ browser }) => {
@@ -258,6 +343,66 @@ test('host can download a completed server copy; a guest cannot see the control'
   const header = readFileSync(filePath).subarray(0, 12)
   expect(header.toString('ascii', 0, 4)).toBe('RIFF')
   expect(header.toString('ascii', 8, 12)).toBe('WAVE')
+
+  await guest.close()
+  await host.close()
+})
+
+test('host and guest completed server copies contain every clap marker from the take', async ({ browser }) => {
+  test.setTimeout(120_000)
+
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'sc-both-beeps'
+  const roomUrl = await createRoom(host, {
+    name: `E2E SC Both Beeps ${Date.now()}`,
+    password,
+    hostDisplayName: 'Host'
+  })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await host.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await passRecordingCheck(host)
+
+  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await guest.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await passRecordingCheck(guest)
+
+  await expect(peerRow(host, 'Host').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
+  await expect(peerRow(host, 'Alex').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
+  await expect(host.getByRole('button', { name: '👏 Clap' })).toBeEnabled()
+
+  for (let i = 0; i < 3; i++) {
+    await host.getByRole('button', { name: '👏 Clap' }).click()
+    await expect(host.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
+    await expect(guest.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
+    await host.waitForTimeout(i === 2 ? 80 : 450)
+  }
+
+  // Stop both while the last marker is still recent. This specifically
+  // protects the final worklet chunk: stopRecording() must keep accepting
+  // chunks during its short "stopping" grace window before finalize.
+  await Promise.all([
+    host.getByRole('button', { name: 'Stop Recording' }).click(),
+    guest.getByRole('button', { name: 'Stop Recording' }).click()
+  ])
+  await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+
+  await expect(peerRow(host, 'Host').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
+  await expect(peerRow(host, 'Alex').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
+
+  const hostCopy = readMonoPcm16Wav(await downloadServerCopy(host, 'Host'))
+  const guestCopy = readMonoPcm16Wav(await downloadServerCopy(host, 'Alex'))
+
+  expect(countClapToneBursts(hostCopy)).toBeGreaterThanOrEqual(3)
+  expect(countClapToneBursts(guestCopy)).toBeGreaterThanOrEqual(3)
 
   await guest.close()
   await host.close()

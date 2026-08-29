@@ -549,7 +549,7 @@
           clipTimer = setTimeout(() => { isClipping = false }, 2000)
         }
       }
-      if (e.data.type === 'data' && captureWriter && recordingState === 'recording') {
+      if (e.data.type === 'data' && captureWriter && (recordingState === 'recording' || recordingState === 'stopping')) {
         const i16 = float32ToInt16(e.data.buffer)
         // Queued internally and flushed in the background — a slow disk
         // just makes the queue longer, it can never fabricate silence.
@@ -806,9 +806,11 @@
       previewChunks = []
     }
 
-    // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
-    // then drain every write the Capture Writer has queued — however many
-    // there are, not a guessed fixed delay.
+    // Record through one final short grace window so a nearly-full worklet
+    // buffer can cross BUFFER_SIZE and post a real chunk before we finalize.
+    // The port handler keeps accepting chunks while recordingState is
+    // 'stopping'; otherwise this wait would merely discard the chunk it was
+    // supposed to protect.
     await new Promise(r => setTimeout(r, 300))
     const { dataByteCount } = await captureWriter.stop()
     captureWriter = null
