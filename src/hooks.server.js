@@ -64,6 +64,10 @@ function checkRateLimit(ip, isAuthAction) {
   return true
 }
 
+function isServerCopyUpload(pathname) {
+  return /^\/rec\/[^/]+\/server-copy\/(?:session|chunks|finalize)$/.test(pathname)
+}
+
 // ── Site auth ────────────────────────────────────────────────────────────────
 
 function verifySiteToken(token) {
@@ -87,8 +91,11 @@ export async function handle({ event, resolve }) {
     return resolve(event)
   }
 
-  // Rate-limit all POST actions (form submissions)
-  if (event.request.method === 'POST') {
+  // Rate-limit human-scale POST actions. Server-copy upload requests are
+  // already authenticated by room cookie + clientId token, and chunk traffic
+  // arrives many times per minute during a normal recording. Counting this
+  // flow here can make an otherwise complete upload fail at finalize time.
+  if (event.request.method === 'POST' && !isServerCopyUpload(pathname)) {
     const ip = getIp(event)
     const isAuthAction = AUTH_ACTIONS.has(formActionFromUrl(event.url))
     if (!checkRateLimit(ip, isAuthAction)) {
