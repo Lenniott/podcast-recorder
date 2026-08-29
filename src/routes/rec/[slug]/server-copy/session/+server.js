@@ -19,7 +19,7 @@
  */
 import { json } from '@sveltejs/kit'
 import { authorizeServerCopyRequest, isValidServerCopyClientId } from '$lib/server/server-copy-session.js'
-import { getServerCopyBytesWritten } from '$lib/server/server-copy-storage.js'
+import { getServerCopyBytesWritten, writeServerCopyMetadata } from '$lib/server/server-copy-storage.js'
 
 export async function POST({ params, request, cookies }) {
   const { slug } = params
@@ -28,13 +28,19 @@ export async function POST({ params, request, cookies }) {
   try { body = await request.json() } catch { body = {} }
   const clientId = body?.clientId
   const token = body?.token
+  const takeId = body?.takeId
 
   if (!isValidServerCopyClientId(clientId)) {
     return json({ accepted: false, reason: 'invalid-client-id' }, { status: 400 })
+  }
+  if (takeId != null && !isValidServerCopyClientId(takeId)) {
+    return json({ accepted: false, reason: 'invalid-take-id' }, { status: 400 })
   }
 
   const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
   if (!auth.ok) return json({ accepted: false, reason: auth.reason }, { status: auth.status })
 
-  return json({ accepted: true, bytesWritten: getServerCopyBytesWritten(slug, clientId) })
+  writeServerCopyMetadata(slug, clientId, { sampleRate: body?.sampleRate, takeId })
+
+  return json({ accepted: true, bytesWritten: getServerCopyBytesWritten(slug, clientId, takeId) })
 }

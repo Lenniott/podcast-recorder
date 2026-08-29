@@ -132,7 +132,7 @@ async function sendWithRetry(sendRequest) {
   }
 }
 
-export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress, token: initialToken } = {}) {
+export function createServerCopyUpload({ slug, clientId, takeId, sampleRate, fetchImpl = fetch, onProgress, token: initialToken } = {}) {
   if (!slug) throw new Error('createServerCopyUpload: slug is required')
   if (!clientId) throw new Error('createServerCopyUpload: clientId is required')
   // `token` (ticket 11) is the clientId-owning capability token the WS
@@ -192,9 +192,10 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
         const chunk = queue[0]
         const offset = ackedBytes
         const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+        const takeParam = takeId ? `&takeId=${encodeURIComponent(takeId)}` : ''
         const { res, error } = await sendWithRetry(() =>
           fetchImpl(
-            `/rec/${encodeURIComponent(slug)}/server-copy/chunks?clientId=${encodeURIComponent(clientId)}&offset=${offset}${tokenParam}`,
+            `/rec/${encodeURIComponent(slug)}/server-copy/chunks?clientId=${encodeURIComponent(clientId)}&offset=${offset}${tokenParam}${takeParam}`,
             { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: chunk }
           )
         )
@@ -282,7 +283,7 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId, token })
+        body: JSON.stringify({ clientId, token, takeId, sampleRate })
       })
     )
     if (error) {
@@ -320,7 +321,7 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/finalize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ clientId, totalBytes: confirmedBytes, sampleRate, token })
+        body: JSON.stringify({ clientId, takeId, totalBytes: confirmedBytes, sampleRate, token })
       })
     )
     if (error) {
@@ -344,6 +345,7 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
       finalized,
       ackedBytes,
       confirmedBytes,
+      takeId,
       progress: confirmedBytes === 0 ? 0 : Math.min(1, ackedBytes / confirmedBytes),
       error: error ?? null
     }

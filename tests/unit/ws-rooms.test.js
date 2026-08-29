@@ -197,13 +197,24 @@ describe('setupWss — connection handling', () => {
     const ws2 = mockWs()
     wss.connect(ws1, 'room1'); join(ws1, 'Host',  'c1')
     wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
-    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 42 }))
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 42, takeId: 'take123' }))
 
     for (const ws of [ws1, ws2]) {
       const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
       const host = presence.peers.find(p => p.name === 'Host')
-      expect(host).toMatchObject({ serverCopyState: 'in_progress', serverCopyPercent: 42 })
+      expect(host).toMatchObject({ serverCopyState: 'in_progress', serverCopyPercent: 42, serverCopyTakeId: 'take123' })
     }
+  })
+
+  it('server_copy_progress preserves the current take id when a later status omits it', () => {
+    const ws1 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 42, takeId: 'take123' }))
+    ws1.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'complete', percent: 100 }))
+
+    const presence = ws1.sent.filter(m => m.type === 'presence').at(-1)
+    const host = presence.peers.find(p => p.name === 'Host')
+    expect(host).toMatchObject({ serverCopyState: 'complete', serverCopyPercent: 100, serverCopyTakeId: 'take123' })
   })
 
   it('server_copy_progress never carries recording along with it and vice versa', () => {

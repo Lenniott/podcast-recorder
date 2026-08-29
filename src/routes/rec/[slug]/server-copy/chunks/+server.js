@@ -23,9 +23,13 @@ export async function POST({ params, request, cookies, url }) {
   const { slug } = params
   const clientId = url.searchParams.get('clientId')
   const token = url.searchParams.get('token')
+  const takeId = url.searchParams.get('takeId')
 
   if (!isValidServerCopyClientId(clientId)) {
     return json({ error: 'invalid-client-id' }, { status: 400 })
+  }
+  if (takeId != null && !isValidServerCopyClientId(takeId)) {
+    return json({ error: 'invalid-take-id' }, { status: 400 })
   }
 
   const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
@@ -40,7 +44,7 @@ export async function POST({ params, request, cookies, url }) {
   if (buffer.length === 0) return json({ error: 'empty-chunk' }, { status: 400 })
 
   try {
-    const bytesWritten = appendServerCopyChunk(slug, clientId, buffer, offset)
+    const bytesWritten = appendServerCopyChunk(slug, clientId, buffer, offset, { takeId })
     return json({ bytesWritten })
   } catch (e) {
     if (e.code === 'OFFSET_MISMATCH') {

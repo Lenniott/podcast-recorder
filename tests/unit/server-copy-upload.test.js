@@ -718,6 +718,32 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     expect(JSON.parse(finalizeCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
     expect(upload.getStatus()).toMatchObject({ failed: false, finalized: true, ackedBytes: 20, confirmedBytes: 20 })
   })
+
+  it('includes a takeId on session, chunk, and finalize requests so separate recordings never append together', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const TAKE_ID = 'take123'
+    const upload = createServerCopyUpload({
+      slug: SLUG,
+      clientId: CLIENT_ID,
+      takeId: TAKE_ID,
+      sampleRate: 44100,
+      fetchImpl,
+      token: 'token'
+    })
+
+    await upload.start()
+    upload.handleWritten(i16(10), 0)
+    await upload.finish()
+
+    const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
+    expect(JSON.parse(sessionCall.init.body)).toMatchObject({ takeId: TAKE_ID })
+
+    const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
+    expect(chunkCall.url).toContain(`takeId=${TAKE_ID}`)
+
+    const finalizeCall = calls.find((c) => c.url.includes('/server-copy/finalize'))
+    expect(JSON.parse(finalizeCall.init.body)).toMatchObject({ takeId: TAKE_ID })
+  })
 })
 
 describe('createServerCopyUpload — no resumability across instances (rejoin does not continue a stale attempt)', () => {

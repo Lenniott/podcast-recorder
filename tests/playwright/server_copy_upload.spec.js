@@ -407,3 +407,66 @@ test('host and guest completed server copies contain every clap marker from the 
   await guest.close()
   await host.close()
 })
+
+test('host files modal keeps older takes downloadable after a second recording', async ({ browser }) => {
+  test.setTimeout(120_000)
+
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'sc-file-history'
+  const roomUrl = await createRoom(host, {
+    name: `E2E SC File History ${Date.now()}`,
+    password,
+    hostDisplayName: 'Host'
+  })
+
+  async function recordHostTake(durationMs) {
+    await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+    await host.getByRole('button', { name: 'Start Recording' }).click()
+    await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+    await passRecordingCheck(host)
+    await host.waitForTimeout(durationMs)
+    await host.getByRole('button', { name: 'Stop Recording' }).click()
+    await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+    await expect(peerRow(host, 'Host').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
+  }
+
+  await recordHostTake(700)
+  await recordHostTake(1800)
+
+  await peerRow(host, 'Host').locator('[data-testid="server-copy-files"]').click()
+  const modal = host.locator('[data-testid="server-copy-files-modal"]')
+  await expect(modal).toBeVisible()
+  await expect(modal.getByText('Take 1')).toBeVisible({ timeout: 15_000 })
+  await expect(modal.getByText('Take 2')).toBeVisible()
+
+  const take1Row = modal.locator('.file-row', { hasText: 'Take 1' })
+  const take2Row = modal.locator('.file-row', { hasText: 'Take 2' })
+  const take1Href = await take1Row.locator('[data-testid="server-copy-file-download"]').getAttribute('href')
+  const take2Href = await take2Row.locator('[data-testid="server-copy-file-download"]').getAttribute('href')
+
+  expect(take1Href).toContain('takeId=')
+  expect(take2Href).toContain('takeId=')
+  expect(take1Href).not.toBe(take2Href)
+
+  const [firstDownload] = await Promise.all([
+    host.waitForEvent('download'),
+    take1Row.locator('[data-testid="server-copy-file-download"]').click()
+  ])
+  const firstPath = await firstDownload.path()
+  expect(firstPath).toBeTruthy()
+  const firstSize = statSync(firstPath).size
+
+  const [secondDownload] = await Promise.all([
+    host.waitForEvent('download'),
+    take2Row.locator('[data-testid="server-copy-file-download"]').click()
+  ])
+  const secondPath = await secondDownload.path()
+  expect(secondPath).toBeTruthy()
+  const secondSize = statSync(secondPath).size
+
+  expect(firstSize).toBeGreaterThan(44)
+  expect(secondSize).toBeGreaterThan(firstSize)
+
+  await host.close()
+})

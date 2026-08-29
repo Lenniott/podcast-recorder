@@ -40,9 +40,13 @@ export async function POST({ params, request, cookies }) {
   try { body = await request.json() } catch { body = {} }
   const clientId = body?.clientId
   const token = body?.token
+  const takeId = body?.takeId
 
   if (!isValidServerCopyClientId(clientId)) {
     return json({ finalized: false, reason: 'invalid-client-id' }, { status: 400 })
+  }
+  if (takeId != null && !isValidServerCopyClientId(takeId)) {
+    return json({ finalized: false, reason: 'invalid-take-id' }, { status: 400 })
   }
 
   const auth = authorizeServerCopyRequest({ slug, cookies, clientId, token })
@@ -53,9 +57,9 @@ export async function POST({ params, request, cookies }) {
     return json({ finalized: false, reason: 'invalid-total-bytes' }, { status: 400 })
   }
 
-  const currentBytes = getServerCopyBytesWritten(slug, clientId)
+  const currentBytes = getServerCopyBytesWritten(slug, clientId, takeId)
 
-  if (isServerCopyFinalized(slug, clientId)) {
+  if (isServerCopyFinalized(slug, clientId, takeId)) {
     if (currentBytes === totalBytes) return json({ finalized: true, bytesWritten: currentBytes })
     return json({ finalized: false, reason: 'already-finalized', bytesWritten: currentBytes }, { status: 409 })
   }
@@ -65,7 +69,7 @@ export async function POST({ params, request, cookies }) {
   }
 
   const sampleRate = Number.isFinite(body?.sampleRate) && body.sampleRate > 0 ? body.sampleRate : undefined
-  await finalizeServerCopy(slug, clientId, { sampleRate })
+  await finalizeServerCopy(slug, clientId, { sampleRate, takeId })
 
   return json({ finalized: true, bytesWritten: currentBytes })
 }

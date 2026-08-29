@@ -27,9 +27,9 @@ describe('deriveServerCopyDisplay', () => {
     expect(deriveServerCopyDisplay(status)).toEqual({ state: 'in_progress', percent: 43 })
   })
 
-  it('reports in_progress at 100% on a fast connection without treating it as complete', () => {
+  it('caps in_progress at 99% until the server has finalized the downloadable WAV', () => {
     const status = { accepted: true, failed: false, finalized: false, progress: 1 }
-    expect(deriveServerCopyDisplay(status)).toEqual({ state: 'in_progress', percent: 100 })
+    expect(deriveServerCopyDisplay(status)).toEqual({ state: 'in_progress', percent: 99 })
   })
 
   it('reports complete only once finalized, pinned at 100%', () => {
@@ -42,6 +42,11 @@ describe('deriveServerCopyDisplay', () => {
     expect(deriveServerCopyDisplay(status)).toEqual({ state: 'failed', percent: 60 })
   })
 
+  it('caps failed display at 99% because the copy never finalized', () => {
+    const status = { accepted: true, failed: true, finalized: false, progress: 1 }
+    expect(deriveServerCopyDisplay(status)).toEqual({ state: 'failed', percent: 99 })
+  })
+
   it('never lets a NaN/undefined progress produce a broken percent', () => {
     const status = { accepted: true, failed: false, finalized: false, progress: undefined }
     expect(deriveServerCopyDisplay(status)).toEqual({ state: 'in_progress', percent: 0 })
@@ -49,7 +54,8 @@ describe('deriveServerCopyDisplay', () => {
 
   it('clamps percent into [0, 100] even given out-of-range progress', () => {
     expect(deriveServerCopyDisplay({ accepted: true, progress: -0.2 }).percent).toBe(0)
-    expect(deriveServerCopyDisplay({ accepted: true, progress: 1.5 }).percent).toBe(100)
+    expect(deriveServerCopyDisplay({ accepted: true, progress: 1.5 }).percent).toBe(99)
+    expect(deriveServerCopyDisplay({ accepted: true, finalized: true, progress: 1.5 }).percent).toBe(100)
   })
 })
 
@@ -118,14 +124,19 @@ describe('shouldAnnounceServerCopyFailure', () => {
 })
 
 describe('canShowServerCopyDownload', () => {
-  it('is true only when the viewer is host and the copy is complete', () => {
+  it('is true for a host when the copy has recoverable uploaded bytes or is complete', () => {
+    expect(canShowServerCopyDownload({ isHost: true, state: 'in_progress', percent: 1 })).toBe(true)
     expect(canShowServerCopyDownload({ isHost: true, state: 'complete' })).toBe(true)
+    expect(canShowServerCopyDownload({ isHost: true, state: 'failed', percent: 99 })).toBe(true)
   })
 
-  it('is false for a host when the copy is not complete', () => {
-    for (const state of ['unavailable', 'in_progress', 'failed']) {
-      expect(canShowServerCopyDownload({ isHost: true, state })).toBe(false)
-    }
+  it('is false for a host when a partial copy has no accepted chunks yet', () => {
+    expect(canShowServerCopyDownload({ isHost: true, state: 'in_progress', percent: 0 })).toBe(false)
+    expect(canShowServerCopyDownload({ isHost: true, state: 'failed', percent: 0 })).toBe(false)
+  })
+
+  it('is false for a host when there is no server copy', () => {
+    expect(canShowServerCopyDownload({ isHost: true, state: 'unavailable' })).toBe(false)
   })
 
   it('is false for a non-host even when the copy is complete', () => {

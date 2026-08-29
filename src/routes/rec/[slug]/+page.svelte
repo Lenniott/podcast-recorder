@@ -64,6 +64,7 @@
   // it can never race ahead of, or substitute for, local write confirmation.
   // A failed/slow/rejected upload must never block or delay anything above.
   let serverCopyUpload = null
+  let serverCopyTakeId = null
   // What we last told the room about our own server-copy status, so
   // handleServerCopyProgress only sends when the rounded percent/state
   // actually changes (threshold-based, not on every confirmed chunk).
@@ -697,7 +698,11 @@
     const { state, percent } = display
     if (!force && lastSentServerCopy?.state === state && lastSentServerCopy?.percent === percent) return
     lastSentServerCopy = { state, percent }
-    room.send({ type: 'server_copy_progress', state, percent })
+    room.send({ type: 'server_copy_progress', state, percent, takeId: serverCopyTakeId })
+  }
+
+  function makeServerCopyTakeId() {
+    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
   }
 
   function startRecordingCheck() {
@@ -770,6 +775,7 @@
     // so peers never see a stale "complete"/"failed" pill for a take that
     // hasn't started yet.
     lastSentServerCopy = null
+    serverCopyTakeId = makeServerCopyTakeId()
     serverCopyUploadState = 'idle'
     serverCopyUploadPercent = 0
     serverCopyFailureAnnounced = false
@@ -777,6 +783,7 @@
     serverCopyUpload = createServerCopyUpload({
       slug: data.slug,
       clientId,
+      takeId: serverCopyTakeId,
       sampleRate: recordingSampleRate,
       onProgress: handleServerCopyProgress,
       token: serverCopyToken

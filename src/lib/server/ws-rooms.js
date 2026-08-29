@@ -98,7 +98,7 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
-//         serverCopyState, serverCopyPercent }
+//         serverCopyState, serverCopyPercent, serverCopyTakeId }
 const rooms = new Map()
 
 // tabRooms: Map<slug, {
@@ -128,7 +128,8 @@ function sendPresence(slug) {
     // server-copy upload are different guarantees and must never be
     // merged into one status (see ticket 06).
     serverCopyState: p.serverCopyState || 'unavailable',
-    serverCopyPercent: p.serverCopyPercent || 0
+    serverCopyPercent: p.serverCopyPercent || 0,
+    serverCopyTakeId: p.serverCopyTakeId || null
   }))
   const msg = { type: 'presence', peers }
   for (const peer of room.values()) send(peer.ws, msg)
@@ -287,7 +288,8 @@ export function setupWss(wss) {
       joinedAt: Date.now(),
       talking: false,
       serverCopyState: 'unavailable',
-      serverCopyPercent: 0
+      serverCopyPercent: 0,
+      serverCopyTakeId: null
     }
 
     ws.on('message', (raw) => {
@@ -375,6 +377,10 @@ export function setupWss(wss) {
         const percent = Number(msg.percent)
         peer.serverCopyState = msg.state
         peer.serverCopyPercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : 0
+        if (Object.hasOwn(msg, 'takeId')) {
+          const takeId = String(msg.takeId || '').slice(0, 64)
+          peer.serverCopyTakeId = takeId || null
+        }
         sendPresence(slug)
       }
 

@@ -4,6 +4,8 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync
@@ -36,21 +38,125 @@ export function removeServerCopiesForRoom(slug) {
  * raw-PCM upload target and the finalized-WAV download target so the two
  * can never drift on how a clientId gets turned into a path.
  */
-function resolveServerCopyFile(slug, clientId, extension) {
+function serverCopyFileKey(clientId, takeId) {
+  return takeId ? `${String(clientId || '')}__${String(takeId)}` : String(clientId || '')
+}
+
+function parseServerCopyFileName(name) {
+  const match = String(name || '').match(/^(.+)\.(pcm|wav)$/)
+  if (!match) return null
+  const key = match[1]
+  const extension = match[2]
+  const separator = key.indexOf('__')
+  if (separator === -1) return { clientId: key, takeId: null, extension }
+  return {
+    clientId: key.slice(0, separator),
+    takeId: key.slice(separator + 2),
+    extension
+  }
+}
+
+function resolveServerCopyFile(slug, clientId, extension, takeId) {
   const dir = getServerCopyRoomDir(slug)
-  const file = resolve(dir, `${String(clientId || '')}.${extension}`)
+  const file = resolve(dir, `${serverCopyFileKey(clientId, takeId)}.${extension}`)
   if (file.startsWith(dir + sep) && dirname(file) === dir) return file
   throw new Error('Invalid clientId for server-copy storage')
 }
 
 /** Raw-PCM upload target — see appendServerCopyChunk. */
-export function getServerCopyFilePath(slug, clientId) {
-  return resolveServerCopyFile(slug, clientId, 'pcm')
+export function getServerCopyFilePath(slug, clientId, takeId) {
+  return resolveServerCopyFile(slug, clientId, 'pcm', takeId)
 }
 
 /** Finalized, playable WAV — only ever created by finalizeServerCopy. */
-export function getServerCopyWavPath(slug, clientId) {
-  return resolveServerCopyFile(slug, clientId, 'wav')
+export function getServerCopyWavPath(slug, clientId, takeId) {
+  return resolveServerCopyFile(slug, clientId, 'wav', takeId)
+}
+
+export function findLatestServerCopyTakeId(slug, clientId, extension = 'wav') {
+  const dir = getServerCopyRoomDir(slug)
+  if (!existsSync(dir)) return null
+
+  const prefix = `${String(clientId || '')}__`
+  const suffix = `.${extension}`
+  let latest = null
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue
+    const takeId = name.slice(prefix.length, -suffix.length)
+    if (!takeId) continue
+    const file = resolve(dir, name)
+    const mtimeMs = statSync(file).mtimeMs
+    if (!latest || mtimeMs > latest.mtimeMs) latest = { takeId, mtimeMs }
+  }
+  return latest?.takeId || null
+}
+
+export function listServerCopyFiles(slug) {
+  const dir = getServerCopyRoomDir(slug)
+  if (!existsSync(dir)) return []
+
+  const byTake = new Map()
+  for (const name of readdirSync(dir)) {
+    const parsed = parseServerCopyFileName(name)
+    if (!parsed || !parsed.clientId) continue
+    const { clientId, takeId, extension } = parsed
+    const key = `${clientId}\0${takeId || ''}`
+    const file = resolve(dir, name)
+    if (!file.startsWith(dir + sep) || dirname(file) !== dir) continue
+    const stat = statSync(file)
+    const current = byTake.get(key) || { clientId, takeId, files: {} }
+    current.files[extension] = {
+      size: stat.size,
+      createdAt: new Date(stat.birthtimeMs || stat.ctimeMs || stat.mtimeMs).toISOString(),
+      updatedAt: new Date(stat.mtimeMs).toISOString()
+    }
+    byTake.set(key, current)
+  }
+
+  return Array.from(byTake.values())
+    .map(({ clientId, takeId, files }) => {
+      const complete = files.wav
+      const partial = files.pcm
+      const chosen = complete || partial
+      if (!chosen) return null
+      const sampleRate = getServerCopySampleRate(slug, clientId, takeId)
+      const status = complete ? 'complete' : 'partial'
+      const byteSize = complete ? complete.size : partial.size + 44
+      return {
+        clientId,
+        takeId,
+        status,
+        byteSize,
+        sampleRate,
+        createdAt: chosen.createdAt,
+        updatedAt: chosen.updatedAt
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+}
+
+function getServerCopyMetadataPath(slug, clientId, takeId) {
+  return resolveServerCopyFile(slug, clientId, 'json', takeId)
+}
+
+export function writeServerCopyMetadata(slug, clientId, { sampleRate, takeId } = {}) {
+  const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? Math.round(sampleRate) : undefined
+  if (!rate) return
+  const file = getServerCopyMetadataPath(slug, clientId, takeId)
+  mkdirSync(dirname(file), { recursive: true })
+  appendFileSync(file, JSON.stringify({ sampleRate: rate }) + '\n')
+}
+
+export function getServerCopySampleRate(slug, clientId, takeId) {
+  try {
+    const lines = readFileSync(getServerCopyMetadataPath(slug, clientId, takeId), 'utf8').trim().split('\n')
+    const last = JSON.parse(lines.at(-1) || '{}')
+    return Number.isFinite(last.sampleRate) && last.sampleRate > 0 ? last.sampleRate : 48000
+  } catch (e) {
+    if (e.code === 'ENOENT') return 48000
+    return 48000
+  }
 }
 
 /**
@@ -58,9 +164,9 @@ export function getServerCopyWavPath(slug, clientId) {
  * file on disk is the single source of truth — no in-memory session state
  * to reconcile, so this is accurate even right after a server restart.
  */
-export function getServerCopyBytesWritten(slug, clientId) {
+export function getServerCopyBytesWritten(slug, clientId, takeId) {
   try {
-    return statSync(getServerCopyFilePath(slug, clientId)).size
+    return statSync(getServerCopyFilePath(slug, clientId, takeId)).size
   } catch (e) {
     if (e.code === 'ENOENT') return 0
     throw e
@@ -81,15 +187,15 @@ export function getServerCopyBytesWritten(slug, clientId) {
  * rather than silently accepted and orphaned, so "finalized" always means
  * the WAV on disk is the complete, final recording.
  */
-export function appendServerCopyChunk(slug, clientId, buffer, expectedOffset) {
-  if (isServerCopyFinalized(slug, clientId)) {
+export function appendServerCopyChunk(slug, clientId, buffer, expectedOffset, { takeId } = {}) {
+  if (isServerCopyFinalized(slug, clientId, takeId)) {
     const err = new Error(`server-copy for ${clientId} is already finalized; no further chunks accepted`)
     err.code = 'ALREADY_FINALIZED'
     throw err
   }
 
-  const file = getServerCopyFilePath(slug, clientId)
-  const currentBytes = getServerCopyBytesWritten(slug, clientId)
+  const file = getServerCopyFilePath(slug, clientId, takeId)
+  const currentBytes = getServerCopyBytesWritten(slug, clientId, takeId)
   if (expectedOffset !== currentBytes) {
     const err = new Error(
       `server-copy chunk offset ${expectedOffset} does not match ${currentBytes} bytes already on disk`
@@ -110,9 +216,9 @@ export function appendServerCopyChunk(slug, clientId, buffer, expectedOffset) {
  * getServerCopyBytesWritten — so it's accurate even right after a server
  * restart, with nothing else to reconcile.
  */
-export function isServerCopyFinalized(slug, clientId) {
+export function isServerCopyFinalized(slug, clientId, takeId) {
   try {
-    statSync(getServerCopyWavPath(slug, clientId))
+    statSync(getServerCopyWavPath(slug, clientId, takeId))
     return true
   } catch (e) {
     if (e.code === 'ENOENT') return false
@@ -135,11 +241,11 @@ export function isServerCopyFinalized(slug, clientId) {
  * capture-writer ever produces, so channel count and bit depth need no
  * parameter.
  */
-export async function finalizeServerCopy(slug, clientId, { sampleRate } = {}) {
-  const pcmFile = getServerCopyFilePath(slug, clientId)
-  const wavFile = getServerCopyWavPath(slug, clientId)
+export async function finalizeServerCopy(slug, clientId, { sampleRate, takeId } = {}) {
+  const pcmFile = getServerCopyFilePath(slug, clientId, takeId)
+  const wavFile = getServerCopyWavPath(slug, clientId, takeId)
   const tmpFile = `${wavFile}.tmp`
-  const dataBytes = getServerCopyBytesWritten(slug, clientId)
+  const dataBytes = getServerCopyBytesWritten(slug, clientId, takeId)
 
   mkdirSync(dirname(wavFile), { recursive: true })
   try {

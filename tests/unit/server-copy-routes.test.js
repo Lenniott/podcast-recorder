@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { readFileSync, rmSync } from 'fs'
+import { readFileSync, rmSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { hashPassword, makeSessionToken, makeHostClaimToken, makeServerCopyToken } from '../../src/lib/server/auth.js'
 import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
-import { getServerCopyFilePath } from '../../src/lib/server/server-copy-storage.js'
+import { getServerCopyFilePath, getServerCopyWavPath } from '../../src/lib/server/server-copy-storage.js'
 import { buildWavHeader } from '../../src/lib/audio-utils.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
@@ -31,6 +31,10 @@ async function loadFinalizeRoute() {
 
 async function loadDownloadRoute() {
   return import('../../src/routes/rec/[slug]/server-copy/download/+server.js')
+}
+
+async function loadFilesRoute() {
+  return import('../../src/routes/rec/[slug]/server-copy/files/+server.js')
 }
 
 async function seedRoom({ createdAt } = {}) {
@@ -62,12 +66,14 @@ function serverCopyToken(clientId = CLIENT_ID) {
   return makeServerCopyToken(SLUG, clientId, SECRET)
 }
 
-function chunkUrl(offset, { clientId = CLIENT_ID, token = serverCopyToken(clientId) } = {}) {
-  return new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${clientId}&offset=${offset}&token=${token}`)
+function chunkUrl(offset, { clientId = CLIENT_ID, token = serverCopyToken(clientId), takeId } = {}) {
+  const takeParam = takeId ? `&takeId=${takeId}` : ''
+  return new URL(`http://localhost/rec/${SLUG}/server-copy/chunks?clientId=${clientId}&offset=${offset}&token=${token}${takeParam}`)
 }
 
-function downloadUrl(clientId = CLIENT_ID) {
-  return new URL(`http://localhost/rec/${SLUG}/server-copy/download?clientId=${clientId}`)
+function downloadUrl(clientId = CLIENT_ID, { takeId } = {}) {
+  const takeParam = takeId ? `&takeId=${takeId}` : ''
+  return new URL(`http://localhost/rec/${SLUG}/server-copy/download?clientId=${clientId}${takeParam}`)
 }
 
 let serverCopyDir
@@ -515,33 +521,142 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     expect(body.subarray(44)).toEqual(Buffer.from(pcm))
   })
 
-  it('rejects (404) a download for a participant that has not been finalized yet', async () => {
+  it('keeps separate takes from the same clientId in separate downloadable WAVs', async () => {
     const passwordHash = await seedRoom()
     const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const { POST: postSession } = await loadSessionRoute()
     const { POST: postChunk } = await loadChunksRoute()
+    const { POST: postFinalize } = await loadFinalizeRoute()
+
+    async function uploadTake(takeId, bytes) {
+      await postSession({
+        params: { slug: SLUG },
+        cookies: participantCookies,
+        request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), takeId, sampleRate: 48000 }) }
+      })
+      await postChunk({
+        params: { slug: SLUG },
+        cookies: participantCookies,
+        url: chunkUrl(0, { takeId }),
+        request: { arrayBuffer: async () => new Uint8Array(bytes).buffer }
+      })
+      await postFinalize({
+        params: { slug: SLUG },
+        cookies: participantCookies,
+        request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), takeId, totalBytes: bytes.length, sampleRate: 48000 }) }
+      })
+    }
+
+    await uploadTake('takeone', [1, 1, 1, 1])
+    await uploadTake('taketwo', [2, 2])
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadDownloadRoute()
+    const res1 = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl(CLIENT_ID, { takeId: 'takeone' }) })
+    const res2 = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl(CLIENT_ID, { takeId: 'taketwo' }) })
+    const first = Buffer.from(await res1.arrayBuffer())
+    const second = Buffer.from(await res2.arrayBuffer())
+
+    expect(res1.status).toBe(200)
+    expect(res2.status).toBe(200)
+    expect(first.subarray(44)).toEqual(Buffer.from([1, 1, 1, 1]))
+    expect(second.subarray(44)).toEqual(Buffer.from([2, 2]))
+  })
+
+  it('falls back to the latest finalized take when a completed-copy download omits takeId', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const takeId = 'takefallback'
+    const { POST: postSession } = await loadSessionRoute()
+    const { POST: postChunk } = await loadChunksRoute()
+    const { POST: postFinalize } = await loadFinalizeRoute()
+
+    await postSession({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), takeId, sampleRate: 48000 }) }
+    })
+    await postChunk({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      url: chunkUrl(0, { takeId }),
+      request: { arrayBuffer: async () => new Uint8Array([8, 9]).buffer }
+    })
+    await postFinalize({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), takeId, totalBytes: 2, sampleRate: 48000 }) }
+    })
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadDownloadRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl(CLIENT_ID) })
+    const body = Buffer.from(await res.arrayBuffer())
+
+    expect(res.status).toBe(200)
+    expect(body.subarray(44)).toEqual(Buffer.from([8, 9]))
+  })
+
+  it('lets the host download a valid partial WAV for bytes uploaded before finalize', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const { POST: postSession } = await loadSessionRoute()
+    await postSession({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), sampleRate: 44100 }) }
+    })
+    const { POST: postChunk } = await loadChunksRoute()
+    const pcm = new Uint8Array([1, 2]).buffer
     await postChunk({
       params: { slug: SLUG },
       cookies: participantCookies,
       url: chunkUrl(0),
-      request: { arrayBuffer: async () => new Uint8Array([1, 2]).buffer }
+      request: { arrayBuffer: async () => pcm }
     })
 
     const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
     const { GET } = await loadDownloadRoute()
     const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl() })
 
-    expect(res.status).toBe(404)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toContain('-partial.wav')
+    const body = Buffer.from(await res.arrayBuffer())
+    expect(body.subarray(0, 44)).toEqual(Buffer.from(buildWavHeader(2, 44100)))
+    expect(body.subarray(44)).toEqual(Buffer.from(pcm))
   })
 
-  // Ticket 08: there is deliberately no resumable upload, so a participant
-  // who left/disconnected partway through never gets a second chance to
-  // finish this same server copy — it stays incomplete forever (only raw
-  // .pcm chunks on disk, no .wav — see server-copy-storage.js's
-  // finalize-or-nothing design). This pins down that the download route
-  // keeps refusing it exactly as if it were still uploading, even well
-  // after the participant is long gone and no further chunks/finalize
-  // requests will ever arrive.
-  it('rejects (404) a download for a copy interrupted mid-upload (participant left/disconnected) and never finalized', async () => {
+  it('falls back to the latest partial take when a partial download omits takeId', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const takeId = 'partialfallback'
+    const { POST: postSession } = await loadSessionRoute()
+    const { POST: postChunk } = await loadChunksRoute()
+
+    await postSession({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken(), takeId, sampleRate: 44100 }) }
+    })
+    await postChunk({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      url: chunkUrl(0, { takeId }),
+      request: { arrayBuffer: async () => new Uint8Array([7, 6, 5]).buffer }
+    })
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadDownloadRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl(CLIENT_ID) })
+    const body = Buffer.from(await res.arrayBuffer())
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toContain('-partial.wav')
+    expect(body.subarray(0, 44)).toEqual(Buffer.from(buildWavHeader(3, 44100)))
+    expect(body.subarray(44)).toEqual(Buffer.from([7, 6, 5]))
+  })
+
+  it('lets the host download a continuous partial WAV for a copy interrupted mid-upload', async () => {
     const passwordHash = await seedRoom()
     const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
     const { POST: postChunk } = await loadChunksRoute()
@@ -566,8 +681,10 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     const { GET } = await loadDownloadRoute()
     const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl() })
 
-    expect(res.status).toBe(404)
-    expect((await res.json()).error).toBe('not-finalized')
+    expect(res.status).toBe(200)
+    const body = Buffer.from(await res.arrayBuffer())
+    expect(body.subarray(0, 44)).toEqual(Buffer.from(buildWavHeader(6, 48000)))
+    expect(body.subarray(44)).toEqual(Buffer.from([1, 2, 3, 4, 5, 6]))
   })
 
   it('rejects (403) a download from a non-host, even with a valid participant session', async () => {
@@ -603,5 +720,112 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl('../../evil') })
 
     expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /rec/[slug]/server-copy/files', () => {
+  async function uploadCopy({
+    clientId = CLIENT_ID,
+    takeId = 'takeone',
+    bytes = [1, 2, 3, 4],
+    finalize = true,
+    sampleRate = 48000,
+    participantCookies
+  } = {}) {
+    const { POST: postSession } = await loadSessionRoute()
+    const { POST: postChunk } = await loadChunksRoute()
+    await postSession({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      request: { json: async () => ({ clientId, token: serverCopyToken(clientId), takeId, sampleRate }) }
+    })
+    await postChunk({
+      params: { slug: SLUG },
+      cookies: participantCookies,
+      url: chunkUrl(0, { clientId, token: serverCopyToken(clientId), takeId }),
+      request: { arrayBuffer: async () => new Uint8Array(bytes).buffer }
+    })
+    if (finalize) {
+      const { POST: postFinalize } = await loadFinalizeRoute()
+      await postFinalize({
+        params: { slug: SLUG },
+        cookies: participantCookies,
+        request: { json: async () => ({ clientId, token: serverCopyToken(clientId), takeId, totalBytes: bytes.length, sampleRate }) }
+      })
+    }
+  }
+
+  it('returns every completed take for a participant, newest first, with pinned download URLs', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    await uploadCopy({ takeId: 'firsttake', bytes: [1], participantCookies })
+    await uploadCopy({ takeId: 'secondtake', bytes: [2, 2], participantCookies })
+
+    const older = new Date('2026-01-01T00:00:00.000Z')
+    const newer = new Date('2026-01-02T00:00:00.000Z')
+    utimesSync(getServerCopyWavPath(SLUG, CLIENT_ID, 'firsttake'), older, older)
+    utimesSync(getServerCopyWavPath(SLUG, CLIENT_ID, 'secondtake'), newer, newer)
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadFilesRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies })
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.groups).toHaveLength(1)
+    expect(body.groups[0].clientId).toBe(CLIENT_ID)
+    expect(body.groups[0].entries.map((e) => e.takeId)).toEqual(['secondtake', 'firsttake'])
+    expect(body.groups[0].entries.map((e) => e.status)).toEqual(['complete', 'complete'])
+    expect(body.groups[0].entries[1].downloadUrl).toContain('takeId=firsttake')
+  })
+
+  it('returns partial takes as downloadable partial WAV entries', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    await uploadCopy({ takeId: 'partialtake', bytes: [7, 8, 9], finalize: false, sampleRate: 44100, participantCookies })
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadFilesRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies })
+    const body = await res.json()
+    const entry = body.groups[0].entries[0]
+
+    expect(res.status).toBe(200)
+    expect(entry).toMatchObject({
+      clientId: CLIENT_ID,
+      takeId: 'partialtake',
+      status: 'partial',
+      byteSize: 47,
+      sampleRate: 44100
+    })
+    expect(entry.downloadUrl).toContain('takeId=partialtake')
+  })
+
+  it('groups host and guest files separately', async () => {
+    const passwordHash = await seedRoom()
+    const participantCookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    await uploadCopy({ clientId: 'hostclient', takeId: 'hosttake', bytes: [1], participantCookies })
+    await uploadCopy({ clientId: 'guestclient', takeId: 'guesttake', bytes: [2], participantCookies })
+
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    const { GET } = await loadFilesRoute()
+    const res = await GET({ params: { slug: SLUG }, cookies })
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.groups.map((g) => g.clientId).sort()).toEqual(['guestclient', 'hostclient'])
+  })
+
+  it('rejects a non-host even when they are an authenticated room participant', async () => {
+    const passwordHash = await seedRoom()
+    const participantToken = makeSessionToken(SLUG, passwordHash, SECRET)
+    const { GET } = await loadFilesRoute()
+    const res = await GET({
+      params: { slug: SLUG },
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: participantToken })
+    })
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('not-host')
   })
 })
