@@ -682,6 +682,12 @@
     sendServerCopyProgress(display)
   }
 
+  function startServerCopyUploadWhenReady() {
+    if (!serverCopyUpload || !serverCopyToken) return
+    serverCopyUpload.setToken(serverCopyToken)
+    serverCopyUpload.start() // fire-and-forget — never gates local recording, see module doc
+  }
+
   // Takes the already-derived {state, percent} display shape (see
   // $lib/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
   // upload status, so every caller derives it exactly once — callers that
@@ -775,7 +781,7 @@
       onProgress: handleServerCopyProgress,
       token: serverCopyToken
     })
-    serverCopyUpload.start() // fire-and-forget — never gates local recording, see module doc
+    startServerCopyUploadWhenReady()
 
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
@@ -911,7 +917,10 @@
       // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
       // Guard on clientId anyway: never let a stale/mismatched token from
       // a previous identity get applied to this one.
-      if (msg.type === 'server_copy_token' && msg.clientId === clientId) serverCopyToken = msg.token
+      if (msg.type === 'server_copy_token' && msg.clientId === clientId) {
+        serverCopyToken = msg.token
+        startServerCopyUploadWhenReady()
+      }
       if (msg.type === 'pong') {
         const sentAt = _pendingPings.get(msg.seq)
         if (sentAt !== undefined) {

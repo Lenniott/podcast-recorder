@@ -132,7 +132,7 @@ async function sendWithRetry(sendRequest) {
   }
 }
 
-export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress, token } = {}) {
+export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl = fetch, onProgress, token: initialToken } = {}) {
   if (!slug) throw new Error('createServerCopyUpload: slug is required')
   if (!clientId) throw new Error('createServerCopyUpload: clientId is required')
   // `token` (ticket 11) is the clientId-owning capability token the WS
@@ -149,8 +149,10 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
   let finalized = false
   let ackedBytes = 0
   let confirmedBytes = 0
+  let token = initialToken
   const queue = [] // ArrayBuffers awaiting upload, oldest-first
   let sending = false
+  let startPromise = null
   let idleWaiters = [] // resolvers waiting for the queue to fully drain
 
   function fail(error) {
@@ -256,6 +258,10 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
     pump()
   }
 
+  function setToken(nextToken) {
+    token = nextToken
+  }
+
   /**
    * Requests session acceptance from the server for the active room.
    * Resolves `true` only once accepted — until then (and if it's ever
@@ -263,6 +269,15 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
    * if handleWritten has already queued some.
    */
   async function start() {
+    if (accepted) return true
+    if (startPromise) return startPromise
+    startPromise = startSession()
+    return startPromise.finally(() => {
+      startPromise = null
+    })
+  }
+
+  async function startSession() {
     const { res, error } = await sendWithRetry(() =>
       fetchImpl(`/rec/${encodeURIComponent(slug)}/server-copy/session`, {
         method: 'POST',
@@ -334,5 +349,5 @@ export function createServerCopyUpload({ slug, clientId, sampleRate, fetchImpl =
     }
   }
 
-  return { start, handleWritten, finish, getStatus }
+  return { start, handleWritten, finish, getStatus, setToken }
 }

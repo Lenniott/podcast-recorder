@@ -694,6 +694,30 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
     expect(chunkCall.url).not.toContain('token=')
   })
+
+  it('can queue confirmed audio before the WebSocket token arrives, then upload it once the token is set', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const TOKEN = 'late-owning-token'
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, sampleRate: 44100, fetchImpl })
+
+    upload.handleWritten(i16(10), 0)
+    await delay(20)
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    upload.setToken(TOKEN)
+    await upload.start()
+    await upload.finish()
+
+    const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
+    expect(JSON.parse(sessionCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
+
+    const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
+    expect(chunkCall.url).toContain(`token=${TOKEN}`)
+
+    const finalizeCall = calls.find((c) => c.url.includes('/server-copy/finalize'))
+    expect(JSON.parse(finalizeCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
+    expect(upload.getStatus()).toMatchObject({ failed: false, finalized: true, ackedBytes: 20, confirmedBytes: 20 })
+  })
 })
 
 describe('createServerCopyUpload — no resumability across instances (rejoin does not continue a stale attempt)', () => {
