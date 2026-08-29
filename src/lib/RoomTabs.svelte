@@ -253,8 +253,13 @@
   }
   .tab-pill.active {
     background: var(--accent);
-    color: var(--text);
+    color: #fff;
     border-color: var(--accent);
+  }
+  .tab-pill.active .tab-close,
+  .tab-pill.active .tab-close:hover {
+    color: #fff;
+    background: transparent;
   }
 
   .tab-title {

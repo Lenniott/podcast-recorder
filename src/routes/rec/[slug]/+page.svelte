@@ -62,13 +62,17 @@
   // CSS custom properties directly), so its theme-dependent colors are read
   // from the page's computed style — once up front, then again whenever the
   // theme toggle fires — rather than every animation frame.
-  let waveformBg = '#0e0e10'
-  let waveformCenterLine = '#2a2a2e'
+  let waveformBg = '#ffffff'
+  let waveformCenterLine = '#e0e0e5'
+  let waveformStroke = '#6b6b73'
+  let waveformStrokeRec = '#0a4e3f'
   function refreshWaveformColors() {
     if (!browser) return
     const cs = getComputedStyle(document.documentElement)
-    waveformBg = cs.getPropertyValue('--bg-elevated').trim() || waveformBg
+    waveformBg = cs.getPropertyValue('--surface').trim() || waveformBg
     waveformCenterLine = cs.getPropertyValue('--border').trim() || waveformCenterLine
+    waveformStroke = cs.getPropertyValue('--muted').trim() || waveformStroke
+    waveformStrokeRec = cs.getPropertyValue('--accent').trim() || waveformStrokeRec
   }
   // While recording, the waveform draws from this instead of analyserNode —
   // it only ever holds audio the Capture Writer has confirmed was actually
@@ -582,7 +586,7 @@
       const scale = peak < noiseFloor ? 1 : Math.min(24, 0.9 / peak)
 
       const isRec = recordingState === 'recording'
-      canvasCtx.strokeStyle = isRec ? '#a855f7' : '#52525b'
+      canvasCtx.strokeStyle = isRec ? waveformStrokeRec : waveformStroke
       canvasCtx.lineWidth = 1.5
       canvasCtx.beginPath()
 

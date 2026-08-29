@@ -63,12 +63,12 @@
     width: 100%;
     height: 40px;
     border-radius: 8px;
-    background: var(--bg-elevated);
+    background: var(--surface);
     border: 1px solid var(--border);
   }
 
   .waveform-wrap.compact canvas {
-    height: 48px;
+    height: 28px;
   }
 
   .db-meter-wrap {
@@ -96,7 +96,8 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: var(--text);
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   }
 
   .db-labels {
