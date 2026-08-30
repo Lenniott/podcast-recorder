@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { METER_MIN, dbfs, nextFillDb, dbToMeterPct, formatMeterReadout, METER_COLOR_STOPS } from '../../src/lib/meter.js'
+import { METER_MIN, dbfs, nextFillDb, dbToMeterPct, formatMeterReadout, METER_COLOR_STOPS, meterGradientCss } from '../../src/lib/meter.js'
 
 describe('dbfs', () => {
   it('converts linear amplitude to dBFS', () => {
@@ -87,5 +87,13 @@ describe('METER_COLOR_STOPS', () => {
     expect(at(-24)).toBe('#22c55e')
     expect(at(-18)).not.toBe(at(-24))
     expect(at(-12)).not.toBe(at(-18))
+  })
+})
+
+describe('meterGradientCss', () => {
+  it('places each stop at the same % as dbToMeterPct, so fill and labels cannot drift', () => {
+    expect(meterGradientCss()).toBe(
+      '#22c55e 0%, #22c55e 60%, #84cc16 70%, #eab308 80%, #f59e0b 90%, #ef4444 95%, #ef4444 100%'
+    )
   })
 })
