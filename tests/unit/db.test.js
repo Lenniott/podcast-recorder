@@ -11,7 +11,12 @@ import db, {
   roomExists,
   _resetDb
 } from '../../src/lib/server/db.js'
-import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
+import {
+  getServerCopyRoomDir,
+  appendServerCopyChunk,
+  getServerCopyFilePath,
+  isServerCopyFinalized
+} from '../../src/lib/server/server-copy-storage.js'
 
 // Fresh in-memory DB before each test (DB_PATH=':memory:' set in setup.js)
 let serverCopyDir
@@ -112,5 +117,34 @@ describe('active room cleanup', () => {
 
   it('rejects path traversal slugs for server-copy storage', () => {
     expect(() => getServerCopyRoomDir('../bad')).toThrow('Invalid room slug')
+  })
+
+  // Ticket 08: a participant who left/disconnected mid-upload never
+  // finalizes — the server copy is raw .pcm chunks with no .wav (see
+  // server-copy-storage.js's isServerCopyFinalized). Cleanup must not treat
+  // that any differently from a complete copy: removeServerCopiesForRoom
+  // removes the whole room directory regardless of what's in it, so an
+  // interrupted/never-finalized upload must be swept up right along with
+  // finished ones, not left behind as an orphan on disk.
+  it('deleteRoom removes an incomplete (never-finalized) server copy left behind by an interrupted upload', () => {
+    createRoom(ROOM)
+    appendServerCopyChunk(ROOM.slug, 'guest1', Buffer.from([1, 2, 3]), 0)
+    expect(isServerCopyFinalized(ROOM.slug, 'guest1')).toBe(false) // genuinely incomplete, not just empty
+
+    expect(deleteRoom(ROOM.slug)).toBe(1)
+
+    expect(existsSync(getServerCopyFilePath(ROOM.slug, 'guest1'))).toBe(false)
+    expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(false)
+  })
+
+  it('cleanupExpiredRooms removes an incomplete server copy for an expired room the same as a complete one', () => {
+    createRoom(ROOM)
+    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
+    appendServerCopyChunk(ROOM.slug, 'guest1', Buffer.from([9, 9]), 0) // upload started, never finalized
+
+    expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
+
+    expect(existsSync(getServerCopyFilePath(ROOM.slug, 'guest1'))).toBe(false)
+    expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(false)
   })
 })

@@ -5,6 +5,13 @@
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
+  import { createServerCopyUpload } from '$lib/server-copy-upload.js'
+  import {
+    deriveServerCopyDisplay,
+    deriveServerCopyUploadState,
+    shouldAnnounceServerCopyFailure
+  } from '$lib/server-copy-status.js'
+  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/exit-guard.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { METER_MIN, dbToMeterPct } from '$lib/meter.js'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
@@ -12,6 +19,7 @@
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
   import DisplayNameGate from '$lib/DisplayNameGate.svelte'
   import RecordingRoom from '$lib/RecordingRoom.svelte'
+  import ServerCopyWaitModal from '$lib/ServerCopyWaitModal.svelte'
   import { createRoomConnection } from '$lib/room-connection.js'
   import { createClockSync } from '$lib/clock-sync.js'
   import { createRecordingCheck } from '$lib/recording-check.js'
@@ -44,6 +52,16 @@
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
   let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
+  // Convenience mirror of the local recording — see $lib/server-copy-upload.js.
+  // Fed from captureWriter's own onWritten seam (via handleWritten below), so
+  // it can never race ahead of, or substitute for, local write confirmation.
+  // A failed/slow/rejected upload must never block or delay anything above.
+  let serverCopyUpload = null
+  let serverCopyTakeId = null
+  // What we last told the room about our own server-copy status, so
+  // handleServerCopyProgress only sends when the rounded percent/state
+  // actually changes (threshold-based, not on every confirmed chunk).
+  let lastSentServerCopy = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
@@ -148,7 +166,7 @@
   const audioEngine = createAudioEngine({
     onLevel: levelMeter.handleLevel,
     onChunk(buffer) {
-      if (!captureWriter || recordingState !== 'recording') return
+      if (!captureWriter || (recordingState !== 'recording' && recordingState !== 'stopping')) return
       const i16 = float32ToInt16(buffer)
       // Queued internally and flushed in the background — a slow disk
       // just makes the queue longer, it can never fabricate silence.
@@ -173,7 +191,27 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
-  let serverCopyUploadState = 'idle' // idle | uploading | catching_up | finalizing | complete | failed
+  // The clientId-owning capability token (ticket 11), captured off the
+  // WS-exclusive 'server_copy_token' reply to our own 'join' — never
+  // broadcast, so this is the only place it ever arrives. May still be
+  // null if startRecording() runs before this round trip completes;
+  // createServerCopyUpload/start() degrade gracefully in that case
+  // rather than throwing or hanging (see that module's doc comment).
+  let serverCopyToken = null
+  let serverCopyUploadState = 'idle' // idle | uploading | catching_up | complete | failed
+  // Rounded percent for OUR OWN server-copy upload, kept in lockstep with
+  // serverCopyUploadState below — this is what the post-stop blocking modal
+  // (ticket 07) shows. Derived via deriveServerCopyDisplay, same as the
+  // sidebar (ticket 06), so the two never disagree on what "percent" means.
+  let serverCopyUploadPercent = 0
+  // Ticket 08: the wait modal only stays open for "still might finish"
+  // states (see exit-guard.js's isIncompleteServerCopyUpload) — `failed`
+  // isn't one of them, so it closes the instant a copy gives up, same as
+  // if it had completed. This flag gates the one-time alert that fills
+  // that gap (see the reactive block below) so it fires at most once per
+  // take; reset alongside the rest of this take's server-copy state in
+  // startRecording().
+  let serverCopyFailureAnnounced = false
   let allowNextGuardedNavigation = false
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
@@ -181,12 +219,35 @@
   // ─── Derived ────────────────────────────────────────────────────────
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
   $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
-  $: hasIncompleteServerCopyUpload =
-    serverCopyUploadState === 'uploading' ||
-    serverCopyUploadState === 'catching_up' ||
-    serverCopyUploadState === 'finalizing'
+  $: hasIncompleteServerCopyUpload = isIncompleteServerCopyUpload(serverCopyUploadState)
   $: hasActiveLocalRecording = recordingState === 'recording' || recordingState === 'stopping'
-  $: hasBlockingExitWork = hasActiveLocalRecording || hasIncompleteServerCopyUpload
+  // The post-stop blocking modal (ticket 07): our own recording has fully
+  // stopped (local WAV already saved) but our own server copy hasn't
+  // reached ticket 05's definition of complete yet. Scoped to this
+  // participant only — the sidebar (ticket 06) is the all-participants view.
+  $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload
+  // Ticket 08: fills the gap left by the wait modal above closing silently
+  // on failure — see shouldAnnounceServerCopyFailure's doc comment. A
+  // plain `$:` block (not something tied only to serverCopyUpload's own
+  // onProgress callback) so this still fires when recordingState alone
+  // flips to 'idle' after the copy had already failed while still
+  // recording, not only when a fresh progress event happens to land after.
+  $: if (shouldAnnounceServerCopyFailure({
+    recordingState,
+    uploadState: serverCopyUploadState,
+    announced: serverCopyFailureAnnounced
+  })) {
+    serverCopyFailureAnnounced = true
+    alert(
+      "Your server copy could not finish uploading and won't complete. " +
+      "Your recording is already saved on this device — you'll need to send that file to the host another way."
+    )
+  }
+  // Single source of truth for both severity tiers of the exit guard — see
+  // $lib/exit-guard.js for why active-recording always wins when both are
+  // true, so the two warnings can never collide or double-fire.
+  $: exitGuard = deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload })
+  $: hasBlockingExitWork = exitGuard.blocking
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = dbToMeterPct(meterFillDb)
   $: peakPct   = dbToMeterPct(peakHoldDb)
@@ -221,16 +282,6 @@
     sessionStorage.setItem(participantNameStorageKey, n)
   }
 
-  function exitWarningMessage() {
-    if (hasActiveLocalRecording) {
-      return 'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
-    }
-    if (hasIncompleteServerCopyUpload) {
-      return 'Your recording is saved locally, but the server copy is still uploading. Leave anyway?'
-    }
-    return ''
-  }
-
   function handleBeforeUnload(event) {
     if (!hasBlockingExitWork) return
     if (allowNextGuardedNavigation) {
@@ -254,7 +305,7 @@
     const url = new URL(link.href, window.location.href)
     if (url.origin !== window.location.origin) return
 
-    if (!window.confirm(exitWarningMessage())) {
+    if (!window.confirm(exitGuard.message)) {
       event.preventDefault()
       return
     }
@@ -276,7 +327,7 @@
         return
       }
 
-      if (!window.confirm(exitWarningMessage())) {
+      if (!window.confirm(exitGuard.message)) {
         navigation.cancel()
       }
     })
@@ -394,6 +445,54 @@
   function handleWritten(i16) {
     writtenRing?.push(i16)
     recordingCheck.handleWritten(i16)
+    // Same seam, chained: the server-copy mirror only ever sees a chunk
+    // after it's already been handed to writtenRing/the preview buffer,
+    // i.e. after captureWriter has confirmed it hit local disk.
+    serverCopyUpload?.handleWritten(i16)
+  }
+
+  /**
+   * The server-copy upload's onProgress callback. Derives the small
+   * display-ready {state, percent} shape (see $lib/server-copy-status.js)
+   * once, and, only when it actually changed, tells the room about it —
+   * the same threshold-based, percentage-only broadcast recording_state
+   * uses for local recording. Both peers then read the identical value
+   * back off `peers` via the room's own presence broadcast (see
+   * ws-rooms.js).
+   */
+  function handleServerCopyProgress(status) {
+    // Shared vocabulary from $lib/server-copy-status.js — distinguishes
+    // "still uploading while we're still recording" from "recording
+    // stopped locally, upload still catching up" so both the exit-guard
+    // warning text and the post-stop blocking modal (ticket 07) stay
+    // accurate. isRecording is the one thing the status object alone can't
+    // tell it.
+    serverCopyUploadState = deriveServerCopyUploadState(status, { isRecording: recordingState === 'recording' })
+    const display = deriveServerCopyDisplay(status)
+    serverCopyUploadPercent = display.percent
+    sendServerCopyProgress(display)
+  }
+
+  function startServerCopyUploadWhenReady() {
+    if (!serverCopyUpload || !serverCopyToken) return
+    serverCopyUpload.setToken(serverCopyToken)
+    serverCopyUpload.start() // fire-and-forget — never gates local recording, see module doc
+  }
+
+  // Takes the already-derived {state, percent} display shape (see
+  // $lib/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
+  // upload status, so every caller derives it exactly once — callers that
+  // don't already have a display value in hand (the reset below, the
+  // resync below) derive it themselves at the call site.
+  function sendServerCopyProgress(display, { force = false } = {}) {
+    const { state, percent } = display
+    if (!force && lastSentServerCopy?.state === state && lastSentServerCopy?.percent === percent) return
+    lastSentServerCopy = { state, percent }
+    room.send({ type: 'server_copy_progress', state, percent, takeId: serverCopyTakeId })
+  }
+
+  function makeServerCopyTakeId() {
+    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
   }
 
   function startRecordingCheck() {
@@ -458,6 +557,27 @@
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
     audioEngine.clearPendingGap() // any gap before "recording" started isn't ours to backfill
+
+    // Fresh take, fresh server-copy session — reset any status left over
+    // from a previous take before this one has told the server anything,
+    // so peers never see a stale "complete"/"failed" pill for a take that
+    // hasn't started yet.
+    lastSentServerCopy = null
+    serverCopyTakeId = makeServerCopyTakeId()
+    serverCopyUploadState = 'idle'
+    serverCopyUploadPercent = 0
+    serverCopyFailureAnnounced = false
+    sendServerCopyProgress(deriveServerCopyDisplay(null), { force: true })
+    serverCopyUpload = createServerCopyUpload({
+      slug: data.slug,
+      clientId,
+      takeId: serverCopyTakeId,
+      sampleRate: recordingSampleRate,
+      onProgress: handleServerCopyProgress,
+      token: serverCopyToken
+    })
+    startServerCopyUploadWhenReady()
+
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
       write: (buf) => fileWritable.write(buf),
@@ -487,12 +607,22 @@
       checkSentence = recordingCheck.sentence
     }
 
-    // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
-    // then drain every write the Capture Writer has queued — however many
-    // there are, not a guessed fixed delay.
+    // Record through one final short grace window so a nearly-full worklet
+    // buffer can cross BUFFER_SIZE and post a real chunk before we finalize.
+    // The port handler keeps accepting chunks while recordingState is
+    // 'stopping'; otherwise this wait would merely discard the chunk it was
+    // supposed to protect.
     await new Promise(r => setTimeout(r, 300))
     const { dataByteCount } = await captureWriter.stop()
     captureWriter = null
+
+    // The explicit "final length is now known" signal — see
+    // $lib/server-copy-upload.js's finish() doc. Must come after local
+    // write confirmation (captureWriter.stop() above), never before. Not
+    // awaited: a slow/failing/rejected server copy must never delay or
+    // gate the local WAV finalize below (that's ticket 07's blocking-modal
+    // job, not this one, and only in the UI layer, never here).
+    serverCopyUpload?.finish()
 
     // Patch the WAV header with the real data size
     await fileWritable.seek(0)
@@ -570,6 +700,13 @@
     },
     onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
+      // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
+      // Guard on clientId anyway: never let a stale/mismatched token from
+      // a previous identity get applied to this one.
+      if (msg.type === 'server_copy_token' && msg.clientId === clientId) {
+        serverCopyToken = msg.token
+        startServerCopyUploadWhenReady()
+      }
       if (msg.type === 'pong') {
         clockSync.handlePong(msg)
         clockOffset = clockSync.offset
@@ -599,6 +736,14 @@
   })
   room.registerResync(() => {
     if (recordingState === 'recording') wsNotifyState('recording')
+  })
+  room.registerResync(() => {
+    // The server forgets peer state across a dropped connection (a fresh
+    // peer object is created on rejoin — see ws-rooms.js), so this must
+    // re-announce itself here just like the recording resync above, or the
+    // server-copy pill would silently reset to "unavailable" after any
+    // reconnect and stay wrong for the rest of the session.
+    if (serverCopyUpload) sendServerCopyProgress(deriveServerCopyDisplay(serverCopyUpload.getStatus()), { force: true })
   })
 
   function connectWs() {
@@ -770,4 +915,5 @@
   onConfirm={confirmRecordingCheck}
   onReject={rejectRecordingCheck}
 />
+<ServerCopyWaitModal open={showUploadWaitModal} percent={serverCopyUploadPercent} />
 {/if}
