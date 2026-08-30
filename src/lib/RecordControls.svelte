@@ -153,6 +153,7 @@
     gap: 4px;
     font-size: 12px;
     color: var(--muted);
+    height: 32px;
   }
 
   .stat {

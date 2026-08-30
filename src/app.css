@@ -28,6 +28,9 @@
   --danger-text: #dc2626;
   --warn-text:   #92400e;
   --success-text:#15803d;
+  /* Same split as danger/warn/success: --accent is the filled swatch
+     (primary buttons). Text-on-surface needs the contrast-tuned twin. */
+  --accent-text: #0a4e3f;
   --radius:    8px;
   --font:      'Inter', system-ui, -apple-system, sans-serif;
   color-scheme: light;
@@ -40,7 +43,6 @@
     --bg-elevated:#1f1f23;
     --border:    #2a2a2e;
     --text:      #e4e4e7;
-    --muted:     #71717a;
     --accent:    #0a4e3f;
     --accent-dim:#33685d;
     --danger:    #ef4444;
@@ -49,6 +51,8 @@
     --danger-text: #fca5a5;
     --warn-text:   #fbbf24;
     --success-text:#86efac;
+    --accent-text: var(--success-text);
+    --muted: color-mix(in srgb, var(--text) 70%, var(--surface));
     color-scheme: dark;
   }
 }
@@ -59,7 +63,6 @@
   --bg-elevated:#1f1f23;
   --border:    #2a2a2e;
   --text:      #e4e4e7;
-  --muted:     #71717a;
   --accent:    #0a4e3f;
   --accent-dim:#33685d;
   --danger:    #ef4444;
@@ -68,6 +71,8 @@
   --danger-text: #fca5a5;
   --warn-text:   #fbbf24;
   --success-text:#86efac;
+  --accent-text: var(--success-text);
+  --muted: color-mix(in srgb, var(--text) 70%, var(--surface));
   color-scheme: dark;
 }
 
@@ -80,7 +85,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 button {

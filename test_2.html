@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Approach 2 — you full, them compact-then-expand</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; color: #111; }
+    .hint { font-size: 13px; color: #555; max-width: 720px; margin-bottom: 16px; }
+    .room { border: 1px solid #ccc; padding: 12px; max-width: 480px; }
+    .room-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+    .card { border: 1px solid #999; padding: 10px; margin-bottom: 8px; }
+    .card.you { border-width: 2px; }
+    .head { display: flex; justify-content: space-between; gap: 8px; cursor: pointer; }
+    .pills { display: flex; flex-wrap: wrap; gap: 4px; }
+    .pill { border: 1px solid #888; padding: 1px 6px; border-radius: 999px; font-size: 11px; }
+    .body { margin-top: 10px; display: none; }
+    .body.open, .card.you .body { display: block; }
+    label { display: block; font-size: 12px; color: #555; margin: 8px 0 4px; }
+    select, input[type="range"], button { width: 100%; box-sizing: border-box; }
+    button { font: inherit; padding: 8px; margin-top: 6px; }
+    .stat, .muted { font-size: 12px; color: #555; }
+    .guest-summary { font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <p class="hint">
+    <strong>Approach 2 — stacked, your card always expanded.</strong>
+    Guest starts as a one-line summary (name, recording, mic name).
+    Click the guest row to expand their mic + record status.
+    Files stays on the room bar once, never inside a card.
+  </p>
+
+  <div class="room">
+    <div class="room-bar">
+      <span class="mono">/rec/aug-30-ep</span>
+      <button type="button" id="copy" style="width:auto">Copy link</button>
+      <span class="muted">Password: lake-4</span>
+      <button type="button" id="files" style="width:auto">Files</button>
+    </div>
+
+    <article class="card you">
+      <div class="head">
+        <strong>Ben (you) · Host</strong>
+        <div class="pills">
+          <span class="pill" id="you-presence">Online</span>
+          <span class="pill">No server copy</span>
+        </div>
+      </div>
+      <div class="body open">
+        <label>Mic</label>
+        <select>
+          <option>Shure SM7B</option>
+          <option>MacBook Pro Microphone</option>
+        </select>
+        <label>Gain</label>
+        <input type="range" min="-12" max="12" value="0" />
+        <button type="button" id="you-rec">Start Recording</button>
+        <button type="button">Sync Tone Marker</button>
+        <p class="stat" id="you-stat"></p>
+      </div>
+    </article>
+
+    <article class="card" id="guest">
+      <div class="head" id="guest-toggle">
+        <div>
+          <strong>Alex · Guest</strong>
+          <div class="guest-summary">Recording · mic: Rode NT-USB · copy 42%</div>
+        </div>
+        <span id="chev">▾ expand</span>
+      </div>
+      <div class="body" id="guest-body">
+        <label>Their mic</label>
+        <select disabled><option>Rode NT-USB</option></select>
+        <label>Their gain</label>
+        <input type="range" value="3" min="-12" max="12" disabled />
+        <button type="button" disabled>Stop Recording</button>
+        <button type="button" disabled>Sync Tone Marker</button>
+        <p class="stat">REC 04:12 · 18.2 MB on their disk</p>
+        <p class="muted">You cannot start/stop their recorder. This is their card, mirrored.</p>
+      </div>
+    </article>
+  </div>
+
+  <p class="muted" id="files-note" hidden>Files: Alex Take 1 (partial 12.4 MB). One room list.</p>
+
+  <script>
+    document.getElementById("copy").onclick = function () {
+      this.textContent = this.textContent === "Copied" ? "Copy link" : "Copied";
+    };
+
+    const rec = document.getElementById("you-rec");
+    let recording = false;
+    rec.onclick = () => {
+      recording = !recording;
+      rec.textContent = recording ? "Stop Recording" : "Start Recording";
+      document.getElementById("you-presence").textContent = recording ? "Recording" : "Online";
+      document.getElementById("you-stat").textContent = recording
+        ? "REC 00:08 · 0.4 MB written"
+        : "Last recording: 0.4 MB saved to your disk";
+    };
+
+    const body = document.getElementById("guest-body");
+    const chev = document.getElementById("chev");
+    document.getElementById("guest-toggle").onclick = () => {
+      const open = body.classList.toggle("open");
+      chev.textContent = open ? "▴ collapse" : "▾ expand";
+    };
+
+    document.getElementById("files").onclick = () => {
+      const n = document.getElementById("files-note");
+      n.hidden = !n.hidden;
+    };
+  </script>
+</body>
+</html>

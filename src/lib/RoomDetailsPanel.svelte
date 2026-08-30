@@ -342,43 +342,44 @@
     font-weight: 600;
   }
   .pill-host {
-    background: rgba(245, 158, 11, 0.18);
+    background: color-mix(in srgb, var(--warn) 18%, transparent);
     color: var(--warn-text);
   }
   .pill-guest {
-    background: rgba(148, 163, 184, 0.18);
+    background: color-mix(in srgb, var(--muted) 10%, transparent);
     color: var(--muted);
   }
   .pill-online {
-    background: rgba(34, 197, 94, 0.18);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
     color: var(--success-text);
   }
   .pill-recording {
-    background: rgba(239, 68, 68, 0.18);
-    color: var(--danger-text);
+    /* --danger-text misses 4.5:1 on an 18% red wash in light; body
+       text on that same wash still reads as recording via the tint. */
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--text);
   }
   .pill-offline {
-    background: rgba(148, 163, 184, 0.14);
+    background: color-mix(in srgb, var(--muted) 10%, transparent);
     color: var(--muted);
   }
 
-  /* Server-copy pills use blue/teal tones, never red/green — visually
-     distinct from the recording pill's palette so the two are never
-     confused for one status. */
+  /* Server-copy pills stay on the accent/warn tokens (not success/danger)
+     so they never share a palette with Online / Recording. */
   .pill-copy-unavailable {
-    background: rgba(148, 163, 184, 0.14);
+    background: color-mix(in srgb, var(--muted) 10%, transparent);
     color: var(--muted);
   }
   .pill-copy-progress {
-    background: rgba(14, 116, 144, 0.16);
-    color: #0e7490;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent-text);
   }
   .pill-copy-complete {
-    background: rgba(10, 78, 63, 0.16);
-    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent-text);
   }
   .pill-copy-failed {
-    background: rgba(249, 115, 22, 0.18);
+    background: color-mix(in srgb, var(--warn) 18%, transparent);
     color: var(--warn-text);
   }
 
@@ -388,25 +389,56 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    background: rgba(10, 78, 63, 0.22);
-    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent-text);
     text-decoration: none;
     cursor: pointer;
-    border: none;
+    border: 1px solid var(--muted);
   }
   .pill-server-copy-download:hover {
-    background: rgba(10, 78, 63, 0.34);
+    background: color-mix(in srgb, var(--accent) 34%, transparent);
   }
 
   .pill-server-copy-files {
-    background: rgba(148, 163, 184, 0.18);
+    background: color-mix(in srgb, var(--muted) 10%, transparent);
     color: var(--muted);
-    border: none;
     cursor: pointer;
+    border: 1px solid var(--muted);
   }
   .pill-server-copy-files:hover {
-    background: rgba(148, 163, 184, 0.28);
+    background: color-mix(in srgb, var(--muted) 28%, transparent);
     color: var(--text);
+  }
+
+  :global(html[data-theme="dark"]) .pill-host {
+    background: color-mix(in srgb, var(--warn-text) 18%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-guest,
+  :global(html[data-theme="dark"]) .pill-offline,
+  :global(html[data-theme="dark"]) .pill-copy-unavailable,
+  :global(html[data-theme="dark"]) .pill-server-copy-files {
+    background: color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-online {
+    background: color-mix(in srgb, var(--success-text) 18%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-recording {
+    background: color-mix(in srgb, var(--danger-text) 18%, transparent);
+    color: var(--danger-text);
+  }
+  :global(html[data-theme="dark"]) .pill-copy-progress,
+  :global(html[data-theme="dark"]) .pill-copy-complete,
+  :global(html[data-theme="dark"]) .pill-server-copy-download {
+    background: color-mix(in srgb, var(--accent-text) 18%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-copy-failed {
+    background: color-mix(in srgb, var(--warn-text) 18%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-server-copy-download:hover {
+    background: color-mix(in srgb, var(--accent-text) 28%, transparent);
+  }
+  :global(html[data-theme="dark"]) .pill-server-copy-files:hover {
+    background: color-mix(in srgb, var(--text) 28%, transparent);
   }
 
   .muted-text {
@@ -457,6 +489,9 @@
     font-size: 12px;
     color: var(--muted);
   }
+  .files-header :global(.btn-ghost) {
+    border-color: var(--muted);
+  }
 
   .files-empty {
     padding: 18px 16px;
@@ -497,7 +532,7 @@
   .files-list {
     display: flex;
     flex-direction: column;
-    border: 1px solid rgba(148, 163, 184, 0.16);
+    border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
   }
@@ -508,7 +543,7 @@
     align-items: center;
     gap: 12px;
     padding: 10px;
-    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    border-top: 1px solid var(--border);
     font-size: 12px;
   }
   .file-row:first-child {
