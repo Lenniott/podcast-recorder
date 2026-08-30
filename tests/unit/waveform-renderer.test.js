@@ -108,4 +108,34 @@ describe('createWaveformRenderer', () => {
     expect(() => renderer.start()).not.toThrow()
     expect(requestAnimationFrame).toHaveBeenCalled()
   })
+
+  it('draws onto a replacement canvas after the live node is remounted', () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    const firstCtx = createContext()
+    const secondCtx = createContext()
+    const first = createCanvas(firstCtx)
+    const second = createCanvas(secondCtx)
+    let live = first
+    const analyser = {
+      fftSize: 4,
+      getFloatTimeDomainData: vi.fn((data) => data.set([0, 0.1, -0.1, 0]))
+    }
+    const renderer = createWaveformRenderer({
+      getCanvas: () => live,
+      getAnalyserNode: () => analyser,
+      getWrittenRing: () => null,
+      isRecording: () => false,
+      getColors: () => ({ bg: 'white', centerLine: 'gray', stroke: 'black', strokeRec: 'green' })
+    })
+
+    renderer.start()
+    expect(second.getContext).not.toHaveBeenCalled()
+    expect(firstCtx.fillRect).toHaveBeenCalled()
+
+    live = second
+    renderer.start()
+
+    expect(second.getContext).toHaveBeenCalled()
+    expect(secondCtx.fillRect).toHaveBeenCalledWith(0, 0, 100, 40)
+  })
 })

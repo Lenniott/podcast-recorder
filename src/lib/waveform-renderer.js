@@ -3,7 +3,10 @@
  *
  * Canvas, analyser node, written-audio ring, recording state, and theme
  * colors all change over the page's lifetime, so they are read live through
- * accessors instead of captured once at construction.
+ * accessors instead of captured once at construction. The canvas *element*
+ * can also be replaced (sidebar remount). The 2d context is rebound whenever
+ * getCanvas() returns a different node — keeping the old context is how the
+ * waveform goes blank while the level meter (not canvas-backed) still moves.
  */
 export function createWaveformRenderer({
   getCanvas,
@@ -13,8 +16,22 @@ export function createWaveformRenderer({
   getColors
 }) {
   let canvasCtx = null
+  let boundCanvas = null
   let animFrame = null
   let analyserData = null
+
+  function bindCanvas(canvas) {
+    if (!canvas) {
+      boundCanvas = null
+      canvasCtx = null
+      return null
+    }
+    if (boundCanvas !== canvas) {
+      boundCanvas = canvas
+      canvasCtx = canvas.getContext('2d')
+    }
+    return canvasCtx
+  }
 
   function draw() {
     animFrame = requestAnimationFrame(draw)
@@ -22,7 +39,7 @@ export function createWaveformRenderer({
     const analyserNode = getAnalyserNode()
     if (!canvas || !analyserNode) return
 
-    canvasCtx = canvasCtx || canvas.getContext('2d')
+    canvasCtx = bindCanvas(canvas)
     if (!analyserData || analyserData.length !== analyserNode.fftSize) {
       analyserData = new Float32Array(analyserNode.fftSize)
     }
@@ -85,7 +102,7 @@ export function createWaveformRenderer({
   function resizeCanvas() {
     const canvas = getCanvas()
     if (!canvas) return
-    canvasCtx = canvasCtx || canvas.getContext('2d')
+    canvasCtx = bindCanvas(canvas)
     canvas.width = canvas.offsetWidth
     canvas.height = canvas.offsetHeight
   }

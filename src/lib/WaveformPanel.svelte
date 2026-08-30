@@ -1,11 +1,13 @@
 <script>
   import { Clap } from "$lib/icons";
-  import { METER_MIN, METER_TICKS, dbToMeterPct, formatMeterReadout, meterGradientCss } from "./meter.js";
+  import {
+    METER_MIN,
+    METER_TICKS,
+    dbToMeterPct,
+    formatMeterReadout,
+    meterGradientCss,
+  } from "./meter.js";
 
-  // Presentational extraction of the room page's old .waveform-wrap block.
-  // The canvas element itself is bound back up to the parent (bind:canvasEl)
-  // so the page's existing requestAnimationFrame draw loop / analyserNode
-  // wiring keeps drawing into the same <canvas> node, untouched.
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
@@ -13,15 +15,19 @@
   export let peakHoldDb = METER_MIN;
   export let isClipping = false;
   export let lastClapFrom = null;
-  // Collapsed-sidebar mode: same live canvas + level bar, no labels/readout
-  // — the point of collapsing is to still see *something* is happening.
   export let compact = false;
+  export let live = false;
 
   const meterGradient = `linear-gradient(90deg, ${meterGradientCss()})`;
+
+  // Bind through a local node so replacing the canvas (sidebar remount)
+  // still assigns canvasEl — the renderer rebinds its 2d context from that.
+  let paintNode = null;
+  $: if (live && paintNode) canvasEl = paintNode;
 </script>
 
-<div class="waveform-wrap" class:compact>
-  <canvas bind:this={canvasEl}></canvas>
+<div class="waveform-wrap" class:compact data-testid={live ? "live-waveform" : undefined}>
+  <canvas bind:this={paintNode}></canvas>
 
   <div class="db-meter-wrap">
     <div class="db-meter-track">
@@ -40,8 +46,8 @@
         {/each}
       </div>
       <div class="db-readout">
-        <span class="db-value">{formatMeterReadout(dbLevel)} dBFS</span>
-        <span class="db-peak-label">pk: {formatMeterReadout(peakHoldDb)}</span>
+        <!-- <span class="db-value">{formatMeterReadout(dbLevel)} dBFS</span>
+        <span class="db-peak-label">pk: {formatMeterReadout(peakHoldDb)}</span> -->
         {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
       </div>
     {/if}
@@ -66,6 +72,10 @@
     border-radius: 8px;
     background: var(--surface);
     border: 1px solid var(--border);
+    background-image: linear-gradient(var(--border), var(--border));
+    background-size: 100% 1px;
+    background-position: center;
+    background-repeat: no-repeat;
   }
 
   .waveform-wrap.compact canvas {
@@ -89,7 +99,6 @@
   .db-meter-fill {
     position: absolute;
     inset: 0;
-    /* Gradient is sized to the full -60…0 track; clip reveals only up to level. */
     clip-path: inset(0 var(--clip-right) 0 0);
   }
 
