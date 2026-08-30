@@ -8,7 +8,7 @@
   import { createCaptureWriter } from '$lib/capture-writer.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
   import { noAutofill } from '$lib/actions.js'
-  import { METER_MIN, METER_MAX, dbfs, nextFillDb } from '$lib/meter.js'
+  import { METER_MIN, dbfs, nextFillDb, dbToMeterPct } from '$lib/meter.js'
   import RoomSidebar from '$lib/RoomSidebar.svelte'
   import RoomTabs from '$lib/RoomTabs.svelte'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
@@ -171,8 +171,8 @@
   $: hasActiveLocalRecording = recordingState === 'recording' || recordingState === 'stopping'
   $: hasBlockingExitWork = hasActiveLocalRecording || hasIncompleteServerCopyUpload
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
-  $: meterPct  = Math.max(0, Math.min(100, ((meterFillDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
-  $: peakPct   = Math.max(0, Math.min(100, ((peakHoldDb - METER_MIN) / (METER_MAX - METER_MIN)) * 100))
+  $: meterPct  = dbToMeterPct(meterFillDb)
+  $: peakPct   = dbToMeterPct(peakHoldDb)
 
   // ───────────────────────────────────────────────────────────────────
   // UTILS

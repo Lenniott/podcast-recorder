@@ -34,50 +34,63 @@
 
 <div class="mic-panel">
   <div class="field">
-  <label for="mic-select">Microphone</label>
-  <select id="mic-select" bind:value={selectedDeviceId} on:change={onChangeMic} disabled={devices.length === 0}>
-    {#if devices.length === 0}
-      <option value="">No microphone found</option>
-    {:else}
-      {#each devices as d (d.deviceId)}
-        <option value={d.deviceId}>{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option>
-      {/each}
+    <label for="mic-select">Mic</label>
+    <select
+      id="mic-select"
+      bind:value={selectedDeviceId}
+      on:change={onChangeMic}
+      disabled={devices.length === 0}
+    >
+      {#if devices.length === 0}
+        <option value="">No microphone found</option>
+      {:else}
+        {#each devices as d (d.deviceId)}
+          <option value={d.deviceId}
+            >{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option
+          >
+        {/each}
+      {/if}
+    </select>
+
+    {#if micPermission === "denied"}
+      <p class="perm-warn">
+        <AlertTriangle /> Mic access denied. Check browser permissions.
+      </p>
     {/if}
-  </select>
+    {#if audioInitError}
+      <p class="muted-text">{audioInitError}</p>
+    {/if}
 
-  {#if micPermission === "denied"}
-    <p class="perm-warn"><AlertTriangle /> Mic access denied. Check browser permissions.</p>
-  {/if}
-  {#if audioInitError}
-    <p class="muted-text">{audioInitError}</p>
-  {/if}
-
-  {#if micFallback}
-    <p class="fallback-warn">
-      <AlertTriangle /> Original mic disconnected — switched to <strong>{micFallbackName}</strong>.
-      Recording continues. Reconnect your mic or pick a new one above.
-    </p>
-  {/if}
+    {#if micFallback}
+      <p class="fallback-warn">
+        <AlertTriangle /> Original mic disconnected — switched to
+        <strong>{micFallbackName}</strong>. Recording continues. Reconnect your
+        mic or pick a new one above.
+      </p>
+    {/if}
   </div>
-  <div class="gain-row">
-    <label for="gain-slider">
-      Input Gain
-      <span class="gain-db">{gainDb > 0 ? "+" : ""}{gainDb.toFixed(1)} dB</span>
-    </label>
-    <input
-      id="gain-slider"
-      class="gain-slider"
-      type="range"
-      min={GAIN_DB_MIN}
-      max={GAIN_DB_MAX}
-      step="0.1"
-      value={Number.isFinite(gainDb) ? gainDb : 0}
-      on:input={onGainSlider}
-    />
-    <div class="gain-markers">
-      {#each GAIN_MARKS as mark}
-        <span style="left: {mark.pct}%">{mark.label}</span>
-      {/each}
+  <div class="field">
+    <label for="gain-slider"
+      >Gain <span class="gain-db"
+        >{gainDb > 0 ? "+" : ""}{gainDb.toFixed(1)} dB</span
+      ></label
+    >
+    <div class="field-content">
+      <input
+        id="gain-slider"
+        class="gain-slider"
+        type="range"
+        min={GAIN_DB_MIN}
+        max={GAIN_DB_MAX}
+        step="0.1"
+        value={Number.isFinite(gainDb) ? gainDb : 0}
+        on:input={onGainSlider}
+      />
+      <div class="gain-markers">
+        {#each GAIN_MARKS as mark}
+          <span style="left: {mark.pct}%">{mark.label}</span>
+        {/each}
+      </div>
     </div>
   </div>
 </div>
@@ -92,6 +105,12 @@
   label {
     font-size: 12px;
     color: var(--muted);
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   select {
@@ -121,14 +140,27 @@
     margin: 0;
   }
 
-  .gain-row {
-    margin-top: 4px;
+  .field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
   }
 
   .gain-db {
+    font-size: 9px;
+    font-weight: 400;
     font-variant-numeric: tabular-nums;
     color: var(--text);
-    margin-left: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .field-content {
+    width: 100%;
   }
 
   .gain-slider {

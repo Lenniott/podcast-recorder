@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { METER_MIN, dbfs, nextFillDb } from '../../src/lib/meter.js'
+import { METER_MIN, dbfs, nextFillDb, dbToMeterPct, formatMeterReadout, METER_COLOR_STOPS } from '../../src/lib/meter.js'
 
 describe('dbfs', () => {
   it('converts linear amplitude to dBFS', () => {
@@ -46,5 +46,46 @@ describe('nextFillDb ballistics', () => {
     let db = -60
     for (let i = 0; i < 50; i++) db = nextFillDb(db, -25, 0.043)
     expect(db).toBeCloseTo(-25, 3)
+  })
+})
+
+describe('dbToMeterPct', () => {
+  // Linear-dB bar from METER_MIN (-60) to 0. Literals are the spec — if
+  // someone restyles tick `left:` by eye, the fill/peak and labels diverge.
+  it('maps the floor to 0% and 0 dBFS to 100%', () => {
+    expect(dbToMeterPct(-60)).toBe(0)
+    expect(dbToMeterPct(0)).toBe(100)
+  })
+
+  it('places the labelled ticks at their true dB positions', () => {
+    expect(dbToMeterPct(-24)).toBe(60)
+    expect(dbToMeterPct(-18)).toBe(70)
+    expect(dbToMeterPct(-12)).toBe(80)
+    expect(dbToMeterPct(-6)).toBe(90)
+    expect(dbToMeterPct(-3)).toBe(95)
+  })
+})
+
+describe('formatMeterReadout', () => {
+  it('does not invent a number when the meter is at the floor', () => {
+    expect(formatMeterReadout(METER_MIN)).toBe('—')
+    expect(formatMeterReadout(-16.2)).toBe('-16.2')
+  })
+})
+
+describe('METER_COLOR_STOPS', () => {
+  it('keeps red off the bar until -3 dBFS', () => {
+    const firstRedDb = Math.min(
+      ...METER_COLOR_STOPS.filter((s) => s.color === '#ef4444').map((s) => s.db),
+    )
+    expect(firstRedDb).toBe(-3)
+    expect(dbToMeterPct(-3)).toBe(95)
+  })
+
+  it('starts warming before -12 so -18 and -12 are not the same green', () => {
+    const at = (db) => METER_COLOR_STOPS.find((s) => s.db === db)?.color
+    expect(at(-24)).toBe('#22c55e')
+    expect(at(-18)).not.toBe(at(-24))
+    expect(at(-12)).not.toBe(at(-18))
   })
 })

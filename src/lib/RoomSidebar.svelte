@@ -83,8 +83,39 @@
       {/if}
     </button>
   </div>
-
+  {#if !collapsed}
+    <section class="sidebar-section">
+      <RoomDetailsPanel
+        {roomName}
+        {slug}
+        {isHostClaim}
+        {roomPassword}
+        {wsStatus}
+        {peers}
+        {clientId}
+        {copyLinkDone}
+        {onCopyLink}
+      />
+    </section>
+  {/if}
   <div class="record-controls-container">
+    {#if !collapsed}
+      <section class="sidebar-section">
+        <MicPanel
+          {devices}
+          bind:selectedDeviceId
+          {micPermission}
+          {audioInitError}
+          {micFallback}
+          {micFallbackName}
+          bind:gainValue
+          {gainDb}
+          {onChangeMic}
+          {onGainInput}
+        />
+      </section>
+    {/if}
+
     <section class="sidebar-section room-visualization">
       <WaveformPanel
         bind:canvasEl
@@ -115,35 +146,6 @@
       />
     </section>
   </div>
-  {#if !collapsed}
-    <section class="sidebar-section">
-      <MicPanel
-        {devices}
-        bind:selectedDeviceId
-        {micPermission}
-        {audioInitError}
-        {micFallback}
-        {micFallbackName}
-        bind:gainValue
-        {gainDb}
-        {onChangeMic}
-        {onGainInput}
-      />
-    </section>
-    <section class="sidebar-section">
-      <RoomDetailsPanel
-        {roomName}
-        {slug}
-        {isHostClaim}
-        {roomPassword}
-        {wsStatus}
-        {peers}
-        {clientId}
-        {copyLinkDone}
-        {onCopyLink}
-      />
-    </section>
-  {/if}
 </aside>
 
 <style>
@@ -184,9 +186,9 @@
   }
 
   .record-controls-container {
-    margin-bottom: auto;
+    margin-top: auto;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 32px;
   }
 </style>

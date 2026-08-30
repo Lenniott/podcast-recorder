@@ -1,6 +1,6 @@
 <script>
   import { Clap } from "$lib/icons";
-  import { METER_MIN } from "./meter.js";
+  import { METER_MIN, METER_TICKS, dbToMeterPct, formatMeterReadout, meterGradientCss } from "./meter.js";
 
   // Presentational extraction of the room page's old .waveform-wrap block.
   // The canvas element itself is bound back up to the parent (bind:canvasEl)
@@ -16,6 +16,8 @@
   // Collapsed-sidebar mode: same live canvas + level bar, no labels/readout
   // — the point of collapsing is to still see *something* is happening.
   export let compact = false;
+
+  const meterGradient = `linear-gradient(90deg, ${meterGradientCss()})`;
 </script>
 
 <div class="waveform-wrap" class:compact>
@@ -23,24 +25,23 @@
 
   <div class="db-meter-wrap">
     <div class="db-meter-track">
-      <div class="db-meter-fill" style="--meter-pct: {meterPct}%"></div>
+      <div
+        class="db-meter-fill"
+        style="--clip-right: {100 - meterPct}%; background: {meterGradient}"
+      ></div>
       {#if peakHoldDb > METER_MIN}
         <div class="db-peak-hold" style="left: {peakPct}%"></div>
       {/if}
     </div>
     {#if !compact}
       <div class="db-labels">
-        <span style="left: 4%">-60</span>
-        <span style="left: 50%">-24</span>
-        <span style="left: 62%">-18</span>
-        <span style="left: 74%">-12</span>
-        <span style="left: 86%">-6</span>
-        <span style="left: 92%">-3</span>
-        <span style="left: 98%">0</span>
+        {#each METER_TICKS as db}
+          <span style="left: {dbToMeterPct(db)}%">{db}</span>
+        {/each}
       </div>
       <div class="db-readout">
-        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "-00.0"} dBFS</span>
-        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "-00.0"}</span>
+        <span class="db-value">{formatMeterReadout(dbLevel)} dBFS</span>
+        <span class="db-peak-label">pk: {formatMeterReadout(peakHoldDb)}</span>
         {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
       </div>
     {/if}
@@ -86,15 +87,17 @@
   }
 
   .db-meter-fill {
-    height: 100%;
-    width: var(--meter-pct);
-    background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444);
+    position: absolute;
+    inset: 0;
+    /* Gradient is sized to the full -60…0 track; clip reveals only up to level. */
+    clip-path: inset(0 var(--clip-right) 0 0);
   }
 
   .db-peak-hold {
     position: absolute;
     top: 0;
     bottom: 0;
+    z-index: 1;
     width: 2px;
     background: #fff;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
