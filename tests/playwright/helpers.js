@@ -199,7 +199,7 @@ export async function passRecordingCheck(page) {
   const overlay = page.locator('.check-overlay')
   await expect(overlay).toBeVisible()
   const listenBtn = page.getByRole('button', { name: /Listen back/ })
-  const confirmBtn = page.getByRole('button', { name: /Sounds good/ })
+  const confirmBtn = page.getByRole('button', { name: /Yes, continue/ })
   await expect(async () => {
     await listenBtn.click()
     await expect(confirmBtn).toBeVisible({ timeout: 500 })
@@ -246,6 +246,21 @@ export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
   await page.getByPlaceholder('Paste a YouTube link or video id').fill(url)
   await page.getByRole('button', { name: 'Watch' }).click()
   await expect(page.getByRole('button', { name: /Play|Pause/ })).toBeVisible()
+}
+
+export async function expandPresenceTable(page) {
+  const overlay = page.locator('.check-overlay')
+  if (await overlay.isVisible()) {
+    await page.getByRole('button', { name: 'Skip microphone check' }).click()
+    await expect(overlay).toBeHidden()
+  }
+  const fold = page.getByTestId('presence-fold')
+  if ((await fold.getAttribute('aria-expanded')) === 'true') return
+  await fold.click()
+}
+
+export function presenceRow(page, name) {
+  return page.locator('[data-testid="presence-row"]', { hasText: name })
 }
 
 /**

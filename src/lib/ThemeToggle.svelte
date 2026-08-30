@@ -3,6 +3,8 @@
   import { Moon, Monitor, Sun } from "$lib/icons";
   import { getMode, cycleMode } from "./theme.js";
 
+  export let floating = true;
+
   // 'system' is the default and matches the boot script in app.html, so
   // there's nothing to reconcile on mount in the common case; onMount below
   // still re-reads the real value in case a stored preference disagrees.
@@ -21,6 +23,7 @@
 <button
   type="button"
   class="btn-ghost btn-icon theme-toggle"
+  class:floating
   on:click={() => (mode = cycleMode())}
   {title}
   aria-label={title}
@@ -35,10 +38,13 @@
 </button>
 
 <style>
-  .theme-toggle {
+  .theme-toggle.floating {
     position: fixed;
     top: 16px;
     right: 16px;
     z-index: 500;
+  }
+  :global(html[data-room-chrome]) .theme-toggle.floating {
+    display: none;
   }
 </style>

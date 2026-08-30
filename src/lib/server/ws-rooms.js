@@ -13,7 +13,11 @@
  *   { type: 'join', name, clientId }     — announce on connect
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
- *   { type: 'recording_state', state }   — 'recording' | 'stopped'
+ *   { type: 'recording_state', state, startedAt? }
+ *                                        — 'recording' | 'stopped'. startedAt is the
+ *                                          recorder's Date.now() when this take began
+ *                                          (resent on registerResync so the clock does
+ *                                          not restart after a reconnect).
  *   { type: 'server_copy_progress', state, percent }
  *                                        — this peer's server-copy upload status, sent by
  *                                          $lib/server-copy-upload.js's caller (see the
@@ -23,6 +27,9 @@
  *                                          as recording_state). state is one of
  *                                          'unavailable' | 'in_progress' | 'complete' | 'failed';
  *                                          percent is a rounded 0-100 integer, never a byte count.
+ *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
+ *                                          and included in presence. Re-announce on
+ *                                          registerResync after reconnect (server forgets it).
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *   { type: 'tab_create', tabId, title? }
  *                                        — client-generated tabId (like clientId);
@@ -41,7 +48,7 @@
  *                                          UI remounts without a WS reconnect.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent}] }
+ *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
  *   { type: 'server_copy_token', clientId, token }
  *                                        — sent ONLY to the connection whose 'join' just
  *                                          claimed this clientId, never broadcast (ticket
@@ -98,7 +105,7 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
-//         serverCopyState, serverCopyPercent, serverCopyTakeId }
+//         serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
 const rooms = new Map()
 
 // tabRooms: Map<slug, {
@@ -122,6 +129,7 @@ function sendPresence(slug) {
     clientId: p.clientId,
     name: p.name,
     recording: p.recording,
+    recordingStartedAt: p.recording ? p.recordingStartedAt || null : null,
     role: p.role || 'guest',
     isHost: (p.role || 'guest') === 'host',
     // Separate from `recording` on purpose — local recording and the
@@ -129,7 +137,8 @@ function sendPresence(slug) {
     // merged into one status (see ticket 06).
     serverCopyState: p.serverCopyState || 'unavailable',
     serverCopyPercent: p.serverCopyPercent || 0,
-    serverCopyTakeId: p.serverCopyTakeId || null
+    serverCopyTakeId: p.serverCopyTakeId || null,
+    micLabel: p.micLabel || ''
   }))
   const msg = { type: 'presence', peers }
   for (const peer of room.values()) send(peer.ws, msg)
@@ -282,6 +291,7 @@ export function setupWss(wss) {
       clientId: null,
       name: 'Guest',
       recording: false,
+      recordingStartedAt: null,
       slug,
       role: 'guest',
       claimedHost: connectionHostClaim,
@@ -289,7 +299,8 @@ export function setupWss(wss) {
       talking: false,
       serverCopyState: 'unavailable',
       serverCopyPercent: 0,
-      serverCopyTakeId: null
+      serverCopyTakeId: null,
+      micLabel: ''
     }
 
     ws.on('message', (raw) => {
@@ -364,6 +375,14 @@ export function setupWss(wss) {
 
       if (msg.type === 'recording_state' && clientId) {
         peer.recording = msg.state === 'recording'
+        if (peer.recording) {
+          const startedAt = Number(msg.startedAt)
+          peer.recordingStartedAt = Number.isFinite(startedAt) && startedAt > 0
+            ? startedAt
+            : null
+        } else {
+          peer.recordingStartedAt = null
+        }
         recomputeRoles(room)
         sendPresence(slug)
         broadcast(slug, { type: 'recording_state', name: peer.name, state: msg.state }, clientId)
@@ -381,6 +400,11 @@ export function setupWss(wss) {
           const takeId = String(msg.takeId || '').slice(0, 64)
           peer.serverCopyTakeId = takeId || null
         }
+        sendPresence(slug)
+      }
+
+      if (msg.type === 'mic_info' && clientId) {
+        peer.micLabel = String(msg.label || '').slice(0, 80)
         sendPresence(slug)
       }
 

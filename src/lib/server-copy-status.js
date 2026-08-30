@@ -105,3 +105,20 @@ export function canShowServerCopyDownload({ isHost, state, percent = 0 } = {}) {
   if (state === 'complete') return true
   return ['in_progress', 'failed'].includes(state) && percent > 0
 }
+
+const SERVER_COPY_LINE = {
+  unavailable: 'Unavailable',
+  in_progress: 'Uploading…',
+  complete: 'Complete',
+  failed: 'Failed'
+}
+
+/**
+ * Sidebar copy status as a single text line (not a pill). Percent is only
+ * appended while in_progress — complete/failed already say what happened.
+ */
+export function formatServerCopyLine({ state, percent = 0 } = {}) {
+  const key = SERVER_COPY_LINE[state] ? state : 'unavailable'
+  if (key === 'in_progress') return `${SERVER_COPY_LINE.in_progress} ${Number(percent) || 0}%`
+  return SERVER_COPY_LINE[key]
+}

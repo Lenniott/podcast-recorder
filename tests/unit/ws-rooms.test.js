@@ -156,7 +156,11 @@ describe('setupWss — connection handling', () => {
     const ws2 = mockWs()
     wss.connect(ws1, 'room1'); join(ws1, 'Host',  'c1')
     wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
-    ws1.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+    ws1.emit('message', JSON.stringify({
+      type: 'recording_state',
+      state: 'recording',
+      startedAt: 1_700_000_000_000
+    }))
     // ws2 should receive the state update
     expect(ws2.sent.some(m => m.type === 'recording_state' && m.state === 'recording')).toBe(true)
     // ws1 should NOT receive its own state update
@@ -165,6 +169,7 @@ describe('setupWss — connection handling', () => {
     const presence = ws1.sent.filter(m => m.type === 'presence').at(-1)
     const host = presence.peers.find(p => p.name === 'Host')
     expect(host.recording).toBe(true)
+    expect(host.recordingStartedAt).toBe(1_700_000_000_000)
   })
 
   it('same-clientId reconnect drops recording until the client resends it', () => {
@@ -173,15 +178,25 @@ describe('setupWss — connection handling', () => {
     const guest = mockWs()
     wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
     wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
-    ws1.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+    ws1.emit('message', JSON.stringify({
+      type: 'recording_state',
+      state: 'recording',
+      startedAt: 1_700_000_000_000
+    }))
 
     wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
     const afterJoin = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterJoin.peers.find(p => p.name === 'Host').recording).toBe(false)
+    expect(afterJoin.peers.find(p => p.name === 'Host').recordingStartedAt).toBeNull()
 
-    ws2.emit('message', JSON.stringify({ type: 'recording_state', state: 'recording' }))
+    ws2.emit('message', JSON.stringify({
+      type: 'recording_state',
+      state: 'recording',
+      startedAt: 1_700_000_000_000
+    }))
     const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterResync.peers.find(p => p.name === 'Host').recording).toBe(true)
+    expect(afterResync.peers.find(p => p.name === 'Host').recordingStartedAt).toBe(1_700_000_000_000)
   })
 
   it('presence defaults a fresh peer to an unavailable server copy', () => {
@@ -255,6 +270,39 @@ describe('setupWss — connection handling', () => {
     ws2.emit('message', JSON.stringify({ type: 'server_copy_progress', state: 'in_progress', percent: 75 }))
     const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterResync.peers.find(p => p.name === 'Host')).toMatchObject({ serverCopyState: 'in_progress', serverCopyPercent: 75 })
+  })
+
+  it('mic_info is stored on the peer and shown to both via presence', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'mic_info', label: 'Shure SM7B' }))
+
+    for (const ws of [ws1, ws2]) {
+      const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+      const host = presence.peers.find(p => p.name === 'Host')
+      expect(host.micLabel).toBe('Shure SM7B')
+    }
+  })
+
+  it('mic_info truncates a long label and same-clientId reconnect forgets it until resync', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'mic_info', label: 'x'.repeat(200) }))
+    const labeled = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(labeled.peers.find(p => p.name === 'Host').micLabel).toHaveLength(80)
+
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    const afterJoin = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterJoin.peers.find(p => p.name === 'Host').micLabel).toBe('')
+
+    ws2.emit('message', JSON.stringify({ type: 'mic_info', label: 'Shure SM7B' }))
+    const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterResync.peers.find(p => p.name === 'Host').micLabel).toBe('Shure SM7B')
   })
 
   it('removes peer and updates presence on disconnect', () => {

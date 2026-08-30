@@ -32,7 +32,7 @@
 
   // ─── WebSocket state ────────────────────────────────────────────────
   let wsStatus = 'disconnected' // connected | connecting | disconnected
-  let peers = []               // [{ clientId, name, recording, role, isHost }]
+  let peers = []               // [{ clientId, name, recording, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
 
   // ─── Mic / device state ─────────────────────────────────────────────
@@ -48,6 +48,7 @@
   let activeFileHandle = null
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
+  let recordingStartedAtMs = null
   let recordingTimer = null
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
@@ -586,6 +587,7 @@
 
     recordingState = 'recording'
     recordingSeconds = 0
+    recordingStartedAtMs = Date.now()
 
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
@@ -596,6 +598,7 @@
     if (recordingState !== 'recording') return
     recordingState = 'stopping'
     clearInterval(recordingTimer)
+    recordingStartedAtMs = null
     wsNotifyState('stopped')
 
     // Stopping via the regular Stop button while the listen-back check is
@@ -680,7 +683,14 @@
   // ───────────────────────────────────────────────────────────────────
 
   function wsNotifyState(state) {
-    room.send({ type: 'recording_state', state })
+    if (state === 'recording' && recordingStartedAtMs == null) {
+      recordingStartedAtMs = Date.now() - recordingSeconds * 1000
+    }
+    room.send({
+      type: 'recording_state',
+      state,
+      startedAt: state === 'recording' ? recordingStartedAtMs : undefined
+    })
   }
 
   function wsSend(payload) {
@@ -745,6 +755,27 @@
     // reconnect and stay wrong for the rest of the session.
     if (serverCopyUpload) sendServerCopyProgress(deriveServerCopyDisplay(serverCopyUpload.getStatus()), { force: true })
   })
+  room.registerResync(() => {
+    sendMicInfo(true)
+  })
+
+  $: micLabel = (
+    devices.find((d) => d.deviceId === selectedDeviceId)?.label
+    || micFallbackName
+    || ''
+  ).slice(0, 80)
+
+  let lastMicSent = null
+  function sendMicInfo(force = false) {
+    if (!force && micLabel === lastMicSent) return
+    lastMicSent = micLabel
+    room.send({ type: 'mic_info', label: micLabel })
+  }
+
+  $: if (browser && wsStatus === "connected") {
+    micLabel;
+    sendMicInfo();
+  }
 
   function connectWs() {
     if (sessionDestroyed || !data.authenticated) return
@@ -832,6 +863,7 @@
   // Sidebar collapse changes the canvas's on-screen size — re-run the
   // backing-resolution reset once the DOM has caught up.
   $: if (browser) {
+    canvas
     sidebarCollapsed
     tick().then(waveformRenderer.resizeCanvas)
   }
@@ -911,6 +943,7 @@
 <RecordingCheckModal
   open={checkModalOpen}
   sentence={checkSentence}
+  {micLabel}
   onListen={buildCheckPreview}
   onConfirm={confirmRecordingCheck}
   onReject={rejectRecordingCheck}

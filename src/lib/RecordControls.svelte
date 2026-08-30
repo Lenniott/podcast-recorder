@@ -91,12 +91,12 @@
         </div>
       {:else if recordingState === "idle" && bytesWritten > 44}
         <div class="stat">
-          Last recording: {formatBytes(bytesWritten)} saved to your disk
+          Last recording: {formatBytes(bytesWritten)}
         </div>
       {/if}
 
       {#if myPeerIsRecording && recordingState === "idle"}
-        <div class="stat warn-stat"><AlertTriangle /> Guest is recording — are you?</div>
+        <div class="stat warn-stat"><AlertTriangle /> Guest is recording</div>
       {/if}
     </div>
   </div>

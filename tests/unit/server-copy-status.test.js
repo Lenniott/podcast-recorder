@@ -3,7 +3,8 @@ import {
   deriveServerCopyDisplay,
   deriveServerCopyUploadState,
   shouldAnnounceServerCopyFailure,
-  canShowServerCopyDownload
+  canShowServerCopyDownload,
+  formatServerCopyLine
 } from '../../src/lib/server-copy-status.js'
 
 describe('deriveServerCopyDisplay', () => {
@@ -145,5 +146,25 @@ describe('canShowServerCopyDownload', () => {
 
   it('is false with no arguments at all', () => {
     expect(canShowServerCopyDownload()).toBe(false)
+  })
+})
+
+describe('formatServerCopyLine', () => {
+  it('says there is no server copy when unavailable', () => {
+    expect(formatServerCopyLine({ state: 'unavailable' })).toBe('Unavailable')
+  })
+
+  it('includes the rounded percent while in progress', () => {
+    expect(formatServerCopyLine({ state: 'in_progress', percent: 99 })).toBe('Uploading… 99%')
+    expect(formatServerCopyLine({ state: 'in_progress', percent: 0 })).toBe('Uploading… 0%')
+  })
+
+  it('names complete and failed without a percent', () => {
+    expect(formatServerCopyLine({ state: 'complete' })).toBe('Complete')
+    expect(formatServerCopyLine({ state: 'failed' })).toBe('Failed')
+  })
+
+  it('treats a missing state as unavailable', () => {
+    expect(formatServerCopyLine()).toBe('Unavailable')
   })
 })

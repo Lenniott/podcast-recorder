@@ -1,34 +1,22 @@
 <script>
-  import { ChevronLeft, ChevronRight } from "$lib/icons";
+  import { ChevronLeft, ChevronRight, FileSearch02, Mic } from "$lib/icons";
   import RoomDetailsPanel from "./RoomDetailsPanel.svelte";
   import MicPanel from "./MicPanel.svelte";
   import WaveformPanel from "./WaveformPanel.svelte";
   import RecordControls from "./RecordControls.svelte";
-  import { Mic } from "$lib/icons";
+  import ServerCopyFilesModal from "./ServerCopyFilesModal.svelte";
 
-  // Composes the four sidebar panels in the sketch's order: room details,
-  // mic selection, waveform, then record/clap. Purely a forwarding wrapper —
-  // no state of its own beyond the collapse toggle — so the room page has
-  // one component to wire up instead of four.
-
-  // Collapse is local UI state, not shared over the room WS — collapsing
-  // your own sidebar shouldn't affect the other peer's view. Bindable so
-  // the page can react to it (resizing the waveform canvas — see
-  // rec/[slug]/+page.svelte).
   export let collapsed = false;
 
-  // Room details
   export let roomName;
   export let slug;
   export let isHostClaim = false;
   export let roomPassword = null;
   export let wsStatus = "disconnected";
   export let peers = [];
-  export let clientId = null;
   export let copyLinkDone = false;
   export let onCopyLink = () => {};
 
-  // Mic
   export let devices = [];
   export let selectedDeviceId = "";
   export let micPermission = "prompt";
@@ -40,7 +28,6 @@
   export let onChangeMic = () => {};
   export let onGainInput = () => {};
 
-  // Waveform
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
@@ -49,7 +36,6 @@
   export let isClipping = false;
   export let lastClapFrom = null;
 
-  // Record / clap
   export let recordingState = "idle";
   export let canRecord = false;
   export let myPeerIsRecording = false;
@@ -59,6 +45,8 @@
   export let onClap = () => {};
   export let formatTime = (s) => String(s);
   export let formatBytes = (b) => String(b);
+
+  let filesModalOpen = false;
 </script>
 
 <aside class="room-sidebar" class:collapsed>
@@ -69,35 +57,47 @@
         {roomName}
       </div>
     {/if}
-    <button
-      type="button"
-      class="btn-ghost btn-icon btn-sm collapse-toggle"
-      on:click={() => (collapsed = !collapsed)}
-      aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-    >
-      {#if collapsed}
-        <ChevronRight />
-      {:else}
-        <ChevronLeft />
+    <div class="header-actions">
+      {#if !collapsed && isHostClaim}
+        <button
+          type="button"
+          class="btn-ghost btn-icon btn-sm"
+          data-testid="server-copy-files"
+          title="Show every server-copy file for this room"
+          aria-label="Server copy files"
+          on:click={() => (filesModalOpen = true)}
+        >
+          <FileSearch02 />
+        </button>
       {/if}
-    </button>
+      <button
+        type="button"
+        class="btn-ghost btn-icon btn-sm collapse-toggle"
+        on:click={() => (collapsed = !collapsed)}
+        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        {#if collapsed}
+          <ChevronRight />
+        {:else}
+          <ChevronLeft />
+        {/if}
+      </button>
+    </div>
   </div>
+
   {#if !collapsed}
     <section class="sidebar-section">
       <RoomDetailsPanel
-        {roomName}
         {slug}
         {isHostClaim}
         {roomPassword}
-        {wsStatus}
-        {peers}
-        {clientId}
         {copyLinkDone}
         {onCopyLink}
       />
     </section>
   {/if}
+
   <div class="record-controls-container">
     {#if !collapsed}
       <section class="sidebar-section">
@@ -126,6 +126,7 @@
         {isClipping}
         {lastClapFrom}
         compact={collapsed}
+        live
       />
     </section>
 
@@ -148,6 +149,14 @@
   </div>
 </aside>
 
+{#if filesModalOpen}
+  <ServerCopyFilesModal
+    {slug}
+    {peers}
+    onClose={() => (filesModalOpen = false)}
+  />
+{/if}
+
 <style>
   .room-sidebar {
     display: flex;
@@ -163,6 +172,8 @@
   .room-sidebar-header {
     display: flex;
     align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   .room-sidebar-header-name {
@@ -177,18 +188,25 @@
     color: var(--muted);
   }
 
-  .collapse-toggle {
+  .header-actions {
     margin-left: auto;
-    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
-  .room-sidebar.collapsed .collapse-toggle {
-    align-self: center;
+  .header-actions :global(.btn-ghost) {
+    border-color: var(--muted);
+  }
+  .room-sidebar.collapsed .header-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
   }
 
   .record-controls-container {
     margin-top: auto;
     display: flex;
     flex-direction: column;
-    gap: 32px;
+    gap: 16px;
   }
 </style>

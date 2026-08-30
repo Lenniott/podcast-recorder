@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFileSync, statSync } from 'fs'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
 
 /**
  * Server-copy upload/download, end to end (ticket 13). The unit tests
@@ -15,8 +15,8 @@ import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './h
  * the case that actually exercises that wiring end to end.
  */
 
-/** Reads the `NN%` suffix off a server-copy pill's text, or null if the
- *  pill isn't currently in its percent-bearing (in_progress) state. */
+/** Reads the `NN%` suffix off a server-copy line's text, or null if the
+ *  line isn't currently in its percent-bearing (in_progress) state. */
 async function readPercent(pillLocator) {
   const count = await pillLocator.count()
   if (count === 0) return null
@@ -26,11 +26,11 @@ async function readPercent(pillLocator) {
 }
 
 function guestPeerRow(page) {
-  return page.locator('.peer', { hasText: 'Alex' })
+  return presenceRow(page, 'Alex')
 }
 
 function peerRow(page, name) {
-  return page.locator('.peer', { hasText: name })
+  return presenceRow(page, name)
 }
 
 /**
@@ -143,6 +143,8 @@ test('server copy percent pill progresses on both browsers and reaches complete 
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   // See slowServerCopyChunks' doc comment: without this, a fast local dev
   // server round-trips chunk uploads quickly enough that the percent
@@ -167,8 +169,8 @@ test('server copy percent pill progresses on both browsers and reaches complete 
   const samplesGuest = []
   const sampleUntil = Date.now() + 4000
   while (Date.now() < sampleUntil) {
-    samplesHost.push(await readPercent(guestPeerRow(host).locator('.pill-copy-progress')))
-    samplesGuest.push(await readPercent(guestPeerRow(guest).locator('.pill-copy-progress')))
+    samplesHost.push(await readPercent(guestPeerRow(host).locator('[data-testid="server-copy-line"]')))
+    samplesGuest.push(await readPercent(guestPeerRow(guest).locator('[data-testid="server-copy-line"]')))
     await guest.waitForTimeout(120)
   }
 
@@ -189,8 +191,16 @@ test('server copy percent pill progresses on both browsers and reaches complete 
   // sandbox can push it well past Playwright's 5s default (observed).
   await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 
-  await expect(guestPeerRow(host).locator('.pill-copy-complete')).toBeVisible({ timeout: 15_000 })
-  await expect(guestPeerRow(guest).locator('.pill-copy-complete')).toBeVisible({ timeout: 15_000 })
+  await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete',
+    { timeout: 15_000 }
+  )
+  await expect(guestPeerRow(guest).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete',
+    { timeout: 15_000 }
+  )
 
   await guest.close()
   await host.close()
@@ -205,6 +215,8 @@ test('post-stop wait modal shows a percentage and auto-closes once the copy comp
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   // Slow (never fail) every chunk upload so the server copy is still
   // reliably "catching up" for a real window right after Stop is clicked
@@ -231,7 +243,10 @@ test('post-stop wait modal shows a percentage and auto-closes once the copy comp
   // ServerCopyWaitModal.svelte's doc comment) — it must disappear on its
   // own the instant the upload state reaches `complete`.
   await expect(waitModal).toBeHidden({ timeout: 20_000 })
-  await expect(guestPeerRow(guest).locator('.pill-copy-complete')).toBeVisible()
+  await expect(guestPeerRow(guest).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete'
+  )
 
   await guest.close()
   await host.close()
@@ -246,6 +261,8 @@ test('incomplete-upload exit warning is softer than the active-recording warning
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   // Same slow-but-succeeding route as the wait-modal test above, so the
   // upload is reliably still `catching_up` (not yet `complete`, and never
@@ -306,6 +323,8 @@ test('host can download a completed server copy; a guest cannot see the control'
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
   await guest.getByRole('button', { name: 'Start Recording' }).click()
@@ -318,7 +337,11 @@ test('host can download a completed server copy; a guest cannot see the control'
 
   const guestClientId = await guest.evaluate(() => sessionStorage.getItem('pr_clientId'))
 
-  await expect(guestPeerRow(host).locator('.pill-copy-complete')).toBeVisible({ timeout: 15_000 })
+  await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete',
+    { timeout: 15_000 }
+  )
 
   // Guest-can't-download, checked first (before the host's own download
   // navigates anywhere): the download route is host-only server-side, but
@@ -363,6 +386,8 @@ test('host and guest completed server copies contain every clap marker from the 
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
   await host.getByRole('button', { name: 'Start Recording' }).click()
@@ -374,8 +399,8 @@ test('host and guest completed server copies contain every clap marker from the 
   await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(guest)
 
-  await expect(peerRow(host, 'Host').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
-  await expect(peerRow(host, 'Alex').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
+  await expect(peerRow(host, 'Host')).toHaveAttribute('data-recording', 'true', { timeout: 15_000 })
+  await expect(peerRow(host, 'Alex')).toHaveAttribute('data-recording', 'true', { timeout: 15_000 })
   await expect(host.getByRole('button', { name: 'Sync Tone Marker' })).toBeEnabled()
 
   for (let i = 0; i < 3; i++) {
@@ -395,8 +420,16 @@ test('host and guest completed server copies contain every clap marker from the 
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
   await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 
-  await expect(peerRow(host, 'Host').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
-  await expect(peerRow(host, 'Alex').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
+  await expect(peerRow(host, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete',
+    { timeout: 20_000 }
+  )
+  await expect(peerRow(host, 'Alex').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'complete',
+    { timeout: 20_000 }
+  )
 
   const hostCopy = readMonoPcm16Wav(await downloadServerCopy(host, 'Host'))
   const guestCopy = readMonoPcm16Wav(await downloadServerCopy(host, 'Alex'))
@@ -419,6 +452,7 @@ test('host files modal keeps older takes downloadable after a second recording',
     password,
     hostDisplayName: 'Host'
   })
+  await expandPresenceTable(host)
 
   async function recordHostTake(durationMs) {
     await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
@@ -428,13 +462,17 @@ test('host files modal keeps older takes downloadable after a second recording',
     await host.waitForTimeout(durationMs)
     await host.getByRole('button', { name: 'Stop Recording' }).click()
     await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
-    await expect(peerRow(host, 'Host').locator('.pill-copy-complete')).toBeVisible({ timeout: 20_000 })
+    await expect(peerRow(host, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+      'data-copy-state',
+      'complete',
+      { timeout: 20_000 }
+    )
   }
 
   await recordHostTake(700)
   await recordHostTake(1800)
 
-  await peerRow(host, 'Host').locator('[data-testid="server-copy-files"]').click()
+  await host.getByTestId('server-copy-files').click()
   const modal = host.locator('[data-testid="server-copy-files-modal"]')
   await expect(modal).toBeVisible()
   await expect(modal.getByText('Take 1')).toBeVisible({ timeout: 15_000 })

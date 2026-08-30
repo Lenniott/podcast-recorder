@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
 
 /**
  * Interrupted server-copy upload (ticket 13's second half). Aborts only
@@ -10,7 +10,7 @@ import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './h
  */
 
 function guestPeerRow(page) {
-  return page.locator('.peer', { hasText: 'Alex' })
+  return presenceRow(page, 'Alex')
 }
 
 test('a blocked upload settles into failed on both browsers without touching local recording', async ({ browser }) => {
@@ -29,6 +29,8 @@ test('a blocked upload settles into failed on both browsers without touching loc
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await expandPresenceTable(host)
+  await expandPresenceTable(guest)
 
   // Installed before recording starts, per the ticket — every chunk
   // upload for this participant fails outright, but the session endpoint
@@ -46,8 +48,16 @@ test('a blocked upload settles into failed on both browsers without touching loc
   // "mid-recording" per the ticket) — proving the room's presence
   // broadcast carries the failure to the host exactly like it carries
   // progress in the happy path.
-  await expect(guestPeerRow(host).locator('.pill-copy-failed')).toBeVisible({ timeout: 30_000 })
-  await expect(guestPeerRow(guest).locator('.pill-copy-failed')).toBeVisible({ timeout: 30_000 })
+  await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'failed',
+    { timeout: 30_000 }
+  )
+  await expect(guestPeerRow(guest).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
+    'data-copy-state',
+    'failed',
+    { timeout: 30_000 }
+  )
 
   // Local recording must be completely unaffected: Stop Recording still
   // works cleanly (captureWriter.stop() and the WAV finalize never touch
