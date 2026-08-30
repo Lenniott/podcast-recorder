@@ -376,12 +376,12 @@ test('host and guest completed server copies contain every clap marker from the 
 
   await expect(peerRow(host, 'Host').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
   await expect(peerRow(host, 'Alex').locator('.pill-recording')).toBeVisible({ timeout: 15_000 })
-  await expect(host.getByRole('button', { name: '👏 Clap' })).toBeEnabled()
+  await expect(host.getByRole('button', { name: 'Sync Tone Marker' })).toBeEnabled()
 
   for (let i = 0; i < 3; i++) {
-    await host.getByRole('button', { name: '👏 Clap' }).click()
-    await expect(host.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
-    await expect(guest.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
+    await host.getByRole('button', { name: 'Sync Tone Marker' }).click()
+    await expect(host.locator('.clap-flash')).toContainText('from Host', { timeout: 15_000 })
+    await expect(guest.locator('.clap-flash')).toContainText('from Host', { timeout: 15_000 })
     await host.waitForTimeout(i === 2 ? 80 : 450)
   }
 

@@ -198,7 +198,7 @@ export async function unlockIfNeeded(page) {
 export async function passRecordingCheck(page) {
   const overlay = page.locator('.check-overlay')
   await expect(overlay).toBeVisible()
-  const listenBtn = page.getByRole('button', { name: '▶ Listen back' })
+  const listenBtn = page.getByRole('button', { name: /Listen back/ })
   const confirmBtn = page.getByRole('button', { name: /Sounds good/ })
   await expect(async () => {
     await listenBtn.click()
