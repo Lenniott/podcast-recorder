@@ -194,7 +194,7 @@
           </svelte:fragment>
         </TabVideoPlayer>
       {/key}
-
+        <div class="shared-textarea">
       <div class="notes-toolbar">
         <span class="notes-toolbar-label">Text size</span>
         <div class="text-size-group" role="group" aria-label="Notes text size">
@@ -213,12 +213,13 @@
       </div>
 
       <textarea
-        class="shared-textarea"
+        class="shared-textarea-textarea"
         style="font-size: {notesFontSize}px"
         placeholder="Shared notes — visible to everyone in the room…"
         value={tabTexts[activeTabId] ?? ""}
         on:input={onTextInput}
       ></textarea>
+      </div>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
     {/if}
@@ -341,11 +342,6 @@
   }
 
   .shared-textarea {
-    width: 100%;
-    min-height: 80vh;
-    field-sizing: content;
-    resize: none;
-    overflow: hidden;
     padding: 16px;
     border-radius: 10px;
     border: 1px solid var(--border);
@@ -353,8 +349,30 @@
     color: var(--text);
     font-family: inherit;
     line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  .shared-textarea:focus {
+
+  .shared-textarea:focus-within {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .shared-textarea-textarea {
+    width: 100%;
+    min-height: 80vh;
+    field-sizing: content;
+    resize: none;
+    overflow: hidden;
+    font-size: 16px;
+    line-height: 1.5;
+    font-family: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    outline: none;
+  }
+  .shared-textarea-textarea:focus-within {
     outline: none;
     border-color: var(--accent);
   }
