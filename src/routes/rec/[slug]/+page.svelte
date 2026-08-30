@@ -1,21 +1,23 @@
 <script>
-  import { enhance } from '$app/forms'
   import { beforeNavigate } from '$app/navigation'
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, buildWavBlob, float32ToInt16 } from '$lib/audio-utils.js'
+  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
   import { createCaptureWriter } from '$lib/capture-writer.js'
   import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
-  import { noAutofill } from '$lib/actions.js'
-  import { METER_MIN, dbfs, nextFillDb, dbToMeterPct } from '$lib/meter.js'
-  import RoomSidebar from '$lib/RoomSidebar.svelte'
-  import RoomTabs from '$lib/RoomTabs.svelte'
+  import { METER_MIN, dbToMeterPct } from '$lib/meter.js'
   import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
-  import { Ban, Check, Lock, User, X } from '$lib/icons'
+  import PasswordGate from '$lib/PasswordGate.svelte'
+  import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
+  import DisplayNameGate from '$lib/DisplayNameGate.svelte'
+  import RecordingRoom from '$lib/RecordingRoom.svelte'
   import { createRoomConnection } from '$lib/room-connection.js'
-
-  function focus(el) { el.focus() }
+  import { createClockSync } from '$lib/clock-sync.js'
+  import { createRecordingCheck } from '$lib/recording-check.js'
+  import { createWaveformRenderer } from '$lib/waveform-renderer.js'
+  import { createAudioEngine } from '$lib/audio-engine.js'
+  import { createLevelMeter } from '$lib/level-meter.js'
 
   export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
@@ -33,12 +35,7 @@
   let micFallbackName = ''     // label of the fallback device
 
   // ─── Audio recording state ──────────────────────────────────────────
-  let audioCtx = null
-  let workletNode = null
-  let micSource = null
-  let micStream = null
-  let analyserNode = null
-  let silentSink = null
+  let audioEngineReady = false
   let fileWritable = null      // FileSystemWritableFileStream
   let activeFileHandle = null
   let recordingState = 'idle'  // idle | recording | stopping
@@ -47,17 +44,9 @@
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
   let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
-  // Set the instant the current mic stops flowing (device swap/dropout),
-  // cleared once audio is flowing again. Read by captureWriter.notifyDeviceGap()
-  // so silence is only ever written for a REAL gap, never inferred from
-  // how long a disk write took (see $lib/capture-writer.js for why that matters).
-  let micGapStartedAt = null
 
   // ─── Waveform canvas ────────────────────────────────────────────────
   let canvas
-  let canvasCtx
-  let animFrame
-  let analyserData
   // The canvas is drawn imperatively (fillStyle/strokeStyle can't reference
   // CSS custom properties directly), so its theme-dependent colors are read
   // from the page's computed style — once up front, then again whenever the
@@ -81,21 +70,23 @@
   // display sourced from the mic can never catch that. See
   // $lib/written-audio-ring.js.
   let writtenRing = null
+  const waveformRenderer = createWaveformRenderer({
+    getCanvas: () => canvas,
+    getAnalyserNode: () => audioEngine.getAnalyserNode(),
+    getWrittenRing: () => writtenRing,
+    isRecording: () => recordingState === 'recording',
+    getColors: () => ({
+      bg: waveformBg,
+      centerLine: waveformCenterLine,
+      stroke: waveformStroke,
+      strokeRec: waveformStrokeRec
+    })
+  })
 
   // ─── Record-start listen-back check ──────────────────────────────────
-  const CHECK_SENTENCES = [
-    'The quick brown fox jumps over the lazy dog.',
-    'Pack my box with five dozen liquor jugs.',
-    'Sphinx of black quartz, judge my vow.',
-    'How vexingly quick daft zebras jump.',
-    'Bright vixens jump; dozy fowl quack.'
-  ]
-  const CHECK_PREVIEW_MAX_SAMPLES = 30 * 48000 // cap buffering at 30s regardless of sample rate specifics
   let checkModalOpen = false
   let checkSentence = ''
-  let collectingPreview = false
-  let previewChunks = []
-  let previewSampleCount = 0
+  const recordingCheck = createRecordingCheck()
 
   // ─── Clap state ─────────────────────────────────────────────────────
   let lastClapFrom = null
@@ -107,9 +98,7 @@
   // Used to correct triggerAtMs (which is in server time) into local time
   // for both clap tone injection and Watch Together playback.
   let clockOffset = 0
-  let _clockSamples = []
-  let _pingSeq = 0
-  const _pendingPings = new Map() // seq → sentAt (client time)
+  const clockSync = createClockSync({ send: (msg) => room.send(msg) })
 
   // ─── UI ─────────────────────────────────────────────────────────────
   let myName = ''
@@ -138,7 +127,6 @@
     : null
 
   // ─── Gain ────────────────────────────────────────────────────────────
-  let gainNode    = null
   let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
 
   // ─── dBFS meter ──────────────────────────────────────────────────────
@@ -146,11 +134,40 @@
   /** Smoothed RMS for the green bar — same quantity as the readout, so the
    *  gradient color always matches the numbers. Peak only drives the hold line. */
   let meterFillDb  = METER_MIN
-  let lastLevelAt  = 0          // performance.now() of the previous level message
   let peakHoldDb   = METER_MIN  // peak-hold value (resets after 2s)
-  let peakHoldTimer = null
   let isClipping   = false      // true for 2s after hitting 0 dBFS
-  let clipTimer    = null
+  const levelMeter = createLevelMeter({
+    onState(state) {
+      dbLevel = state.dbLevel
+      meterFillDb = state.meterFillDb
+      peakHoldDb = state.peakHoldDb
+      isClipping = state.isClipping
+    }
+  })
+
+  const audioEngine = createAudioEngine({
+    onLevel: levelMeter.handleLevel,
+    onChunk(buffer) {
+      if (!captureWriter || recordingState !== 'recording') return
+      const i16 = float32ToInt16(buffer)
+      // Queued internally and flushed in the background — a slow disk
+      // just makes the queue longer, it can never fabricate silence.
+      bytesWritten += captureWriter.writeChunk(i16)
+    },
+    onDeviceGapResolved(gapSec) {
+      if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
+    },
+    onMicConnected() {
+      injectReconnectMarker()
+    },
+    loadDevices,
+    getDevices: () => devices,
+    getSelectedDeviceId: () => selectedDeviceId,
+    setSelectedDeviceId: (id) => { selectedDeviceId = id },
+    setMicFallback: (value) => { micFallback = value },
+    setMicFallbackName: (name) => { micFallbackName = name },
+    setMicPermissionDenied: () => { micPermission = 'denied' }
+  })
 
   let sessionStarted = false
   let sessionDestroyed = false
@@ -330,77 +347,15 @@
   /** User manually picked a new mic from the dropdown */
   async function changeMic() {
     micFallback = false
-    if (!audioCtx) {
+    if (!audioEngineReady) {
       try {
-        await initAudio()
+        await initAudioEngine()
       } catch (err) {
         console.error('Audio init for mic change failed', err)
         return
       }
     }
-    await connectMic(selectedDeviceId, { strictDevice: true })
-  }
-
-  /**
-   * Connect to a specific device by ID.
-   * Uses `ideal` (not `exact`) so the browser can recover if the device
-   * is momentarily unavailable rather than hard-throwing.
-   * Attaches track.onended so we react the instant the mic is yanked.
-   */
-  async function connectMic(deviceId = selectedDeviceId, { strictDevice = false } = {}) {
-    if (!audioCtx) return
-
-    // Marks the start of a real capture gap unless one is already running
-    // (e.g. track.onended already marked it more precisely — see below).
-    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
-
-    micSource?.disconnect()
-    micStream?.getTracks().forEach(t => t.stop())
-
-    const constraints = {
-      audio: {
-        // For manual user picks, require that exact device.
-        // For automatic reconnect/fallback, allow browser flexibility.
-        deviceId: deviceId
-          ? (strictDevice ? { exact: deviceId } : { ideal: deviceId })
-          : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl:  false,
-        channelCount: 1
-      }
-    }
-
-    micStream = await navigator.mediaDevices.getUserMedia(constraints)
-
-    // Instant detection: fires before devicechange, keeps recording alive.
-    // Mark the gap the moment audio actually stops, not once the fallback
-    // logic gets around to reacting to it.
-    micStream.getAudioTracks().forEach(track => {
-      track.onended = () => {
-        micGapStartedAt = audioCtx?.currentTime ?? null
-        connectMicWithFallback()
-      }
-    })
-
-    micSource = audioCtx.createMediaStreamSource(micStream)
-    micSource.connect(gainNode)
-    gainNode.connect(workletNode)
-    gainNode.connect(analyserNode)
-    injectReconnectMarker()
-    resolveMicGap()
-  }
-
-  /**
-   * Report a resolved capture gap to the Capture Writer as real, measured
-   * wall-clock silence — the only path allowed to write silence into the
-   * take. See $lib/capture-writer.js for why write-latency must never do this.
-   */
-  function resolveMicGap() {
-    if (micGapStartedAt == null) return
-    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
-    micGapStartedAt = null
-    if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
+    await audioEngine.changeMic(selectedDeviceId)
   }
 
   /**
@@ -409,199 +364,20 @@
    * Recording never stops — there will be a short gap in audio, nothing more.
    */
   async function connectMicWithFallback() {
-    await loadDevices()
-
-    // Try the currently selected device first (it may have just blipped)
-    const stillAvailable = devices.some(d => d.deviceId === selectedDeviceId)
-    if (stillAvailable) {
-      try {
-        await connectMic(selectedDeviceId, { strictDevice: true })
-        micFallback = false
-        return
-      } catch { /* fall through */ }
-    }
-
-    // Try each remaining device
-    for (const device of devices) {
-      if (device.deviceId === selectedDeviceId) continue
-      try {
-        await connectMic(device.deviceId)
-        selectedDeviceId  = device.deviceId
-        micFallback       = true
-        micFallbackName   = device.label || 'Unknown microphone'
-        return
-      } catch { continue }
-    }
-
-    // Last resort: let the browser pick (usually the built-in mic)
-    try {
-      micSource?.disconnect()
-      micStream?.getTracks().forEach(t => t.stop())
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
-      })
-      micStream.getAudioTracks().forEach(track => {
-        track.onended = () => {
-          micGapStartedAt = audioCtx?.currentTime ?? null
-          connectMicWithFallback()
-        }
-      })
-      micSource = audioCtx.createMediaStreamSource(micStream)
-      micSource.connect(gainNode)
-      gainNode.connect(workletNode)
-      gainNode.connect(analyserNode)
-      injectReconnectMarker()
-      resolveMicGap()
-
-      // Figure out what we actually got
-      await loadDevices()
-      const label = micStream.getAudioTracks()[0]?.label || ''
-      const match = devices.find(d => d.label === label)
-      if (match) selectedDeviceId = match.deviceId
-      micFallback     = true
-      micFallbackName = label || 'Built-in microphone'
-    } catch {
-      micPermission = 'denied'
-    }
+    await audioEngine.connectMicWithFallback()
   }
 
-  // ───────────────────────────────────────────────────────────────────
-  // AUDIO CONTEXT + WORKLET
-  // ───────────────────────────────────────────────────────────────────
-
-  async function initAudio() {
-    audioCtx = new AudioContext({ sampleRate: 48000 })
-    if (audioCtx.state === 'suspended') {
-      try { await audioCtx.resume() } catch {}
-    }
-
-    await audioCtx.audioWorklet.addModule('/worklet/recorder-processor.js')
-
-    workletNode = new AudioWorkletNode(audioCtx, 'recorder-processor')
-    analyserNode = audioCtx.createAnalyser()
-    silentSink = audioCtx.createGain()
-    silentSink.gain.value = 0
-    analyserNode.fftSize = 2048
-    analyserData = new Float32Array(analyserNode.fftSize)
-    writtenRing = createWrittenAudioRing(analyserNode.fftSize)
-    gainNode = audioCtx.createGain()
-    gainNode.gain.value = gainValue
-    // Keep the worklet graph "live" without sending audible audio to speakers.
-    workletNode.connect(silentSink)
-    silentSink.connect(audioCtx.destination)
-
-    workletNode.port.onmessage = async (e) => {
-      if (e.data.type === 'level') {
-        const { rms, peak } = e.data
-
-        // Bar + readout are both RMS; only the hold line shows peak
-        dbLevel = dbfs(rms)
-        const peakDbNow = dbfs(peak)
-
-        const now = performance.now()
-        const dtSec = lastLevelAt ? Math.min(0.25, (now - lastLevelAt) / 1000) : 0.05
-        lastLevelAt = now
-        meterFillDb = nextFillDb(meterFillDb, dbLevel, dtSec)
-
-        if (peakDbNow > peakHoldDb) {
-          peakHoldDb = peakDbNow
-          clearTimeout(peakHoldTimer)
-          peakHoldTimer = setTimeout(() => { peakHoldDb = METER_MIN }, 2000)
-        }
-
-        // Clip detection (peak within 0.5 dB of full scale)
-        if (peakDbNow >= -0.5) {
-          isClipping = true
-          clearTimeout(clipTimer)
-          clipTimer = setTimeout(() => { isClipping = false }, 2000)
-        }
-      }
-      if (e.data.type === 'data' && captureWriter && recordingState === 'recording') {
-        const i16 = float32ToInt16(e.data.buffer)
-        // Queued internally and flushed in the background — a slow disk
-        // just makes the queue longer, it can never fabricate silence.
-        // Real gaps only ever come from notifyDeviceGap() (see connectMic).
-        bytesWritten += captureWriter.writeChunk(i16)
-      }
-    }
-
-    await connectMic()
+  async function initAudioEngine() {
+    await audioEngine.init()
+    audioEngineReady = true
+    const analyser = audioEngine.getAnalyserNode()
+    writtenRing = createWrittenAudioRing(analyser.fftSize)
+    audioEngine.setGain(gainValue)
     while (pendingClaps.length > 0) {
       const ev = pendingClaps.shift()
       injectClap(ev.from, ev.triggerAtMs)
     }
-    startWaveformLoop()
-  }
-
-  async function ensureAudioRunning() {
-    if (!audioCtx) return
-    if (audioCtx.state !== 'running') {
-      try { await audioCtx.resume() } catch {}
-    }
-  }
-
-  // ───────────────────────────────────────────────────────────────────
-  // WAVEFORM VISUALISATION
-  // ───────────────────────────────────────────────────────────────────
-
-  function startWaveformLoop() {
-    function draw() {
-      animFrame = requestAnimationFrame(draw)
-      if (!canvas || !analyserNode) return
-
-      const W = canvas.width
-      const H = canvas.height
-      canvasCtx.clearRect(0, 0, W, H)
-
-      // While recording, draw from confirmed-written audio, not the live
-      // mic — see writtenRing's declaration for why. Pre-recording (mic
-      // check before pressing Start, when nothing has been written yet),
-      // the live mic signal is the only thing there is to show.
-      if (recordingState === 'recording' && writtenRing) {
-        writtenRing.read(analyserData)
-      } else {
-        analyserNode.getFloatTimeDomainData(analyserData)
-      }
-
-      // Background
-      canvasCtx.fillStyle = waveformBg
-      canvasCtx.fillRect(0, 0, W, H)
-
-      // Centre line
-      canvasCtx.strokeStyle = waveformCenterLine
-      canvasCtx.lineWidth = 1
-      canvasCtx.beginPath()
-      canvasCtx.moveTo(0, H / 2)
-      canvasCtx.lineTo(W, H / 2)
-      canvasCtx.stroke()
-
-      // Visual-only auto-gain: speech is far below 0 dBFS, so 1:1 mapping
-      // is a 2px wiggle on this short canvas. Recording path is unchanged.
-      let peak = 0
-      for (let i = 0; i < analyserData.length; i++) {
-        const a = Math.abs(analyserData[i])
-        if (a > peak) peak = a
-      }
-      const noiseFloor = 0.015 // ≈ -36 dBFS
-      const scale = peak < noiseFloor ? 1 : Math.min(24, 0.9 / peak)
-
-      const isRec = recordingState === 'recording'
-      canvasCtx.strokeStyle = isRec ? waveformStrokeRec : waveformStroke
-      canvasCtx.lineWidth = 1.5
-      canvasCtx.beginPath()
-
-      const sliceWidth = W / analyserData.length
-      let x = 0
-
-      for (let i = 0; i < analyserData.length; i++) {
-        const y = Math.max(0, Math.min(H, (analyserData[i] * scale * 0.5 + 0.5) * H))
-        if (i === 0) canvasCtx.moveTo(x, y)
-        else canvasCtx.lineTo(x, y)
-        x += sliceWidth
-      }
-      canvasCtx.stroke()
-    }
-    draw()
+    waveformRenderer.start()
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -617,48 +393,43 @@
    */
   function handleWritten(i16) {
     writtenRing?.push(i16)
-    if (collectingPreview && previewSampleCount < CHECK_PREVIEW_MAX_SAMPLES) {
-      previewChunks.push(i16)
-      previewSampleCount += i16.length
-    }
+    recordingCheck.handleWritten(i16)
   }
 
   function startRecordingCheck() {
-    checkSentence = CHECK_SENTENCES[Math.floor(Math.random() * CHECK_SENTENCES.length)]
-    previewChunks = []
-    previewSampleCount = 0
-    collectingPreview = true
-    checkModalOpen = true
+    recordingCheck.start()
+    checkModalOpen = recordingCheck.open
+    checkSentence = recordingCheck.sentence
   }
 
   function buildCheckPreview() {
-    return buildWavBlob(previewChunks, recordingSampleRate)
+    return recordingCheck.buildPreview(recordingSampleRate)
   }
 
   function confirmRecordingCheck() {
-    checkModalOpen = false
-    collectingPreview = false
-    previewChunks = []
+    recordingCheck.confirm()
+    checkModalOpen = recordingCheck.open
+    checkSentence = recordingCheck.sentence
   }
 
   async function rejectRecordingCheck() {
-    checkModalOpen = false
-    collectingPreview = false
-    previewChunks = []
+    recordingCheck.reject()
+    checkModalOpen = recordingCheck.open
+    checkSentence = recordingCheck.sentence
     await stopRecording()
   }
 
   async function startRecording() {
-    if (!audioCtx || !workletNode) {
+    if (!audioEngineReady) {
       try {
-        await initAudio()
+        await initAudioEngine()
       } catch (err) {
         console.error('Audio init on record failed', err)
         alert('Could not start audio engine. Please refresh and try again.')
         return
       }
     }
-    await ensureAudioRunning()
+    await audioEngine.ensureRunning()
     if (!('showSaveFilePicker' in window)) {
       alert('Your browser does not support the File System Access API.\nPlease use Chrome or Edge.')
       return
@@ -681,12 +452,12 @@
 
     fileWritable = await fileHandle.createWritable()
     activeFileHandle = fileHandle
-    recordingSampleRate = Math.round(audioCtx?.sampleRate || 48000)
+    recordingSampleRate = audioEngine.sampleRate
 
     // Write placeholder WAV header (will patch at end with real size)
     await fileWritable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
-    micGapStartedAt = null // any gap before "recording" started isn't ours to backfill
+    audioEngine.clearPendingGap() // any gap before "recording" started isn't ours to backfill
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
       write: (buf) => fileWritable.write(buf),
@@ -711,9 +482,9 @@
     // still up (not via its own "something's wrong" path) should still
     // close it cleanly rather than leave it showing over an idle room.
     if (checkModalOpen) {
-      checkModalOpen = false
-      collectingPreview = false
-      previewChunks = []
+      recordingCheck.close()
+      checkModalOpen = recordingCheck.open
+      checkSentence = recordingCheck.sentence
     }
 
     // Give the worklet a moment to flush its last (sub-BUFFER_SIZE) chunk,
@@ -746,7 +517,7 @@
   // ───────────────────────────────────────────────────────────────────
 
   function updateGain() {
-    if (gainNode) gainNode.gain.value = gainValue
+    audioEngine.setGain(gainValue)
   }
 
   function sendClap() {
@@ -755,23 +526,14 @@
   }
 
   function syncClock() {
-    // Ping burst → median RTT/2 estimate of clockOffset (clap + Watch Together).
-    _clockSamples = []
-    for (let i = 0; i < 3; i++) {
-      const seq = ++_pingSeq
-      const sentAt = Date.now()
-      _pendingPings.set(seq, sentAt)
-      room.send({ type: 'ping', seq, sentAt })
-    }
+    clockSync.syncClock()
   }
 
   function injectClap(from, triggerAtMs = null) {
     const delayMs = Number.isFinite(triggerAtMs)
       ? Math.max(0, triggerAtMs - (Date.now() + clockOffset))
       : 0
-    setTimeout(() => {
-      workletNode?.port.postMessage({ type: 'clap' })
-    }, delayMs)
+    audioEngine.scheduleClapTone(delayMs)
     lastClapFrom = from
     clearTimeout(clapTimeout)
     clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
@@ -780,7 +542,7 @@
   function injectReconnectMarker() {
     if (!debugReconnectMarker) return
     if (recordingState !== 'recording') return
-    workletNode?.port.postMessage({ type: 'debug_marker' })
+    audioEngine.postDebugMarker()
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -809,13 +571,8 @@
     onMessage(msg) {
       if (msg.type === 'presence')  peers = msg.peers
       if (msg.type === 'pong') {
-        const sentAt = _pendingPings.get(msg.seq)
-        if (sentAt !== undefined) {
-          _pendingPings.delete(msg.seq)
-          _clockSamples.push(msg.serverReceivedAt - (sentAt + Date.now()) / 2)
-          if (_clockSamples.length >= 3)
-            clockOffset = _clockSamples.reduce((a, b) => a + b) / _clockSamples.length
-        }
+        clockSync.handlePong(msg)
+        clockOffset = clockSync.offset
       }
       if (msg.type === 'clap') {
         // Flash even when the audio graph isn't up yet (no mic). Queue the
@@ -823,7 +580,7 @@
         lastClapFrom = msg.from
         clearTimeout(clapTimeout)
         clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
-        if (!workletNode) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
+        if (!audioEngineReady) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
       if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
@@ -862,31 +619,18 @@
   // LIFECYCLE
   // ───────────────────────────────────────────────────────────────────
 
-  /**
-   * Canvas backing-resolution reset. `width`/`height` attributes (not CSS
-   * size) set the drawing buffer, so this needs re-running whenever the
-   * canvas's on-screen size changes — initial mount, and toggling the
-   * sidebar collapse (see the `sidebarCollapsed` reactive block below).
-   */
-  function resizeCanvas() {
-    if (!canvas) return
-    canvasCtx = canvasCtx || canvas.getContext('2d')
-    canvas.width  = canvas.offsetWidth
-    canvas.height = canvas.offsetHeight
-  }
-
   async function startSession() {
     if (!browser || !data.authenticated || sessionStarted || nameGateShow) return
     sessionStarted = true
     audioInitError = ''
     try {
       await tick()
-      resizeCanvas()
+      waveformRenderer.resizeCanvas()
 
       await requestMicPermission()
       if (micPermission === 'granted') {
         try {
-          await initAudio()
+          await initAudioEngine()
         } catch (err) {
           console.error('Audio init on join failed', err)
           audioInitError = 'Could not initialize microphone meter. You can still try recording.'
@@ -944,7 +688,7 @@
   // backing-resolution reset once the DOM has caught up.
   $: if (browser) {
     sidebarCollapsed
-    tick().then(resizeCanvas)
+    tick().then(waveformRenderer.resizeCanvas)
   }
 
   $: if (data.participantName?.trim()) nameGateShow = false
@@ -952,19 +696,16 @@
   onDestroy(() => {
     if (!browser) return
     sessionDestroyed = true
-    cancelAnimationFrame(animFrame)
+    waveformRenderer.stop()
     clearInterval(recordingTimer)
     clearTimeout(clapTimeout)
-    clearTimeout(peakHoldTimer)
-    clearTimeout(clipTimer)
+    levelMeter.close()
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
     window.removeEventListener('beforeunload', handleBeforeUnload)
     document.removeEventListener('click', handleDocumentClick, { capture: true })
     window.removeEventListener('themechange', refreshWaveformColors)
     room.disconnect()
-    micStream?.getTracks().forEach(t => t.stop())
-    silentSink?.disconnect()
-    audioCtx?.close()
+    audioEngine.close()
     navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange)
   })
 </script>
@@ -973,146 +714,17 @@
   <title>{data.roomName} — Podpatch</title>
 </svelte:head>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- PASSWORD GATE                                                    -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-
 {#if !data.authenticated}
-<main class="gate-wrap">
-  <div class="card gate-card">
-    <div class="gate-icon"><Lock size={36} /></div>
-    <h2>{data.roomName}</h2>
-    <p class="sub">Enter the room code to join.</p>
-
-    {#if form?.error}
-      <div class="error-banner">{form.error}</div>
-    {/if}
-
-    <!-- Extensions attach to the first username/password-shaped pair on the
-         page. Keep that pair off-screen and *outside* the real form so Chrome
-         doesn't treat Join as a login. Real fields stay type=text, unmasked. -->
-    <div class="autofill-trap" aria-hidden="true">
-      <input type="text" tabindex="-1" autocomplete="username" />
-      <input type="password" tabindex="-1" autocomplete="current-password" />
-    </div>
-
-    <form
-      method="POST"
-      action="?/enter"
-      autocomplete="off"
-      data-1p-ignore
-      data-lpignore="true"
-      data-bwignore
-      data-protonpass-ignore="true"
-      use:enhance
-    >
-      <div class="field">
-        <label for="name">Your name</label>
-        <input
-          id="name"
-          name="name"
-          type="text"
-          autocomplete="off"
-          maxlength="50"
-          bind:value={myName}
-          required
-          readonly
-          use:noAutofill
-          data-1p-ignore
-          data-lpignore="true"
-          data-bwignore
-          data-protonpass-ignore="true"
-          data-form-type="other"
-        />
-      </div>
-      <div class="field">
-        <label for="room-episode-code">Room code</label>
-        <input
-          id="room-episode-code"
-          name="room-episode-code"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          required
-          readonly
-          use:noAutofill
-          data-1p-ignore
-          data-lpignore="true"
-          data-bwignore
-          data-protonpass-ignore="true"
-          data-form-type="other"
-        />
-      </div>
-      <button type="submit" class="btn-primary btn-block">Join Room</button>
-    </form>
-  </div>
-</main>
-
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- UNSUPPORTED BROWSER                                              -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-
+  <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName />
 {:else if !browserSupported}
-<main class="gate-wrap">
-  <div class="card gate-card browser-card">
-    <div class="gate-icon"><Ban size={36} /></div>
-    <h2>Browser not supported</h2>
-    <p class="sub">
-      Recording requires the <strong>File System Access API</strong> to stream
-      audio directly to your disk. Your current browser doesn't support it.
-    </p>
-    <div class="browser-list">
-      <div class="browser-item ok"><Check /> Chrome</div>
-      <div class="browser-item ok"><Check /> Edge</div>
-      <div class="browser-item ok"><Check /> Brave</div>
-      <div class="browser-item ok"><Check /> Opera</div>
-      <div class="browser-item bad"><X /> Safari</div>
-      <div class="browser-item bad"><X /> Firefox</div>
-      <div class="browser-item bad"><X /> DuckDuckGo</div>
-    </div>
-    <p class="browser-note">
-      Open this link in Chrome or Edge and you're good to go.<br/>
-      The room URL is: <code>{data.slug}</code>
-    </p>
-  </div>
-</main>
-
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- DISPLAY NAME (authenticated but no name cookie yet)             -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-
+  <UnsupportedBrowserGate slug={data.slug} />
 {:else if nameGateShow}
-<main class="gate-wrap">
-  <div class="card gate-card">
-    <div class="gate-icon"><User size={36} /></div>
-    <h2>{data.roomName}</h2>
-    <p class="sub">How should we show you to others in this room?</p>
-
-    {#if form?.error}
-      <div class="error-banner">{form.error}</div>
-    {/if}
-
-    <form method="POST" action="?/set_display_name" use:enhance={() => {
-      return async ({ update }) => { await update() }
-    }}>
-      <div class="field">
-        <label for="display-name">Your name</label>
-        <input id="display-name" name="name" type="text" autocomplete="off" maxlength="50" bind:value={myName} required readonly use:noAutofill use:focus />
-      </div>
-      <button type="submit" class="btn-primary btn-block">Continue</button>
-    </form>
-  </div>
-</main>
-
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- RECORDING ROOM                                                   -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-
+  <DisplayNameGate roomName={data.roomName} formError={form?.error} bind:myName />
 {:else}
-<div class="room" class:sidebar-collapsed={sidebarCollapsed}>
-
-  <RoomSidebar
-    bind:collapsed={sidebarCollapsed}
+  <RecordingRoom
+    bind:sidebarCollapsed
+    bind:roomTabs
+    bind:canvasEl={canvas}
     roomName={data.roomName}
     slug={data.slug}
     isHostClaim={data.isHostClaim}
@@ -1132,7 +744,6 @@
     {gainDb}
     onChangeMic={changeMic}
     onGainInput={updateGain}
-    bind:canvasEl={canvas}
     {meterPct}
     {peakPct}
     {dbLevel}
@@ -1148,15 +759,9 @@
     onClap={sendClap}
     {formatTime}
     {formatBytes}
+    send={wsSend}
+    {clockOffset}
   />
-
-  <main class="room-main">
-    <!-- Shared tabs: video (per tab) + stacked shared textarea. Implementation
-         in RoomTabs.svelte + TabVideoPlayer.svelte + tab-sync.js. -->
-    <RoomTabs send={wsSend} {clockOffset} bind:this={roomTabs} />
-  </main>
-
-</div>
 
 <RecordingCheckModal
   open={checkModalOpen}
@@ -1166,107 +771,3 @@
   onReject={rejectRecordingCheck}
 />
 {/if}
-
-<style>
-  /* ── Gate ── */
-  .gate-wrap {
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-  }
-  .gate-card { max-width: 380px; width: 100%; text-align: center; position: relative; }
-  .autofill-trap {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-  .gate-icon { display: flex; justify-content: center; margin-bottom: 12px; color: var(--text); }
-
-  .browser-card { max-width: 440px; }
-  .browser-list {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin: 16px 0;
-    text-align: left;
-  }
-  .browser-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    border-radius: var(--radius);
-    font-size: 13px;
-    font-weight: 500;
-  }
-  .browser-item.ok  { background: rgba(34,197,94,.1);  color: var(--success-text); }
-  .browser-item.bad { background: rgba(239,68,68,.08); color: var(--danger-text); }
-  .browser-note {
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.7;
-    margin-top: 4px;
-  }
-  .browser-note code {
-    background: var(--border);
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-family: monospace;
-    color: var(--text);
-  }
-  h2 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-
-  .error-banner {
-    background: rgba(239,68,68,.12);
-    border: 1px solid rgba(239,68,68,.3);
-    border-radius: var(--radius);
-    color: var(--danger-text);
-    font-size: 13px;
-    padding: 10px 14px;
-    margin-bottom: 16px;
-    text-align: left;
-  }
-
-  /* ── Room layout ── */
-  /* Viewport shell: the document does not scroll. Only .room-main does.
-     Sticky/fixed on the sidebar was fighting this grid and showed a strip
-     of --bg when you rubber-banded the page. */
-  .room {
-    height: 100vh;
-    display: grid;
-    grid-template-columns: 240px 1fr;
-    gap: 20px;
-    max-width: 1400px;
-    margin: 0 auto;
-    overflow: hidden;
-  }
-
-  .room.sidebar-collapsed {
-    grid-template-columns: 72px 1fr;
-  }
-
-  .room-main {
-    min-width: 0;
-    min-height: 0;
-    padding: 20px 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-
-  @media (max-width: 720px) {
-    .room,
-    .room.sidebar-collapsed {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
-    }
-  }
-</style>
