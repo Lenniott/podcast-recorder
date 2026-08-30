@@ -43,9 +43,17 @@ export async function stubYouTubeApi(page) {
   await page.addInitScript(() => {
     // Always stub — Chromium now ships File System Access, and a real picker
     // would abort startRecording() (AbortError) so the record button never flips.
+    // `seek` matters: stopRecording() calls fileWritable.seek(0) to patch the
+    // WAV header with the real data size once recording stops. Real
+    // FileSystemWritableFileStream has it; earlier versions of this stub
+    // didn't, which went unnoticed because no spec had ever actually clicked
+    // Stop Recording via the UI button until server_copy_upload.spec.js —
+    // without it, seek() throws, stopRecording()'s promise rejects, and
+    // recordingState gets stuck at 'stopping' ("Finishing…") forever.
     window.showSaveFilePicker = async () => ({
       createWritable: async () => ({
         write: async () => {},
+        seek: async () => {},
         close: async () => {}
       })
     })
@@ -168,6 +176,38 @@ export async function unlockIfNeeded(page) {
   }
 }
 
+/**
+ * Dismisses the post-start "Quick check — is this actually being captured?"
+ * modal (RecordingCheckModal.svelte) that pops up the instant Start
+ * Recording is clicked. None of the existing recording_status.spec.js
+ * tests ever click Stop Recording via the UI button, so none of them had
+ * to deal with this — but its `.check-overlay` sits at z-index 1000 and
+ * intercepts pointer events for as long as it's open, so any spec that
+ * *does* need to click Stop Recording for real must clear it first.
+ *
+ * The modal requires an actual successful "Listen back" (a non-empty
+ * preview blob pulled from confirmed-written chunks — see
+ * RecordingCheckModal.svelte's onListen) before its confirm button even
+ * renders. Listen can be clicked before the first audio chunk has landed
+ * (the modal opens synchronously on start, before any real capture time
+ * has passed), which briefly shows "Nothing recorded yet" instead of a
+ * preview — so this retries Listen until a real chunk exists rather than
+ * assuming one already has, wrapped in `expect(...).toPass()` rather than
+ * a fixed sleep.
+ */
+export async function passRecordingCheck(page) {
+  const overlay = page.locator('.check-overlay')
+  await expect(overlay).toBeVisible()
+  const listenBtn = page.getByRole('button', { name: /Listen back/ })
+  const confirmBtn = page.getByRole('button', { name: /Yes, continue/ })
+  await expect(async () => {
+    await listenBtn.click()
+    await expect(confirmBtn).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 10_000 })
+  await confirmBtn.click()
+  await expect(overlay).toBeHidden()
+}
+
 export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
   await page.goto('/')
   await unlockIfNeeded(page)
@@ -206,6 +246,21 @@ export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
   await page.getByPlaceholder('Paste a YouTube link or video id').fill(url)
   await page.getByRole('button', { name: 'Watch' }).click()
   await expect(page.getByRole('button', { name: /Play|Pause/ })).toBeVisible()
+}
+
+export async function expandPresenceTable(page) {
+  const overlay = page.locator('.check-overlay')
+  if (await overlay.isVisible()) {
+    await page.getByRole('button', { name: 'Skip microphone check' }).click()
+    await expect(overlay).toBeHidden()
+  }
+  const fold = page.getByTestId('presence-fold')
+  if ((await fold.getAttribute('aria-expanded')) === 'true') return
+  await fold.click()
+}
+
+export function presenceRow(page, name) {
+  return page.locator('[data-testid="presence-row"]', { hasText: name })
 }
 
 /**

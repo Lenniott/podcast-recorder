@@ -82,6 +82,34 @@ describe('hooks.server handle', () => {
     })
   })
 
+  it('does not rate-limit authenticated server-copy upload POSTs', async () => {
+    process.env.MAX_POSTS_PER_MIN = '2'
+    const handle = await loadHandle()
+    const resolve = vi.fn(async () => 'ok')
+    const headers = { 'x-forwarded-for': '203.0.113.44, 10.0.0.1' }
+    const uploadRequests = [
+      { pathname: '/rec/abc/server-copy/session' },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        pathname: '/rec/abc/server-copy/chunks',
+        search: `?clientId=client123&offset=${i}`
+      })),
+      { pathname: '/rec/abc/server-copy/finalize' }
+    ]
+
+    for (const { pathname, search = '' } of uploadRequests) {
+      const result = await handle({
+        event: makeEvent({
+          pathname,
+          search,
+          method: 'POST',
+          headers
+        }),
+        resolve
+      })
+      expect(result).toBe('ok')
+    }
+  })
+
   it('uses the auth POST bucket for SvelteKit ?/enter actions', async () => {
     process.env.MAX_AUTH_POSTS_PER_MIN = '2'
     process.env.MAX_POSTS_PER_MIN = '100'

@@ -254,6 +254,181 @@ describe('createCaptureWriter — stop() drains the real queue instead of guessi
   })
 })
 
+// ─── future upload mirror seam ─────────────────────────────────────────────
+// This ticket adds no upload feature. It locks in that a future "server
+// copy" mirror can attach to onWritten — the confirmed-write seam — without
+// ever being able to delay, corrupt, or block the local WAV write path.
+// A mirror in these tests stands in for that future code: it's just a
+// function passed as `onWritten` that a later ticket would use to push
+// confirmed chunks to a network queue.
+
+describe('createCaptureWriter — future upload mirror cannot delay local writes', () => {
+  it('a slow mirror does not delay subsequent local chunk writes', async () => {
+    const sink = makeSlowSink(0) // local disk is instant
+    const mirrorSeen = []
+    let releaseMirror
+    const mirror = vi.fn((i16, offset) => {
+      mirrorSeen.push(offset)
+      // The FIRST call hangs forever (simulates a stalled upload). If the
+      // writer ever awaited this, every later chunk would never write.
+      if (mirrorSeen.length === 1) {
+        return new Promise((resolve) => { releaseMirror = resolve })
+      }
+    })
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write, onWritten: mirror })
+
+    writer.writeChunk(realChunk(100))
+    writer.writeChunk(realChunk(100))
+    writer.writeChunk(realChunk(100))
+    await writer.stop() // must resolve without ever waiting on the hung mirror
+
+    expect(sink.written.length).toBe(3)
+    expect(writer.samplesWritten).toBe(300)
+    // the still-pending first mirror call never got in the way
+    expect(releaseMirror).toBeTypeOf('function')
+  })
+
+  it('a slow mirror does not delay stop()/finalization timing', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: () => delay(5000) // wildly slower than any local write
+    })
+
+    writer.writeChunk(realChunk())
+    const start = Date.now()
+    const result = await writer.stop()
+    const elapsed = Date.now() - start
+
+    expect(elapsed).toBeLessThan(500) // nowhere near the mirror's 5s
+    expect(result.samplesWritten).toBe(BUFFER_SIZE)
+  })
+})
+
+describe('createCaptureWriter — future upload mirror cannot corrupt or block local writes', () => {
+  it('a mirror that throws synchronously does not stop later chunks from being written', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: (i16, offset) => {
+        if (offset === 0) throw new Error('mirror blew up')
+      }
+    })
+
+    writer.writeChunk(realChunk(100, 1))
+    writer.writeChunk(realChunk(100, 2))
+    writer.writeChunk(realChunk(100, 3))
+    const result = await writer.stop()
+
+    // all three real chunks made it to disk in order, despite the first
+    // mirror invocation throwing
+    expect(sink.written.length).toBe(3)
+    expect(sink.written.map((c) => c[0])).toEqual([1, 2, 3])
+    expect(result.samplesWritten).toBe(300)
+  })
+
+  it('a mirror whose returned promise rejects does not stop later chunks from being written', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: async (i16, offset) => {
+        if (offset === 0) throw new Error('upload failed')
+      }
+    })
+
+    writer.writeChunk(realChunk(100, 1))
+    writer.writeChunk(realChunk(100, 2))
+    const result = await writer.stop()
+
+    expect(sink.written.length).toBe(2)
+    expect(result.samplesWritten).toBe(200)
+    expect(result.dataByteCount).toBe(400)
+  })
+
+  it('a mirror that throws on every call still leaves the full WAV written and finalized', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: () => { throw new Error('mirror always fails') }
+    })
+
+    for (let i = 0; i < 5; i++) writer.writeChunk(realChunk(100, i + 1))
+    const result = await writer.stop()
+
+    expect(sink.written.length).toBe(5)
+    expect(result.samplesWritten).toBe(500)
+  })
+
+  it('a hung mirror does not prevent drain() from resolving or later writes from queuing', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: () => new Promise(() => {}) // never resolves, ever
+    })
+
+    writer.writeChunk(realChunk(100, 1))
+    await writer.drain()
+    writer.writeChunk(realChunk(100, 2)) // queued after a drain() that already returned
+    await writer.drain()
+
+    expect(sink.written.length).toBe(2)
+  })
+})
+
+describe('createCaptureWriter — local write confirmation is never gated on the mirror settling', () => {
+  it('samplesWritten/dataByteCount and onWritten itself fire before the mirror has settled, not after', async () => {
+    let mirrorSettled = false
+    let sawUnsettledMirrorAtNotifyTime = false
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: () => {
+        // At the moment the mirror is invoked, local state must already be
+        // authoritative — the mirror is downstream, never a gate.
+        if (writer.samplesWritten === 100 && !mirrorSettled) {
+          sawUnsettledMirrorAtNotifyTime = true
+        }
+        return delay(50).then(() => { mirrorSettled = true })
+      }
+    })
+
+    writer.writeChunk(realChunk(100))
+    await writer.stop() // resolves long before the mirror's 50ms settles
+
+    expect(sawUnsettledMirrorAtNotifyTime).toBe(true)
+    expect(mirrorSettled).toBe(false) // proves stop() did NOT wait for the mirror
+    expect(writer.samplesWritten).toBe(100)
+  })
+
+  it('fails the intent of the seam if write confirmation were (hypothetically) awaited on the mirror', async () => {
+    // This test exists to fail loudly if a future change makes writeChunk's
+    // internal handler `await` the mirror instead of firing it and moving
+    // on. A mirror that never resolves must never make local writes never
+    // finish.
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({
+      sampleRate: SAMPLE_RATE,
+      write: sink.write,
+      onWritten: () => new Promise(() => {}) // simulates a network call that never completes
+    })
+
+    writer.writeChunk(realChunk())
+
+    const result = await Promise.race([
+      writer.stop().then(() => 'stopped'),
+      delay(1000).then(() => 'timed-out')
+    ])
+
+    expect(result).toBe('stopped')
+  })
+})
+
 describe('createCaptureWriter — pending', () => {
   it('counts queued writes until they flush', async () => {
     const releases = []

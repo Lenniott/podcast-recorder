@@ -156,6 +156,29 @@ describe('rec/[slug]/+page.server', () => {
       expect(data.isHostClaim).toBe(true)
       expect(data.roomPassword).toBe(ROOM_PASS)
     })
+
+    it('rejects a forged/invalid host cookie — no host claim, no exposed password', async () => {
+      await seedRoom()
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: 'not-a-real-host-token'
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.isHostClaim).toBe(false)
+      expect(data.roomPassword).toBeNull()
+    })
+
+    it('rejects a host-claim token minted for a different room', async () => {
+      await seedRoom()
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        // Valid-shaped token, but for a password hash that doesn't match this room.
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, '$2a$10$someotherroomshash', SECRET)
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.isHostClaim).toBe(false)
+      expect(data.roomPassword).toBeNull()
+    })
   })
 
   describe('actions.enter', () => {

@@ -1,10 +1,13 @@
 <script>
-  import { METER_MIN } from "./meter.js";
+  import { Clap } from "$lib/icons";
+  import {
+    METER_MIN,
+    METER_TICKS,
+    dbToMeterPct,
+    formatMeterReadout,
+    meterGradientCss,
+  } from "./meter.js";
 
-  // Presentational extraction of the room page's old .waveform-wrap block.
-  // The canvas element itself is bound back up to the parent (bind:canvasEl)
-  // so the page's existing requestAnimationFrame draw loop / analyserNode
-  // wiring keeps drawing into the same <canvas> node, untouched.
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
@@ -12,41 +15,46 @@
   export let peakHoldDb = METER_MIN;
   export let isClipping = false;
   export let lastClapFrom = null;
-  // Collapsed-sidebar mode: same live canvas + level bar, no labels/readout
-  // — the point of collapsing is to still see *something* is happening.
   export let compact = false;
+  export let live = false;
+
+  const meterGradient = `linear-gradient(90deg, ${meterGradientCss()})`;
+
+  // Bind through a local node so replacing the canvas (sidebar remount)
+  // still assigns canvasEl — the renderer rebinds its 2d context from that.
+  let paintNode = null;
+  $: if (live && paintNode) canvasEl = paintNode;
 </script>
 
-<div class="waveform-wrap" class:compact>
-  <canvas bind:this={canvasEl}></canvas>
+<div class="waveform-wrap" class:compact data-testid={live ? "live-waveform" : undefined}>
+  <canvas bind:this={paintNode}></canvas>
 
   <div class="db-meter-wrap">
     <div class="db-meter-track">
-      <div class="db-meter-fill" style="--meter-pct: {meterPct}%"></div>
+      <div
+        class="db-meter-fill"
+        style="--clip-right: {100 - meterPct}%; background: {meterGradient}"
+      ></div>
       {#if peakHoldDb > METER_MIN}
         <div class="db-peak-hold" style="left: {peakPct}%"></div>
       {/if}
     </div>
     {#if !compact}
       <div class="db-labels">
-        <span style="left: 0%">-60</span>
-        <span style="left: 60%">-24</span>
-        <span style="left: 70%">-18</span>
-        <span style="left: 80%">-12</span>
-        <span style="left: 90%">-6</span>
-        <span style="left: 95%">-3</span>
-        <span style="left: 100%">0</span>
+        {#each METER_TICKS as db}
+          <span style="left: {dbToMeterPct(db)}%">{db}</span>
+        {/each}
       </div>
       <div class="db-readout">
-        <span class="db-value">{dbLevel > METER_MIN ? dbLevel.toFixed(1) : "—"} dBFS</span>
-        <span class="db-peak-label">pk: {peakHoldDb > METER_MIN ? peakHoldDb.toFixed(1) : "—"}</span>
+        <!-- <span class="db-value">{formatMeterReadout(dbLevel)} dBFS</span>
+        <span class="db-peak-label">pk: {formatMeterReadout(peakHoldDb)}</span> -->
         {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
       </div>
     {/if}
   </div>
 
   {#if lastClapFrom && !compact}
-    <div class="clap-flash">👏 Sync clap — {lastClapFrom}</div>
+    <div class="clap-flash"><Clap /> from {lastClapFrom}</div>
   {/if}
 </div>
 
@@ -62,12 +70,16 @@
     width: 100%;
     height: 40px;
     border-radius: 8px;
-    background: var(--bg-elevated);
+    background: var(--surface);
     border: 1px solid var(--border);
+    background-image: linear-gradient(var(--border), var(--border));
+    background-size: 100% 1px;
+    background-position: center;
+    background-repeat: no-repeat;
   }
 
   .waveform-wrap.compact canvas {
-    height: 48px;
+    height: 28px;
   }
 
   .db-meter-wrap {
@@ -85,17 +97,19 @@
   }
 
   .db-meter-fill {
-    height: 100%;
-    width: var(--meter-pct);
-    background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444);
+    position: absolute;
+    inset: 0;
+    clip-path: inset(0 var(--clip-right) 0 0);
   }
 
   .db-peak-hold {
     position: absolute;
     top: 0;
     bottom: 0;
+    z-index: 1;
     width: 2px;
     background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   }
 
   .db-labels {
@@ -119,7 +133,7 @@
   }
 
   .clip-badge {
-    color: #ef4444;
+    color: var(--danger-text);
     font-weight: 700;
   }
 
@@ -127,6 +141,9 @@
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 4px 10px;
     border-radius: 999px;
     background: rgba(245, 158, 11, 0.9);

@@ -2,10 +2,9 @@ import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { deleteRoom, getRoomBySlug } from '$lib/server/db.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
-import { verifyPassword, makeSessionToken, verifySessionToken, verifyHostClaimToken } from '$lib/server/auth.js'
+import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
 const COOKIE = (slug) => `pr_auth_${slug}`
-const HOST_COOKIE = (slug) => `pr_host_${slug}`
 const NAME_COOKIE = (slug) => `pr_name_${slug}`
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days
 
@@ -38,7 +37,7 @@ export async function load({ params, cookies }) {
 
   const token = cookies.get(COOKIE(slug))
   const authenticated = verifySessionToken(token, slug, room.password_hash, env.SECRET)
-  const isHostClaim = verifyHostClaimToken(cookies.get(HOST_COOKIE(slug)), slug, room.password_hash, env.SECRET)
+  const isHostClaim = getHostClaim(slug, cookies, room, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
   return {

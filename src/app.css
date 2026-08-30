@@ -1,19 +1,79 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/*
+ * Theme tokens — light (default) and dark. Which one applies is decided by
+ * the `data-theme` attribute on <html>, set before first paint by the
+ * boot script in app.html (localStorage override, else prefers-color-scheme)
+ * and flipped at runtime by $lib/theme.js / <ThemeToggle>. The
+ * `prefers-color-scheme` block below is only a safety net for the (rare)
+ * case that script never ran.
+ */
 :root {
+  --bg:        #f4f4f6;
+  --surface:   #ffffff;
+  --bg-elevated:#eef0f2;  /* panels/cards nested inside a --surface card */
+  --border:    #e0e0e5;
+  --text:      #18181b;
+  --muted:     #6b6b73;
+  --accent:    #0a4e3f;   /* purple — podcast vibes */
+  --accent-dim:#12705a;
+  --danger:    #ef4444;
+  --success:   #22c55e;
+  --warn:      #f59e0b;
+  /* Same-hue but contrast-tuned for use as plain text (not a filled swatch)
+     directly against --bg/--surface/--bg-elevated — see AGENTS.md-adjacent
+     note: the raw --danger/--warn/--success above stay identical across
+     themes because they're only ever used as filled dots/buttons, where
+     legibility isn't a background-contrast problem. Text needs its own. */
+  --danger-text: #dc2626;
+  --warn-text:   #92400e;
+  --success-text:#15803d;
+  /* Same split as danger/warn/success: --accent is the filled swatch
+     (primary buttons). Text-on-surface needs the contrast-tuned twin. */
+  --accent-text: #0a4e3f;
+  --radius:    8px;
+  --font:      'Inter', system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0e0e10;
+    --surface:   #18181b;
+    --bg-elevated:#1f1f23;
+    --border:    #2a2a2e;
+    --text:      #e4e4e7;
+    --accent:    #0a4e3f;
+    --accent-dim:#33685d;
+    --danger:    #ef4444;
+    --success:   #22c55e;
+    --warn:      #f59e0b;
+    --danger-text: #fca5a5;
+    --warn-text:   #fbbf24;
+    --success-text:#86efac;
+    --accent-text: var(--success-text);
+    --muted: color-mix(in srgb, var(--text) 70%, var(--surface));
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
   --bg:        #0e0e10;
   --surface:   #18181b;
-  --bg-elevated:#1f1f23;  /* panels/cards nested inside a --surface card */
+  --bg-elevated:#1f1f23;
   --border:    #2a2a2e;
   --text:      #e4e4e7;
-  --muted:     #71717a;
-  --accent:    #0a4e3f;   /* purple — podcast vibes */
+  --accent:    #0a4e3f;
   --accent-dim:#33685d;
   --danger:    #ef4444;
   --success:   #22c55e;
   --warn:      #f59e0b;
-  --radius:    8px;
-  --font:      'Inter', system-ui, -apple-system, sans-serif;
+  --danger-text: #fca5a5;
+  --warn-text:   #fbbf24;
+  --success-text:#86efac;
+  --accent-text: var(--success-text);
+  --muted: color-mix(in srgb, var(--text) 70%, var(--surface));
+  color-scheme: dark;
 }
 
 html, body {
@@ -25,7 +85,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 button {
@@ -36,8 +96,20 @@ button {
   border-radius: var(--radius);
   padding: 10px 18px;
   transition: opacity .15s, background .15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 button:disabled { opacity: .4; cursor: not-allowed; }
+button svg { display: block; flex-shrink: 0; }
+
+.inline-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  vertical-align: -0.15em;
+}
 
 input, select {
   background: var(--surface);

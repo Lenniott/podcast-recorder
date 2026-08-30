@@ -1,4 +1,6 @@
 <script>
+  import { Check, Mic, Play, X } from "$lib/icons";
+
   // Sits over the room the instant recording actually starts. Recording is
   // already running for real — nothing here is a throwaway test take. It
   // asks you to read a line out loud, then plays back exactly what got
@@ -6,6 +8,7 @@
   // broken write path is caught in the first few seconds, not after an hour.
   export let open = false;
   export let sentence = "";
+  export let micLabel = "";
   // () => Blob | null — parent builds it from confirmed-written chunks only.
   export let onListen = () => null;
   export let onConfirm = () => {};
@@ -53,17 +56,35 @@
 </script>
 
 {#if open}
-  <div class="check-overlay" role="dialog" aria-modal="true" aria-labelledby="check-title">
+  <div
+    class="check-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="check-title"
+  >
     <div class="check-card">
+      <button
+        type="button"
+        class="btn-ghost btn-icon check-close"
+        aria-label="Skip microphone check"
+        title="Skip check, recording keeps going"
+        on:click={handleConfirm}
+      >
+        <X />
+      </button>
       <div class="check-badge">● Recording</div>
-      <h2 id="check-title">Quick check — is this actually being captured?</h2>
-      <p class="check-hint">Read the line below out loud, then press Listen. What plays back is pulled from the file being written to disk right now — not your live mic — so if something's wrong with the recording itself, you'll hear it here.</p>
+      <h2 id="check-title">Test your microphone?</h2>
+      <p class="check-mic" title={micLabel || undefined}>
+        <Mic />
+        <span>{micLabel || "Unknown microphone"}</span>
+      </p>
+      <p class="check-hint">Read this sentence out loud:</p>
 
       <div class="check-sentence">"{sentence}"</div>
 
       <div class="check-actions">
         <button type="button" class="btn-secondary" on:click={handleListen}>
-          ▶ Listen back
+          <Play /> Listen back
         </button>
         {#if hasListened}
           <audio bind:this={audioEl} src={previewUrl} controls></audio>
@@ -79,10 +100,10 @@
           <p class="check-verdict-q">Sound good?</p>
           <div class="check-verdict-actions">
             <button type="button" class="btn-primary" on:click={handleConfirm}>
-              ✓ Sounds good — keep going
+              <Check /> Yes, continue
             </button>
             <button type="button" class="btn-ghost" on:click={handleReject}>
-              ✗ Something's wrong — stop and fix it
+              <X /> Something’s wrong
             </button>
           </div>
         </div>
@@ -104,6 +125,7 @@
   }
 
   .check-card {
+    position: relative;
     background: var(--bg-elevated, #18181b);
     border: 1px solid var(--border, #2a2a2e);
     border-radius: 14px;
@@ -112,27 +134,50 @@
     padding: 28px;
   }
 
+  .check-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+
   .check-badge {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: #ef4444;
+    color: var(--danger-text);
     font-weight: 600;
     font-size: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
 
   h2 {
     font-size: 17px;
     font-weight: 600;
     margin: 0 0 8px;
+    padding-right: 28px;
+  }
+
+  .check-mic {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 32px;
+    padding-right: 28px;
+    color: var(--muted, #a1a1aa);
+    font-size: 13px;
+    min-width: 0;
+  }
+  .check-mic span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .check-hint {
     color: var(--muted, #a1a1aa);
     font-size: 13px;
     line-height: 1.5;
-    margin: 0 0 18px;
+    margin: 0 0 4px;
   }
 
   .check-sentence {
@@ -158,7 +203,7 @@
   }
 
   .check-error {
-    color: #fbbf24;
+    color: var(--warn-text);
     font-size: 12px;
     margin: 10px 0 0;
   }

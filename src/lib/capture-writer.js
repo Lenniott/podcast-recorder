@@ -18,6 +18,16 @@
  * waveform, a listen-back preview) should hang off, instead of the live mic
  * signal — the write path is the thing that can silently break; the mic
  * never lies about what it's picking up.
+ *
+ * That same seam is the intended attachment point for a future "upload a
+ * copy to the server" mirror — it only ever sees a chunk AFTER local write
+ * confirmation, so upload can never race ahead of, or substitute for, the
+ * local WAV. The dispatch to onWritten is deliberately fire-and-forget and
+ * error-isolated (see notify() below): local write confirmation — the
+ * queue advancing, samplesWritten/dataByteCount updating, drain()/stop()
+ * resolving — never waits on onWritten, so a slow, throwing, or rejecting
+ * observer (a stalled upload, a dropped connection) can neither delay a
+ * local write/finalization nor break the chain for chunks after it.
  */
 export function createCaptureWriter({ sampleRate, write, onWritten }) {
   if (!(sampleRate > 0)) throw new Error('createCaptureWriter: sampleRate must be > 0')
@@ -36,6 +46,40 @@ export function createCaptureWriter({ sampleRate, write, onWritten }) {
   }
 
   /**
+   * Fire an observer (currently only onWritten) after a chunk is confirmed
+   * written, without letting it touch the write chain in any way: never
+   * awaited (a slow or hung observer can't delay the next queued write or
+   * drain()/stop()), and any synchronous throw or async rejection is
+   * swallowed here rather than propagating into `tail` — which would
+   * otherwise poison every write queued after it, since `tail.then(fn)` on
+   * a rejected promise skips fn without ever calling the real write().
+   */
+  function notify(fn, i16, offset) {
+    if (!fn) return
+    try {
+      const result = fn(i16, offset)
+      if (result && typeof result.then === 'function') {
+        result.catch(() => {})
+      }
+    } catch {
+      // A misbehaving observer must never affect local recording.
+    }
+  }
+
+  /**
+   * Advance the authoritative counters for one chunk (real audio or
+   * device-gap silence, whichever `write()` just confirmed) and fire the
+   * onWritten seam. Shared by writeChunk and notifyDeviceGap so the two
+   * write paths can never drift on how a confirmed write is accounted for.
+   */
+  function confirmWritten(samples, sampleCount, byteCount) {
+    const offset = samplesWritten
+    samplesWritten += sampleCount
+    dataByteCount += byteCount
+    notify(onWritten, samples, offset)
+  }
+
+  /**
    * Queue one chunk of real PCM audio (Int16Array). Fire-and-forget by
    * design — callers that need to know the recording is still keeping up
    * should read `.pending`, not await this.
@@ -47,10 +91,7 @@ export function createCaptureWriter({ sampleRate, write, onWritten }) {
     const bytes = i16.byteLength
     enqueue(async () => {
       await write(i16.buffer)
-      const offset = samplesWritten
-      samplesWritten += i16.length
-      dataByteCount += bytes
-      onWritten?.(i16, offset)
+      confirmWritten(i16, i16.length, bytes)
     })
     return bytes
   }
@@ -69,10 +110,7 @@ export function createCaptureWriter({ sampleRate, write, onWritten }) {
     enqueue(async () => {
       const silence = new Int16Array(gapSamples)
       await write(silence.buffer)
-      const offset = samplesWritten
-      samplesWritten += gapSamples
-      dataByteCount += bytes
-      onWritten?.(silence, offset)
+      confirmWritten(silence, gapSamples, bytes)
     })
     return bytes
   }

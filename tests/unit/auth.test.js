@@ -6,6 +6,7 @@ import {
   verifySessionToken,
   makeHostClaimToken,
   verifyHostClaimToken,
+  getHostClaim,
   generateSlug
 } from '../../src/lib/server/auth.js'
 
@@ -133,6 +134,74 @@ describe('makeHostClaimToken / verifyHostClaimToken', () => {
   it('uses process.env.SECRET when no secret argument is passed', () => {
     const token = makeHostClaimToken(slug, phash)
     expect(verifyHostClaimToken(token, slug, phash)).toBe(true)
+  })
+})
+
+// ─── Shared host-claim check ────────────────────────────────────────────────
+
+describe('getHostClaim', () => {
+  const slug   = 'testslug'
+  const phash  = '$2a$10$fakehashfortoken'
+  const secret = 'test-secret-do-not-use-in-prod'
+  const room   = { slug, password_hash: phash }
+
+  function makeCookies(seed = {}) {
+    const jar = new Map(Object.entries(seed))
+    return { get: (name) => jar.get(name) }
+  }
+
+  it('returns true for a valid host-claim cookie matching the active room', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    const cookies = makeCookies({ [`pr_host_${slug}`]: token })
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(true)
+  })
+
+  it('returns false when the host cookie is missing', () => {
+    const cookies = makeCookies()
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(false)
+  })
+
+  it('returns false for an invalid/forged token', () => {
+    const cookies = makeCookies({ [`pr_host_${slug}`]: 'not-a-real-token' })
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(false)
+  })
+
+  it('returns false for a token tampered after being issued', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    const tampered = token.slice(0, -2) + '00'
+    const cookies = makeCookies({ [`pr_host_${slug}`]: tampered })
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(false)
+  })
+
+  it('returns false when the token is valid for a different room (different password hash)', () => {
+    const token = makeHostClaimToken(slug, 'a-different-password-hash', secret)
+    const cookies = makeCookies({ [`pr_host_${slug}`]: token })
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(false)
+  })
+
+  it('returns false when the token was issued for a different slug', () => {
+    const token = makeHostClaimToken('other-slug', phash, secret)
+    // Cookie stored under this slug's own cookie name, but the token payload is for another slug.
+    const cookies = makeCookies({ [`pr_host_${slug}`]: token })
+    expect(getHostClaim(slug, cookies, room, secret)).toBe(false)
+  })
+
+  it('returns false when room is null (expired/deleted room), even with an otherwise-valid token', () => {
+    const token = makeHostClaimToken(slug, phash, secret)
+    const cookies = makeCookies({ [`pr_host_${slug}`]: token })
+    expect(getHostClaim(slug, cookies, null, secret)).toBe(false)
+  })
+
+  it('uses process.env.SECRET when no secret argument is passed', () => {
+    const previous = process.env.SECRET
+    process.env.SECRET = secret
+    try {
+      const token = makeHostClaimToken(slug, phash, secret)
+      const cookies = makeCookies({ [`pr_host_${slug}`]: token })
+      expect(getHostClaim(slug, cookies, room)).toBe(true)
+    } finally {
+      process.env.SECRET = previous
+    }
   })
 })
 

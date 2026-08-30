@@ -1,6 +1,8 @@
 <script>
   import { onMount, tick } from "svelte";
+  import { Plus } from "$lib/icons";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
+  import { getNotesTextSize, setNotesTextSize, SIZES as NOTES_TEXT_SIZES } from "./notes-text-size.js";
 
   // (payload) => void — JSON-sends over the room WS. The room's single
   // WebSocket connection is owned by the page, not this component.
@@ -33,6 +35,15 @@
 
   let textDebounceTimer = null;
 
+  // Shared notes text size — a per-browser display preference (like theme),
+  // never sent over the WS. See $lib/notes-text-size.js.
+  let notesFontSize = 16;
+
+  function setNotesFontSize(size) {
+    notesFontSize = size;
+    setNotesTextSize(size);
+  }
+
   $: activeVideoPlaying = !!tabVideos[activeTabId]?.playing;
 
   // HMR / parent remount resets this component's lets to empty, but the WS
@@ -40,6 +51,7 @@
   // Ask the server for the room's current tabs/video/text on every mount.
   onMount(() => {
     send({ type: "tabs_sync" });
+    notesFontSize = getNotesTextSize();
   });
 
   // ─── Inbound — called by the page's ws.onmessage, one method per type ──
@@ -155,7 +167,7 @@
         {/if}
       </div>
     {/each}
-    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab">+</button>
+    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab"><Plus /></button>
   </div>
 
   <div class="tab-content">
@@ -182,13 +194,32 @@
           </svelte:fragment>
         </TabVideoPlayer>
       {/key}
+        <div class="shared-textarea">
+      <div class="notes-toolbar">
+        <span class="notes-toolbar-label">Text size</span>
+        <div class="text-size-group" role="group" aria-label="Notes text size">
+          {#each NOTES_TEXT_SIZES as size (size)}
+            <button
+              type="button"
+              class="btn-ghost btn-sm text-size-btn"
+              class:is-active={notesFontSize === size}
+              aria-pressed={notesFontSize === size}
+              on:click={() => setNotesFontSize(size)}
+            >
+              {size}
+            </button>
+          {/each}
+        </div>
+      </div>
 
       <textarea
-        class="shared-textarea"
+        class="shared-textarea-textarea"
+        style="font-size: {notesFontSize}px"
         placeholder="Shared notes — visible to everyone in the room…"
         value={tabTexts[activeTabId] ?? ""}
         on:input={onTextInput}
       ></textarea>
+      </div>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
     {/if}
@@ -200,6 +231,9 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-width: 750px;
+    margin-right: auto;
+    margin-left: auto;
   }
 
   .tab-strip {
@@ -223,8 +257,13 @@
   }
   .tab-pill.active {
     background: var(--accent);
-    color: var(--text);
+    color: #fff;
     border-color: var(--accent);
+  }
+  .tab-pill.active .tab-close,
+  .tab-pill.active .tab-close:hover {
+    color: #fff;
+    background: transparent;
   }
 
   .tab-title {
@@ -276,21 +315,64 @@
     touch-action: none;
   }
 
+  .notes-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .notes-toolbar-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .text-size-group {
+    display: flex;
+    gap: 2px;
+  }
+
+  .text-size-btn {
+    min-width: 30px;
+    font-variant-numeric: tabular-nums;
+  }
+  .text-size-btn.is-active {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
   .shared-textarea {
-    width: 100%;
-    min-height: 80vh;
-    field-sizing: content;
-    resize: none;
-    overflow: hidden;
     padding: 16px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
     color: var(--text);
-    font: inherit;
+    font-family: inherit;
     line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  .shared-textarea:focus {
+
+  .shared-textarea:focus-within {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .shared-textarea-textarea {
+    width: 100%;
+    min-height: 80vh;
+    field-sizing: content;
+    resize: none;
+    overflow: hidden;
+    font-size: 16px;
+    line-height: 1.5;
+    font-family: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    outline: none;
+  }
+  .shared-textarea-textarea:focus-within {
     outline: none;
     border-color: var(--accent);
   }

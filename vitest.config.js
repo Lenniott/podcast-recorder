@@ -21,7 +21,15 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**'],
-      exclude: ['src/**/*.css', 'src/**/*.svelte', 'src/app.html']
+      exclude: ['src/**/*.css', 'src/**/*.svelte', 'src/app.html', 'src/lib/icons/**'],
+      // Would have failed the 0% theme/icons drop (89/80/87/92). Slack is
+      // small on statements/lines so a new untested module fails the run.
+      thresholds: {
+        statements: 94,
+        lines: 94,
+        functions: 90,
+        branches: 82
+      }
     }
   }
 })

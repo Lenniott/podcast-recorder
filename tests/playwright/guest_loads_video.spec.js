@@ -12,11 +12,11 @@ test('guest can load a video and the host can play it', async ({ browser }) => {
   await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
   await loadVideo(guest)
-  await expect(host.getByRole('button', { name: '▶ Play' })).toBeVisible({ timeout: 15_000 })
+  await expect(host.getByRole('button', { name: 'Play' })).toBeVisible({ timeout: 15_000 })
 
-  await host.getByRole('button', { name: '▶ Play' }).click()
-  await expect(host.getByRole('button', { name: '⏸ Pause' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: '⏸ Pause' })).toBeVisible({ timeout: 15_000 })
+  await host.getByRole('button', { name: 'Play' }).click()
+  await expect(host.getByRole('button', { name: 'Pause' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 15_000 })
 
   await guest.close()
   await host.close()

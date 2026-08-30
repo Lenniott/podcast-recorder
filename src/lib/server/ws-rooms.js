@@ -13,7 +13,23 @@
  *   { type: 'join', name, clientId }     — announce on connect
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
- *   { type: 'recording_state', state }   — 'recording' | 'stopped'
+ *   { type: 'recording_state', state, startedAt? }
+ *                                        — 'recording' | 'stopped'. startedAt is the
+ *                                          recorder's Date.now() when this take began
+ *                                          (resent on registerResync so the clock does
+ *                                          not restart after a reconnect).
+ *   { type: 'server_copy_progress', state, percent }
+ *                                        — this peer's server-copy upload status, sent by
+ *                                          $lib/server-copy-upload.js's caller (see the
+ *                                          room page) on every threshold-crossing progress
+ *                                          change and again on every reconnect (state is
+ *                                          not remembered across a dropped connection, same
+ *                                          as recording_state). state is one of
+ *                                          'unavailable' | 'in_progress' | 'complete' | 'failed';
+ *                                          percent is a rounded 0-100 integer, never a byte count.
+ *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
+ *                                          and included in presence. Re-announce on
+ *                                          registerResync after reconnect (server forgets it).
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *   { type: 'tab_create', tabId, title? }
  *                                        — client-generated tabId (like clientId);
@@ -32,7 +48,19 @@
  *                                          UI remounts without a WS reconnect.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording}] }
+ *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
+ *   { type: 'server_copy_token', clientId, token }
+ *                                        — sent ONLY to the connection whose 'join' just
+ *                                          claimed this clientId, never broadcast (ticket
+ *                                          11: bind server-copy clientId to owner). `token`
+ *                                          is a stateless (slug, clientId)-scoped capability
+ *                                          token (auth.js's makeServerCopyToken) the client
+ *                                          must present on every server-copy/{session,chunks,
+ *                                          finalize} request alongside this clientId — it's
+ *                                          what proves the caller actually owns the clientId,
+ *                                          since clientId itself is broadcast presence data
+ *                                          and the room's session cookie is identical for
+ *                                          every participant.
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
@@ -66,16 +94,18 @@
  */
 
 import { getActiveRoomBySlug } from './db.js'
-import { verifyHostClaimToken } from './auth.js'
+import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
 const TAB_VIDEO_LEAD_MS = 250 // same idea as clap: schedule apply slightly in the future
 const YT_VIDEO_ID = /^[\w-]{11}$/
+const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'failed'])
 
 // rooms: Map<slug, Map<clientId, peer>>
-// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking }
+// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
+//         serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
 const rooms = new Map()
 
 // tabRooms: Map<slug, {
@@ -99,8 +129,16 @@ function sendPresence(slug) {
     clientId: p.clientId,
     name: p.name,
     recording: p.recording,
+    recordingStartedAt: p.recording ? p.recordingStartedAt || null : null,
     role: p.role || 'guest',
-    isHost: (p.role || 'guest') === 'host'
+    isHost: (p.role || 'guest') === 'host',
+    // Separate from `recording` on purpose — local recording and the
+    // server-copy upload are different guarantees and must never be
+    // merged into one status (see ticket 06).
+    serverCopyState: p.serverCopyState || 'unavailable',
+    serverCopyPercent: p.serverCopyPercent || 0,
+    serverCopyTakeId: p.serverCopyTakeId || null,
+    micLabel: p.micLabel || ''
   }))
   const msg = { type: 'presence', peers }
   for (const peer of room.values()) send(peer.ws, msg)
@@ -241,8 +279,7 @@ export function setupWss(wss) {
     }
 
     const cookies = parseCookies(req.headers.cookie || '')
-    const hostToken = cookies.get(`pr_host_${slug}`) || ''
-    const connectionHostClaim = !!roomRow && verifyHostClaimToken(hostToken, slug, roomRow.password_hash, process.env.SECRET)
+    const connectionHostClaim = getHostClaim(slug, cookies, roomRow, process.env.SECRET)
 
     if (!rooms.has(slug)) rooms.set(slug, new Map())
     const room = rooms.get(slug)
@@ -254,11 +291,16 @@ export function setupWss(wss) {
       clientId: null,
       name: 'Guest',
       recording: false,
+      recordingStartedAt: null,
       slug,
       role: 'guest',
       claimedHost: connectionHostClaim,
       joinedAt: Date.now(),
-      talking: false
+      talking: false,
+      serverCopyState: 'unavailable',
+      serverCopyPercent: 0,
+      serverCopyTakeId: null,
+      micLabel: ''
     }
 
     ws.on('message', (raw) => {
@@ -303,6 +345,12 @@ export function setupWss(wss) {
         if (firstJoin && clientId) {
           replayTabsTo(ws, ensureTabRoom(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
+          // Exclusive to this connection — never broadcast (see the
+          // 'server_copy_token' protocol doc above and ticket 11). This is
+          // the one channel that can prove "this connection owns
+          // clientId," since clientId is otherwise just broadcast
+          // presence data.
+          send(ws, { type: 'server_copy_token', clientId, token: makeServerCopyToken(slug, clientId, process.env.SECRET) })
         }
       }
 
@@ -327,9 +375,37 @@ export function setupWss(wss) {
 
       if (msg.type === 'recording_state' && clientId) {
         peer.recording = msg.state === 'recording'
+        if (peer.recording) {
+          const startedAt = Number(msg.startedAt)
+          peer.recordingStartedAt = Number.isFinite(startedAt) && startedAt > 0
+            ? startedAt
+            : null
+        } else {
+          peer.recordingStartedAt = null
+        }
         recomputeRoles(room)
         sendPresence(slug)
         broadcast(slug, { type: 'recording_state', name: peer.name, state: msg.state }, clientId)
+      }
+
+      if (msg.type === 'server_copy_progress' && clientId) {
+        // Trust only a known state enum and an in-range integer percent —
+        // this is client-reported, so don't let a bad/hostile value show
+        // as if it were a real upload status to the other peer.
+        if (!SERVER_COPY_STATES.has(msg.state)) return
+        const percent = Number(msg.percent)
+        peer.serverCopyState = msg.state
+        peer.serverCopyPercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : 0
+        if (Object.hasOwn(msg, 'takeId')) {
+          const takeId = String(msg.takeId || '').slice(0, 64)
+          peer.serverCopyTakeId = takeId || null
+        }
+        sendPresence(slug)
+      }
+
+      if (msg.type === 'mic_info' && clientId) {
+        peer.micLabel = String(msg.label || '').slice(0, 80)
+        sendPresence(slug)
       }
 
       if (msg.type === 'yt_duck' && clientId) {

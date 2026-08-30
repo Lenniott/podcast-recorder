@@ -11,11 +11,11 @@ test('clap flashes on both browsers', async ({ browser }) => {
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
 
-  await expect(host.getByRole('button', { name: '👏 Clap' })).toBeEnabled()
-  await host.getByRole('button', { name: '👏 Clap' }).click()
+  await expect(host.getByRole('button', { name: 'Sync Tone Marker' })).toBeEnabled()
+  await host.getByRole('button', { name: 'Sync Tone Marker' }).click()
 
-  await expect(host.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
-  await expect(guest.locator('.clap-flash')).toContainText('Sync clap', { timeout: 15_000 })
+  await expect(host.locator('.clap-flash')).toContainText('from Host', { timeout: 15_000 })
+  await expect(guest.locator('.clap-flash')).toContainText('from Host', { timeout: 15_000 })
 
   await guest.close()
   await host.close()
