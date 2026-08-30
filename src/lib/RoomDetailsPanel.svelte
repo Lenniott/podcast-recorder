@@ -10,7 +10,10 @@
 
 <div class="room-details">
   <div class="rd-slug-row">
-    <span class="rd-slug">/rec/{slug}</span>
+    <div class="rd-slug-value">
+      <div class="rd-value-label">Link:</div>
+      <span class="rd-slug">/rec/{slug}</span>
+    </div>
     <button
       type="button"
       class="btn-ghost btn-sm btn-icon"
@@ -28,7 +31,7 @@
 
   {#if isHostClaim && roomPassword}
     <div class="rd-password-row">
-      <span class="rd-password-label">Password:</span>
+      <span class="rd-value-label">Password:</span>
       <span class="rd-password-value">{roomPassword}</span>
     </div>
   {/if}
@@ -39,11 +42,13 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    width: 100%;
   }
 
   .rd-slug-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
     flex-wrap: wrap;
     min-height: 24px;
@@ -54,10 +59,25 @@
     color: var(--muted);
     font-family: monospace;
   }
+  .rd-value-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .rd-slug-value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
 
   .rd-password-row {
     font-size: 12px;
     color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-height: 24px;
   }
   .rd-password-value {
     font-family: monospace;

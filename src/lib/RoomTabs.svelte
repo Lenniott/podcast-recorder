@@ -2,7 +2,11 @@
   import { onMount, tick } from "svelte";
   import { Plus } from "$lib/icons";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
-  import { getNotesTextSize, setNotesTextSize, SIZES as NOTES_TEXT_SIZES } from "./notes-text-size.js";
+  import {
+    getNotesTextSize,
+    setNotesTextSize,
+    SIZES as NOTES_TEXT_SIZES,
+  } from "./notes-text-size.js";
 
   // (payload) => void — JSON-sends over the room WS. The room's single
   // WebSocket connection is owned by the page, not this component.
@@ -69,7 +73,14 @@
   export function applyTabVideo(msg) {
     tabVideos = {
       ...tabVideos,
-      [msg.tabId]: msg.videoId ? { videoId: msg.videoId, playing: msg.playing, positionSec: msg.positionSec, positionAtMs: msg.positionAtMs } : null,
+      [msg.tabId]: msg.videoId
+        ? {
+            videoId: msg.videoId,
+            playing: msg.playing,
+            positionSec: msg.positionSec,
+            positionAtMs: msg.positionAtMs,
+          }
+        : null,
     };
     if (msg.tabId === activeTabId) videoPlayerRef?.applyState?.(msg);
   }
@@ -100,7 +111,11 @@
   // ─── Outbound — tab structure ───────────────────────────────────────────
 
   function makeTabId() {
-    return "tab-" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+    return (
+      "tab-" +
+      Math.random().toString(36).slice(2, 10) +
+      Math.random().toString(36).slice(2, 6)
+    );
   }
 
   function addTab() {
@@ -129,7 +144,10 @@
     tabTexts = { ...tabTexts, [activeTabId]: text };
     clearTimeout(textDebounceTimer);
     const tabId = activeTabId;
-    textDebounceTimer = setTimeout(() => send({ type: "tab_text", tabId, text }), TEXT_DEBOUNCE_MS);
+    textDebounceTimer = setTimeout(
+      () => send({ type: "tab_text", tabId, text }),
+      TEXT_DEBOUNCE_MS,
+    );
   }
 
   // ─── Outbound — hold-to-talk (room-wide, not per-tab) ───────────────────
@@ -152,7 +170,12 @@
   <div class="tab-strip">
     {#each tabs as tab (tab.id)}
       <div class="tab-pill" class:active={tab.id === activeTabId}>
-        <button type="button" class="tab-title" aria-label={tab.title} on:click={() => switchTab(tab.id)}>
+        <button
+          type="button"
+          class="tab-title"
+          aria-label={tab.title}
+          on:click={() => switchTab(tab.id)}
+        >
           {tab.title}
         </button>
         {#if tabs.length > 1}
@@ -167,58 +190,81 @@
         {/if}
       </div>
     {/each}
-    <button type="button" class="btn-ghost btn-icon" on:click={addTab} aria-label="Add tab" title="Add tab"><Plus /></button>
+    <button
+      type="button"
+      class="btn-ghost btn-icon"
+      on:click={addTab}
+      aria-label="Add tab"
+      title="Add tab"><Plus /></button
+    >
   </div>
 
   <div class="tab-content">
     {#if activeTabId}
-      {#key activeTabId}
-        <TabVideoPlayer tabId={activeTabId} {send} {clockOffset} {talking} {roomTalking} bind:this={videoPlayerRef}>
-          <svelte:fragment slot="controls-left">
-            {#if activeVideoPlaying}
+      <div class="shared-textarea">
+        
+        <div class="notes-toolbar-2">
+          {#key activeTabId}
+            <TabVideoPlayer
+              tabId={activeTabId}
+              {send}
+              {clockOffset}
+              {talking}
+              {roomTalking}
+              bind:this={videoPlayerRef}
+            >
+              <svelte:fragment slot="controls-left">
+                {#if activeVideoPlaying}
+                  <button
+                    type="button"
+                    class="btn-secondary talk-btn"
+                    class:is-active={talking}
+                    aria-pressed={talking}
+                    title="Hold to lower your local video volume"
+                    on:pointerdown={startTalk}
+                    on:pointerup={endTalk}
+                    on:pointercancel={endTalk}
+                    on:lostpointercapture={endTalk}
+                    on:contextmenu|preventDefault
+                  >
+                    Talk
+                  </button>
+                {/if}
+              </svelte:fragment>
+            </TabVideoPlayer>
+          {/key}
+        </div>
+        
+        <div class="notes-toolbar-1">
+          <span class="notes-toolbar-label">Text size</span>
+          <div
+            class="text-size-group"
+            role="group"
+            aria-label="Notes text size"
+          >
+            {#each NOTES_TEXT_SIZES as size (size)}
               <button
                 type="button"
-                class="btn-secondary talk-btn"
-                class:is-active={talking}
-                aria-pressed={talking}
-                title="Hold to lower your local video volume"
-                on:pointerdown={startTalk}
-                on:pointerup={endTalk}
-                on:pointercancel={endTalk}
-                on:lostpointercapture={endTalk}
-                on:contextmenu|preventDefault
+                class="btn-ghost btn-sm text-size-btn"
+                class:is-active={notesFontSize === size}
+                aria-pressed={notesFontSize === size}
+                on:click={() => setNotesFontSize(size)}
               >
-                Talk
+                {size}
               </button>
-            {/if}
-          </svelte:fragment>
-        </TabVideoPlayer>
-      {/key}
-        <div class="shared-textarea">
-      <div class="notes-toolbar">
-        <span class="notes-toolbar-label">Text size</span>
-        <div class="text-size-group" role="group" aria-label="Notes text size">
-          {#each NOTES_TEXT_SIZES as size (size)}
-            <button
-              type="button"
-              class="btn-ghost btn-sm text-size-btn"
-              class:is-active={notesFontSize === size}
-              aria-pressed={notesFontSize === size}
-              on:click={() => setNotesFontSize(size)}
-            >
-              {size}
-            </button>
-          {/each}
+            {/each}
+          </div>
         </div>
-      </div>
 
-      <textarea
-        class="shared-textarea-textarea"
-        style="font-size: {notesFontSize}px"
-        placeholder="Shared notes — visible to everyone in the room…"
-        value={tabTexts[activeTabId] ?? ""}
-        on:input={onTextInput}
-      ></textarea>
+
+        <textarea
+          class="shared-textarea-textarea"
+          style="font-size: {notesFontSize}px"
+          aria-label="Shared notes — visible to everyone in the room…"
+          placeholder="Share notes between you and your guests…"
+          value={tabTexts[activeTabId] ?? ""}
+          on:input={onTextInput}
+        ></textarea>
       </div>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
@@ -241,6 +287,12 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .notes-toolbar-1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .tab-pill {

@@ -1,5 +1,5 @@
 <script>
-  import { ChevronLeft, ChevronRight, FileSearch02, Mic } from "$lib/icons";
+  import { ChevronLeft, ChevronRight, Download02, Mic } from "$lib/icons";
   import RoomDetailsPanel from "./RoomDetailsPanel.svelte";
   import MicPanel from "./MicPanel.svelte";
   import WaveformPanel from "./WaveformPanel.svelte";
@@ -58,18 +58,6 @@
       </div>
     {/if}
     <div class="header-actions">
-      {#if !collapsed && isHostClaim}
-        <button
-          type="button"
-          class="btn-ghost btn-icon btn-sm"
-          data-testid="server-copy-files"
-          title="Show every server-copy file for this room"
-          aria-label="Server copy files"
-          on:click={() => (filesModalOpen = true)}
-        >
-          <FileSearch02 />
-        </button>
-      {/if}
       <button
         type="button"
         class="btn-ghost btn-icon btn-sm collapse-toggle"
@@ -85,18 +73,6 @@
       </button>
     </div>
   </div>
-
-  {#if !collapsed}
-    <section class="sidebar-section">
-      <RoomDetailsPanel
-        {slug}
-        {isHostClaim}
-        {roomPassword}
-        {copyLinkDone}
-        {onCopyLink}
-      />
-    </section>
-  {/if}
 
   <div class="record-controls-container">
     {#if !collapsed}
@@ -147,6 +123,32 @@
       />
     </section>
   </div>
+  {#if !collapsed}
+    <section class="sidebar-section">
+      {#if !collapsed && isHostClaim}
+        <div class="file-download-container">
+          <span class="file-download-label">Episode audio:</span>
+          <button
+            type="button"
+            class="btn-ghost btn-icon btn-sm"
+            data-testid="server-copy-files"
+            title="Show every server-copy file for this room"
+            aria-label="Server copy files"
+            on:click={() => (filesModalOpen = true)}
+          >
+            <Download02 />
+          </button>
+        </div>
+      {/if}
+      <RoomDetailsPanel
+        {slug}
+        {isHostClaim}
+        {roomPassword}
+        {copyLinkDone}
+        {onCopyLink}
+      />
+    </section>
+  {/if}
 </aside>
 
 {#if filesModalOpen}
@@ -204,9 +206,24 @@
   }
 
   .record-controls-container {
-    margin-top: auto;
+    margin-top: 16px;
+    margin-bottom: auto;
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+
+  .file-download-container {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .file-download-label {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
   }
 </style>

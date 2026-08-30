@@ -386,13 +386,6 @@
 </div>
 
 <style>
-  .watch-card {
-    padding: 16px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-
   .watch-header {
     display: flex;
     align-items: center;

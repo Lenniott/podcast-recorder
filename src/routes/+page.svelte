@@ -253,7 +253,4 @@
     line-height: 1.7;
   }
 
-  .footer-note strong {
-    color: var(--text);
-  }
 </style>
