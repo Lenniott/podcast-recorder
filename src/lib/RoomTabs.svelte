@@ -31,7 +31,18 @@
   // peer is acting on — a background tab someone else is loading a video
   // into must already be up to date by the time you switch to it.
   let tabVideos = {}; // tabId -> {videoId,playing,positionSec,positionAtMs} | null
-  let tabTexts = {}; // tabId -> string
+
+  // tabId -> string. Exported (two-way bound up through RecordingRoom.svelte
+  // to +page.svelte, same `bind:` pattern as selectedDeviceId/gainValue)
+  // because this is the one place that holds
+  // the true, complete, current value for every tab at all times — both
+  // this browser's own just-typed (not-yet-broadcast) keystrokes AND every
+  // peer's broadcast tab_text. ResearchPanel.svelte reads this directly as
+  // a plain prop instead of keeping its own second listener on the
+  // tab_text broadcast, which is deliberately asymmetric (excludes the
+  // sender, so a typist's own textarea isn't clobbered by an echo of its
+  // own keystrokes) — lossy for anyone who isn't RoomTabs itself.
+  export let tabTexts = {}; // tabId -> string
 
   // The Transcript is a sibling piece of room content, not an entry in
   // `tabs` (see room-state-store.js and ADR-0002) — but "which pill the

@@ -6,7 +6,6 @@
     visibleEntries,
     buildManualAskRequest,
     buildQuickActionRequest,
-    applyTabText as reduceTabText,
     applyTranscriptState as reduceTranscriptState,
     applyTranscriptLine as reduceTranscriptLine,
     activeTabText,
@@ -39,6 +38,23 @@
   // own collapsed state.
   export let collapsed = false;
 
+  // tabId -> string — RoomTabs.svelte's own true, complete, current copy
+  // of every tab's text (both its own just-typed keystrokes AND every
+  // peer's broadcast tab_text), two-way bound up through RecordingRoom to
+  // +page.svelte's tabTexts and passed down here as a plain prop.
+  //
+  // Deliberately NOT a second copy fed by this component's own tab_text WS
+  // listener: the tab_text broadcast (see ws-rooms.js) excludes the
+  // sender's own connection, on purpose, so RoomTabs' own textarea isn't
+  // clobbered by an echo of its own keystrokes mid-typing. RoomTabs itself
+  // never needs the broadcast for its OWN edits (it already has them
+  // locally) — but a second listener here reading only the broadcast would
+  // be blind to exactly that case: a solo participant's own just-typed
+  // notes would never arrive, and Quick Actions on their own active tab
+  // would stay disabled/stale forever. Reading RoomTabs' own state
+  // directly avoids the asymmetry entirely.
+  export let tabTexts = {};
+
   // Which tab the room is currently looking at — fed purely from the same
   // room-shared `tabs_state` broadcast RoomTabs.svelte already derives its
   // own view from (see applyTabsState below). Never tracked as a second,
@@ -53,13 +69,6 @@
   let entriesByTab = {};
 
   $: entries = visibleEntries(entriesByTab, activeTabId);
-
-  // tabId -> full text (ticket 05), fed exclusively by tab_text broadcasts
-  // (see applyTabText below) — never copied or re-derived from RoomTabs'
-  // own tabTexts, the same "one shared broadcast, never two independently-
-  // tracked copies" discipline this component's own activeTabId already
-  // follows.
-  let tabTexts = {};
 
   // The Transcript's lines-so-far (ticket 01/05), fed exclusively by
   // transcript_state/transcript_line broadcasts — same discipline, its own
@@ -78,10 +87,6 @@
 
   export function applyTabsState(msg) {
     activeTabId = msg.activeTabId;
-  }
-
-  export function applyTabText(msg) {
-    tabTexts = reduceTabText(tabTexts, msg);
   }
 
   export function applyTranscriptState(msg) {

@@ -36,6 +36,13 @@
   let peers = []               // [{ clientId, name, recording, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
   let researchPanel = null     // ResearchPanel component instance
+  // tabId -> string — RoomTabs.svelte's own true, complete, current copy
+  // (both its own just-typed keystrokes and every peer's broadcast
+  // tab_text), two-way bound so ResearchPanel can read it directly instead
+  // of keeping a second, broadcast-only (and so incomplete for a solo
+  // participant) copy of its own. See RoomTabs.svelte's own comment on
+  // `export let tabTexts`.
+  let tabTexts = {}
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -763,17 +770,18 @@
         researchPanel?.applyTabsState?.(msg)
       }
       if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
-      if (msg.type === 'tab_text') {
-        roomTabs?.applyTabText?.(msg)
-        // ResearchPanel needs its own copy of tab text too (ticket 05, Quick
-        // Actions act on the active tab's whole text) — fed from this exact
-        // same tab_text broadcast RoomTabs derives its own tabTexts from,
-        // never re-derived or copied from RoomTabs' internal state, the
-        // same "one shared broadcast, never two independently-tracked
-        // copies" discipline tabs_state's dual-routing to researchPanel
-        // already follows for activeTabId.
-        researchPanel?.applyTabText?.(msg)
-      }
+      // ResearchPanel does NOT get a second, independent routing line here
+      // for tab_text (unlike tabs_state/transcript_state/transcript_line
+      // below) — it reads RoomTabs' own `tabTexts` directly via the
+      // `bind:tabTexts` prop plumbing instead. RoomTabs is the only place
+      // that holds the true, complete, current value for every tab (both
+      // its own just-typed keystrokes AND every peer's broadcast text) —
+      // the tab_text broadcast itself deliberately excludes the sender (so
+      // a typist's own textarea isn't clobbered by an echo of its own
+      // keystrokes), which is lossy for anyone re-deriving a second copy
+      // from it, exactly the case a solo participant typing their own
+      // notes would hit.
+      if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
       if (msg.type === 'transcript_state') {
         roomTabs?.applyTranscriptState?.(msg)
         // Same reasoning as tab_text above — a Quick Action run on the
@@ -957,6 +965,7 @@
     bind:researchCollapsed
     bind:roomTabs
     bind:researchPanel
+    bind:tabTexts
     bind:canvasEl={canvas}
     roomName={data.roomName}
     slug={data.slug}

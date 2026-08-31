@@ -12,6 +12,10 @@
   export let researchCollapsed = false;
   export let roomTabs = null;
   export let researchPanel = null;
+  // tabId -> string — RoomTabs.svelte's own true, complete, current copy,
+  // two-way bound so it can be handed to ResearchPanel as a plain prop
+  // (see RoomTabs.svelte's own comment on `export let tabTexts`).
+  export let tabTexts = {};
   export let canvasEl;
 
   export let roomName = "";
@@ -120,10 +124,10 @@
       </RoomPresenceTable>
     </div>
 
-    <RoomTabs {send} {clockOffset} bind:this={roomTabs} />
+    <RoomTabs {send} {clockOffset} bind:this={roomTabs} bind:tabTexts />
   </main>
 
-  <ResearchPanel {send} {slug} bind:collapsed={researchCollapsed} bind:this={researchPanel} />
+  <ResearchPanel {send} {slug} {tabTexts} bind:collapsed={researchCollapsed} bind:this={researchPanel} />
 </div>
 
 <style>

@@ -19,11 +19,17 @@ const notesTextarea = (page) =>
  * /rec/[slug]/research call (like helpers.js's mockResearchEndpoint) AND
  * records the exact JSON body sent each time, so a test can inspect what a
  * Quick Action actually sent instead of just how the UI reacted to it.
+ *
+ * `delayMs` mirrors research_panel.spec.js's own mockResearchEndpointDelayed
+ * — without it, a same-tick mocked response can resolve before a "pending"
+ * assertion even gets a chance to poll, so any test that checks the pending
+ * state passes one.
  */
-async function captureResearchRequests(page, { status = 200, body = { answer: 'Mocked answer.', citations: [] } } = {}) {
+async function captureResearchRequests(page, { status = 200, body = { answer: 'Mocked answer.', citations: [] }, delayMs = 0 } = {}) {
   const requests = []
   await page.route('**/rec/*/research', async (route) => {
     requests.push(route.request().postDataJSON())
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs))
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   })
   return requests
@@ -82,6 +88,7 @@ test('clicking a Quick Action creates a pending-then-answered entry using the ac
   await expect(host.getByRole('button', { name: 'Define' })).toBeEnabled({ timeout: 15_000 })
 
   const requests = await captureResearchRequests(host, {
+    delayMs: 300,
     body: { answer: 'Photosynthesis turns light into sugar.', citations: [{ url: 'https://example.com/photo', title: 'Photosynthesis' }] }
   })
 
@@ -160,6 +167,41 @@ test('a Quick Action never includes another tab\'s text, even after switching ta
 
   await guest.close()
   await host.close()
+})
+
+test('a solo participant (no guest, ever) can run a Quick Action on their own just-typed notes', async ({ page }) => {
+  // This is the scenario that was silently broken before ResearchPanel
+  // read RoomTabs' own `tabTexts` directly instead of keeping a second
+  // copy fed only by the tab_text broadcast: that broadcast deliberately
+  // excludes the sender's own connection (see ws-rooms.js), so with only
+  // one participant in the room ever, nothing would tell a second,
+  // independent listener what this browser itself just typed.
+  await stubYouTubeApi(page)
+  const password = 'quick-actions-solo'
+  await createRoom(page, { name: `E2E QuickActionsSolo ${Date.now()}`, password })
+
+  // No one else has ever joined this room.
+  for (const label of QUICK_ACTION_LABELS) {
+    await expect(page.getByRole('button', { name: label })).toBeDisabled()
+  }
+
+  const soloText = 'These are my own solo notes before any guest has joined.'
+  await notesTextarea(page).fill(soloText)
+
+  // The button must enable from this browser's OWN edit — no other peer,
+  // no broadcast round trip is possible here.
+  await expect(page.getByRole('button', { name: 'Define' })).toBeEnabled()
+
+  const requests = await captureResearchRequests(page, { delayMs: 300, body: { answer: 'A set of personal notes.', citations: [] } })
+  await page.getByRole('button', { name: 'Define' }).click()
+
+  await expect(page.locator('.research-entry[data-status="pending"]')).toBeVisible()
+  await expect(page.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.research-answer')).toHaveText('A set of personal notes.')
+
+  expect(requests).toEqual([{ kind: 'quickAction', actionId: 'define', text: soloText }])
+
+  await page.close()
 })
 
 test('a Quick Action works against the read-only Transcript tab\'s lines-so-far', async ({ page }) => {

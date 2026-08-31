@@ -57,16 +57,6 @@ export function buildManualAskRequest(question) {
   return { kind: 'voice', query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN), context: '', notes: '' }
 }
 
-/** Applies a `tab_text` broadcast into ResearchPanel's own tabId -> text
- *  copy (ticket 05) — fed from the exact same wire message RoomTabs.svelte's
- *  own `tabTexts` is fed from (see ResearchPanel.svelte), never copied or
- *  re-derived from RoomTabs' internal state, the same "one shared broadcast,
- *  never two independently-tracked copies" discipline `tabs_state`'s
- *  dual-routing to researchPanel already follows for `activeTabId`. */
-export function applyTabText(tabTexts, msg) {
-  return { ...tabTexts, [msg.tabId]: msg.text }
-}
-
 /** Applies a `transcript_state` replay (the full Transcript-so-far) into
  *  ResearchPanel's own copy of the transcript lines. */
 export function applyTranscriptState(transcriptLines, msg) {
@@ -87,9 +77,12 @@ function transcriptLinesToText(lines) {
 
 /**
  * The currently active tab's whole text to act on (ticket 05) — an ordinary
- * tab's own `tab_text`, or, for the reserved Transcript tab id, its
- * lines-so-far joined into one block of text. Never a selection, never
- * another tab's text (see CONTEXT.md's Quick Action entry).
+ * tab's own text (`tabTexts`, RoomTabs.svelte's own true, complete, current
+ * copy of every tab — deliberately NOT re-derived from the tab_text
+ * broadcast here, which excludes the sender and so would be blind to a
+ * solo participant's own just-typed notes), or, for the reserved Transcript
+ * tab id, its lines-so-far joined into one block of text. Never a
+ * selection, never another tab's text (see CONTEXT.md's Quick Action entry).
  */
 export function activeTabText(tabTexts, transcriptLines, activeTabId) {
   if (activeTabId === TRANSCRIPT_TAB_ID) return transcriptLinesToText(transcriptLines)

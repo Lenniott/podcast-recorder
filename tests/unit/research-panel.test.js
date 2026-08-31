@@ -5,7 +5,6 @@ import {
   visibleEntries,
   buildManualAskRequest,
   buildQuickActionRequest,
-  applyTabText,
   applyTranscriptState,
   applyTranscriptLine,
   activeTabText,
@@ -130,21 +129,6 @@ describe('buildQuickActionRequest', () => {
     const huge = 'x'.repeat(21000)
     const result = buildQuickActionRequest('analyze', huge)
     expect(result.text).toBe(huge.slice(0, 20000))
-  })
-})
-
-describe('applyTabText', () => {
-  it('sets a tab\'s full text under its own tabId, leaving other tabs untouched', () => {
-    const before = { tabB: 'other tab text' }
-    const after = applyTabText(before, { tabId: 'tabA', text: 'hello' })
-    expect(after).toEqual({ tabA: 'hello', tabB: 'other tab text' })
-  })
-
-  it('never mutates the tabTexts object passed in', () => {
-    const before = { tabA: 'old' }
-    const snapshot = { ...before }
-    applyTabText(before, { tabId: 'tabA', text: 'new' })
-    expect(before).toEqual(snapshot)
   })
 })
 
