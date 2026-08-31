@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { Plus } from "$lib/icons";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
+  import TranscriptTab from "./TranscriptTab.svelte";
   import {
     getNotesTextSize,
     setNotesTextSize,
@@ -30,6 +31,14 @@
   // into must already be up to date by the time you switch to it.
   let tabVideos = {}; // tabId -> {videoId,playing,positionSec,positionAtMs} | null
   let tabTexts = {}; // tabId -> string
+
+  // The Transcript is a sibling piece of room content, not an entry in
+  // `tabs` (see room-state-store.js and ADR-0002) — so which pill is
+  // "active" is tracked separately, per-browser, and never sent to the
+  // server (viewing it doesn't change what the room's other tabs consider
+  // active for anyone else).
+  let transcriptLines = []; // [{id, speaker, text, at}], server (append) order
+  let viewingTranscript = false;
 
   let videoPlayerRef = null; // the mounted TabVideoPlayer for activeTabId
 
@@ -89,6 +98,17 @@
     tabTexts = { ...tabTexts, [msg.tabId]: msg.text };
   }
 
+  export function applyTranscriptState(msg) {
+    transcriptLines = msg.lines;
+  }
+
+  export function applyTranscriptLine(msg) {
+    transcriptLines = [
+      ...transcriptLines,
+      { id: msg.id, speaker: msg.speaker, text: msg.text, at: msg.at },
+    ];
+  }
+
   export function applyDuck(msg) {
     roomTalking = !!msg.talking;
   }
@@ -123,8 +143,17 @@
   }
 
   function switchTab(tabId) {
+    viewingTranscript = false;
     if (tabId === activeTabId) return;
     send({ type: "tab_switch", tabId });
+  }
+
+  // Viewing the Transcript is a per-browser display choice, not room-shared
+  // state — it never goes over the wire (see room-state-store.js: the
+  // Transcript is sibling content, not an entry in tabs.list, so there is
+  // no tab id for it to "switch" to on the server).
+  function switchToTranscript() {
+    viewingTranscript = true;
   }
 
   function closeTab(tabId, event) {
@@ -190,6 +219,16 @@
         {/if}
       </div>
     {/each}
+    <div class="tab-pill transcript-pill" class:active={viewingTranscript}>
+      <button
+        type="button"
+        class="tab-title"
+        aria-label="Transcript"
+        on:click={switchToTranscript}
+      >
+        Transcript
+      </button>
+    </div>
     <button
       type="button"
       class="btn-ghost btn-icon"
@@ -200,7 +239,9 @@
   </div>
 
   <div class="tab-content">
-    {#if activeTabId}
+    {#if viewingTranscript}
+      <TranscriptTab lines={transcriptLines} />
+    {:else if activeTabId}
       <div class="shared-textarea">
         
         <div class="notes-toolbar-2">

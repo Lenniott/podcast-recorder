@@ -733,6 +733,8 @@
       if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
       if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
+      if (msg.type === 'transcript_state') roomTabs?.applyTranscriptState?.(msg)
+      if (msg.type === 'transcript_line')  roomTabs?.applyTranscriptLine?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
