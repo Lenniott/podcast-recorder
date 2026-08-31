@@ -76,6 +76,34 @@
  *                                          survive in a stable (arrival)
  *                                          order instead of one silently
  *                                          overwriting the other.
+ *   { type: 'research_ask', entryId, question }
+ *                                        — manual "ask a question" (ticket 04;
+ *                                          Quick Actions/Voice Trigger, tickets
+ *                                          05/06, will reuse this same message).
+ *                                          entryId is client-generated (like
+ *                                          tab_create's tabId) so the asking
+ *                                          browser can correlate its own later
+ *                                          research_resolve/research_error
+ *                                          without a round trip first. Filed
+ *                                          under the room's CURRENT active tab
+ *                                          (server-determined, never
+ *                                          client-supplied) — this is what
+ *                                          keeps an entry strictly scoped to
+ *                                          whichever Tab was active at ask time.
+ *   { type: 'research_resolve', entryId, answer, citations }
+ *                                        — sent by the asking client once its
+ *                                          own POST /rec/[slug]/research call
+ *                                          (ticket 02's endpoint) succeeds.
+ *                                          Moves that entry from pending to
+ *                                          answered for every peer.
+ *   { type: 'research_error', entryId, message }
+ *                                        — sent by the asking client when that
+ *                                          same request fails for any reason
+ *                                          (non-2xx, network error, timeout).
+ *                                          Moves the entry from pending to
+ *                                          errored with a visible `message` —
+ *                                          a pending entry must never be left
+ *                                          stuck with no explanation.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
@@ -147,6 +175,27 @@
  *                                          is the server's Date.now() when it was
  *                                          appended; `id` is stable for Svelte
  *                                          keying, never reused.
+ *   { type: 'research_entry',   tabId, entry }
+ *                                        — one research entry created or
+ *                                          updated (pending -> answered/
+ *                                          errored), broadcast to EVERY peer
+ *                                          including the sender — same
+ *                                          reasoning as transcript_line: no
+ *                                          local optimistic UI to protect,
+ *                                          the server is the single source of
+ *                                          truth for entry status. `entry` is
+ *                                          `{id, tabId, question, status,
+ *                                          answer, citations, error, at}`;
+ *                                          `status` is 'pending' | 'answered'
+ *                                          | 'errored'.
+ *   { type: 'research_state',   tabId, entries }
+ *                                        — one tab's full research history so
+ *                                          far, in order; sent once per tab
+ *                                          that has any entries, on join and
+ *                                          on tabs_sync (mirrors tab_video/
+ *                                          tab_text's own per-tab replay),
+ *                                          always BEFORE any live
+ *                                          research_entry for that connection.
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -166,8 +215,8 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 //         serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
 const rooms = new Map()
 
-// A room's tabs/text/video (the Transcript and Research Assistant entries
-// will join them later as sibling content — see ADR-0002 and tickets 01/04)
+// A room's tabs/text/video, Transcript (ticket 01), and per-tab Research
+// Assistant entries (ticket 04) — all sibling content kinds, see ADR-0002 —
 // live entirely behind this one small interface now: while >=1 participant
 // is connected content stays in RAM only; the moment the last one
 // disconnects, a grace timer (ROOM_STATE_GRACE_MS, default 10s — see
@@ -290,6 +339,7 @@ function replayTabsTo(ws, content) {
     }
   }
   replayTranscriptTo(ws, content)
+  replayResearchTo(ws, content)
 }
 
 // ── Transcript (append-only — see ADR-0002 and ticket 01) ─────────────────
@@ -297,6 +347,19 @@ function replayTabsTo(ws, content) {
 /** Replays a room's full transcript-so-far, in order, to one late joiner/resyncer. */
 function replayTranscriptTo(ws, content) {
   send(ws, { type: 'transcript_state', lines: content.transcript.lines })
+}
+
+// ── Research Assistant entries (per-tab, shared — see ADR-0002 and
+//    ticket 04) ─────────────────────────────────────────────────────────
+
+/** Replays every tab's accumulated research history, in order, to one late
+ *  joiner/resyncer — one message per tab that actually has entries (mirrors
+ *  tab_video/tab_text's own "only send what's there" per-tab replay). */
+function replayResearchTo(ws, content) {
+  for (const tabId of Object.keys(content.research)) {
+    const entries = content.research[tabId]
+    if (entries.length) send(ws, { type: 'research_state', tabId, entries })
+  }
 }
 
 /** For tests only — wipes all rooms so each test starts clean */
@@ -553,6 +616,44 @@ export function setupWss(wss) {
         // speakers (see ADR-0002).
         for (const p of room.values()) {
           send(p.ws, { type: 'transcript_line', ...result.line })
+        }
+      }
+
+      if (msg.type === 'research_ask' && clientId) {
+        // Filed under the room's CURRENT active tab — server-determined,
+        // never trusting a client-supplied tabId — so "creating an entry
+        // while Tab A is active only ever appears under Tab A" holds even
+        // if a hostile/buggy client tried to name a different tab.
+        const activeTabId = roomStateStore.getRoom(slug).tabs.activeTabId
+        const result = roomStateStore.addResearchEntry(slug, activeTabId, { id: msg.entryId, question: msg.question })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
+        }
+      }
+
+      if (msg.type === 'research_resolve' && clientId) {
+        const result = roomStateStore.resolveResearchEntry(slug, msg.entryId, { answer: msg.answer, citations: msg.citations })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
+        }
+      }
+
+      if (msg.type === 'research_error' && clientId) {
+        const result = roomStateStore.errorResearchEntry(slug, msg.entryId, { message: msg.message })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
         }
       }
 
