@@ -132,4 +132,13 @@ describe('createSpeechRecognition', () => {
     recognition.start()
     expect(() => RecognizerCtor.instances[0].onerror({ error: 'network' })).not.toThrow()
   })
+
+  it('defaults to looking for window.SpeechRecognition/webkitSpeechRecognition when no constructor is injected', () => {
+    // No `window` at all in this (node) test environment — the real-world
+    // "Firefox/Safari, or a Blink browser missing it" case ADR-0001/the
+    // Design requirements call out.
+    const recognition = createSpeechRecognition({ onResult: vi.fn() })
+
+    expect(recognition.supported).toBe(false)
+  })
 })

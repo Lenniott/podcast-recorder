@@ -26,6 +26,7 @@
   import { createWaveformRenderer } from '$lib/waveform-renderer.js'
   import { createAudioEngine } from '$lib/audio-engine.js'
   import { createLevelMeter } from '$lib/level-meter.js'
+  import { createTranscriptCapture } from '$lib/transcript-capture.js'
 
   export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
@@ -438,6 +439,19 @@
   // RECORDING
   // ───────────────────────────────────────────────────────────────────
 
+  // Voice Trigger capture (ticket 03; see $lib/transcript-capture.js and
+  // ADR-0003) — starts/stops exactly with our own local recording, no
+  // separate button, no separate consent step. `send` closes over `room`,
+  // defined further below (safe: never invoked before the component's
+  // synchronous setup — which assigns `room` — has finished running).
+  // Every failure path inside transcriptCapture is already swallowed by
+  // that module, so nothing here needs its own try/catch to protect
+  // startRecording/stopRecording's own critical sections.
+  const transcriptCapture = createTranscriptCapture({
+    send: (msg) => room.send(msg),
+    getSpeakerName: () => getJoinName()
+  })
+
   /**
    * Fires once per chunk, only after captureWriter has actually confirmed
    * it was written (see capture-writer.js's onWritten). Feeds the live
@@ -594,6 +608,10 @@
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
     startRecordingCheck()
+    // Last: purely additive, and transcriptCapture never throws (see its
+    // own doc comment) — placed after every write-path-critical step above
+    // has already completed.
+    transcriptCapture.start()
   }
 
   async function stopRecording() {
@@ -602,6 +620,10 @@
     clearInterval(recordingTimer)
     recordingStartedAtMs = null
     wsNotifyState('stopped')
+    // Fire-and-forget, never awaited: stopping recognition must never delay
+    // the local WAV finalize below (AGENTS.md's one hard rule). Never
+    // throws — see $lib/transcript-capture.js's doc comment.
+    transcriptCapture.stop()
 
     // Stopping via the regular Stop button while the listen-back check is
     // still up (not via its own "something's wrong" path) should still
@@ -887,6 +909,7 @@
     if (!browser) return
     sessionDestroyed = true
     waveformRenderer.stop()
+    transcriptCapture.stop()
     clearInterval(recordingTimer)
     clearTimeout(clapTimeout)
     levelMeter.close()

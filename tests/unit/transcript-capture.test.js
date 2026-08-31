@@ -120,4 +120,15 @@ describe('createTranscriptCapture', () => {
     expect(() => capture.start()).not.toThrow()
     expect(() => capture.stop()).not.toThrow()
   })
+
+  it('never sends for a finalized result that is empty or whitespace-only', () => {
+    const { createRecognition, fireResult } = createFakeRecognition()
+    const send = vi.fn()
+    const capture = createTranscriptCapture({ send, getSpeakerName: () => 'Host', createRecognition })
+
+    capture.start()
+    fireResult('   ', true)
+
+    expect(send).not.toHaveBeenCalled()
+  })
 })
