@@ -30,4 +30,68 @@ describe('detectResearchTrigger', () => {
     expect(detectResearchTrigger(undefined)).toBeNull()
     expect(detectResearchTrigger('')).toBeNull()
   })
+
+  it('recognizes "let\'s look this up" as a no-topic trigger', () => {
+    expect(detectResearchTrigger("let's look this up")).toEqual({ topic: null })
+  })
+
+  it('recognizes "look that up" as a no-topic trigger', () => {
+    expect(detectResearchTrigger('look that up')).toEqual({ topic: null })
+  })
+
+  it('recognizes "look this up" as a no-topic trigger', () => {
+    expect(detectResearchTrigger('look this up')).toEqual({ topic: null })
+  })
+
+  it('recognizes "let\'s google that" as a no-topic trigger', () => {
+    expect(detectResearchTrigger("let's google that")).toEqual({ topic: null })
+  })
+
+  it('recognizes "let\'s google this" as a no-topic trigger', () => {
+    expect(detectResearchTrigger("let's google this")).toEqual({ topic: null })
+  })
+
+  it('recognizes "google that" as a no-topic trigger', () => {
+    expect(detectResearchTrigger('google that')).toEqual({ topic: null })
+  })
+
+  it('recognizes "google this" as a no-topic trigger', () => {
+    expect(detectResearchTrigger('google this')).toEqual({ topic: null })
+  })
+
+  it('recognizes "let\'s search that" as a no-topic trigger', () => {
+    expect(detectResearchTrigger("let's search that")).toEqual({ topic: null })
+  })
+
+  it('recognizes "search for that" as a no-topic trigger', () => {
+    expect(detectResearchTrigger('search for that')).toEqual({ topic: null })
+  })
+
+  it('extracts the topic following bare "look up"', () => {
+    expect(detectResearchTrigger('look up the Monroe Doctrine')).toEqual({ topic: 'the Monroe Doctrine' })
+  })
+
+  it('extracts the topic following "let\'s search for"', () => {
+    expect(detectResearchTrigger("let's search for the Monroe Doctrine")).toEqual({ topic: 'the Monroe Doctrine' })
+  })
+
+  it('resolves "let\'s search for that" as the no-topic idiom, not a topic-taking match with topic "that"', () => {
+    expect(detectResearchTrigger("let's search for that")).toEqual({ topic: null })
+  })
+
+  it('extracts the topic following "can you look up"', () => {
+    expect(detectResearchTrigger('can you look up the Monroe Doctrine')).toEqual({ topic: 'the Monroe Doctrine' })
+  })
+
+  it('extracts the topic following "can we look up"', () => {
+    expect(detectResearchTrigger('can we look up the Monroe Doctrine')).toEqual({ topic: 'the Monroe Doctrine' })
+  })
+
+  it('extracts the topic following "what\'s the definition of"', () => {
+    expect(detectResearchTrigger("what's the definition of federalism")).toEqual({ topic: 'federalism' })
+  })
+
+  it('extracts the topic following "what is the definition of"', () => {
+    expect(detectResearchTrigger('what is the definition of federalism')).toEqual({ topic: 'federalism' })
+  })
 })
