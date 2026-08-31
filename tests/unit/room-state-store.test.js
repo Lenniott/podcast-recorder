@@ -115,6 +115,18 @@ describe('createRoomStateStore — getRoom', () => {
     expect(() => clock.fire(1)).not.toThrow()
     expect(store.getRoom('room1').tabs.list.map((t) => t.id)).toContain('t2')
   })
+
+  it('backfills an empty transcript for content hydrated from durable storage saved before the Transcript existed', () => {
+    const legacyDurable = {
+      save: vi.fn(),
+      // A room saved by a pre-ticket-01 build — tabs/text/video only, no `transcript` key at all.
+      load: vi.fn(() => ({ tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: '' }], activeTabId: 't1' } }))
+    }
+    const store = createRoomStateStore({ durable: legacyDurable })
+    const room = store.getRoom('room1')
+    expect(room.transcript.lines).toEqual([])
+    expect(() => store.appendTranscriptLine('room1', { speaker: 'Host', text: 'hi' })).not.toThrow()
+  })
 })
 
 describe('createRoomStateStore — createTab', () => {
@@ -276,6 +288,84 @@ describe('createRoomStateStore — setTabText', () => {
     const tabId = store.getRoom('room1').tabs.list[0].id
     store.setTabText('room1', tabId, null)
     expect(store.getRoom('room1').tabs.list[0].text).toBe('')
+  })
+})
+
+describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
+  it('a brand-new room starts with an empty transcript', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const room = store.getRoom('room1')
+    expect(room.transcript.lines).toEqual([])
+  })
+
+  it('appends a speaker-labeled line and returns it alongside the updated room', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const result = store.appendTranscriptLine('room1', { speaker: 'Host', text: 'Welcome to the show.' })
+    expect(result.ok).toBe(true)
+    expect(result.line).toMatchObject({ speaker: 'Host', text: 'Welcome to the show.' })
+    expect(result.room.transcript.lines).toEqual([result.line])
+    expect(store.getRoom('room1').transcript.lines).toEqual([result.line])
+  })
+
+  it('two near-simultaneous appends from different speakers both land, in a stable order, nothing dropped', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const first = store.appendTranscriptLine('room1', { speaker: 'Host', text: 'What do you think about that?' })
+    const second = store.appendTranscriptLine('room1', { speaker: 'Guest', text: 'I think it is fascinating.' })
+    const lines = store.getRoom('room1').transcript.lines
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toEqual(first.line)
+    expect(lines[1]).toEqual(second.line)
+  })
+
+  it('rejects a line with no text, leaving the transcript unchanged', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const result = store.appendTranscriptLine('room1', { speaker: 'Host', text: '   ' })
+    expect(result).toEqual({ ok: false, error: 'A transcript line needs both a speaker and text' })
+    expect(store.getRoom('room1').transcript.lines).toEqual([])
+  })
+
+  it('rejects a line with no speaker, leaving the transcript unchanged', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const result = store.appendTranscriptLine('room1', { speaker: '', text: 'Hello' })
+    expect(result).toEqual({ ok: false, error: 'A transcript line needs both a speaker and text' })
+    expect(store.getRoom('room1').transcript.lines).toEqual([])
+  })
+
+  it('truncates an over-long speaker/text rather than rejecting it', async () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN } = await import('../../src/lib/transcript-sync.js')
+    const result = store.appendTranscriptLine('room1', {
+      speaker: 'x'.repeat(MAX_TRANSCRIPT_SPEAKER_LEN + 20),
+      text: 'y'.repeat(MAX_TRANSCRIPT_LINE_LEN + 500)
+    })
+    expect(result.line.speaker).toHaveLength(MAX_TRANSCRIPT_SPEAKER_LEN)
+    expect(result.line.text).toHaveLength(MAX_TRANSCRIPT_LINE_LEN)
+  })
+
+  it('refuses to close or hand-edit the reserved Transcript tab id — it is not a real tab to begin with', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.getRoom('room1') // hydrate
+
+    expect(store.closeTab('room1', TRANSCRIPT_TAB_ID)).toEqual({ ok: false, error: 'Unknown tab' })
+    expect(store.setTabText('room1', TRANSCRIPT_TAB_ID, 'hand-typed')).toEqual({ ok: false, error: 'Unknown tab' })
+    // No ordinary tab was affected by either attempt.
+    expect(store.getRoom('room1').tabs.list).toHaveLength(1)
+  })
+
+  it('survives a flush-and-evict/rehydrate cycle exactly like tabs/text/video already do', () => {
+    const durable = fakeDurable()
+    const clock = fakeClock()
+    const store = createRoomStateStore({ durable, ...clock, graceMs: 10_000 })
+
+    store.onParticipantJoined('room1')
+    store.appendTranscriptLine('room1', { speaker: 'Host', text: 'First line.' })
+    store.appendTranscriptLine('room1', { speaker: 'Guest', text: 'Second line.' })
+    store.onParticipantLeft('room1')
+    clock.fire(1) // grace elapses, nobody reconnects — flush + evict
+
+    const restored = store.onParticipantJoined('room1')
+    expect(restored.transcript.lines.map((l) => l.text)).toEqual(['First line.', 'Second line.'])
   })
 })
 

@@ -17,6 +17,7 @@
  */
 
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
+import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN } from '../transcript-sync.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -54,7 +55,14 @@ function createDefaultRoomContent() {
     tabs: {
       list: [{ id, title: nextTabTitle([]), video: null, text: '' }],
       activeTabId: id
-    }
+    },
+    // Sibling content, not an entry in tabs.list — the Transcript is never
+    // an ordinary Tab a client can create/switch/close/rename (see
+    // ADR-0002 and ticket 01). Its own permanent, uncloseable presence in
+    // the room's UI tab strip is a client-side concern (RoomTabs.svelte
+    // always renders one, alongside whatever real tabs.list holds); here
+    // it's just the append-only line log every room always has.
+    transcript: { lines: [] }
   }
 }
 
@@ -146,6 +154,12 @@ export function createRoomStateStore({
       loaded = null
     }
     content = loaded || createDefaultRoomContent()
+    // Content saved by a build that predates a given content kind (e.g. the
+    // Transcript, ticket 01) won't have that key at all — backfill it here,
+    // once, on hydration, rather than every call site defending against a
+    // missing kind. This is the extension point ticket 00 promised: a new
+    // content kind slots in without changing getRoom's shape or callers.
+    if (!content.transcript) content.transcript = { lines: [] }
     hot.set(slug, content)
     return content
   }
@@ -221,6 +235,28 @@ export function createRoomStateStore({
     })
   }
 
+  function makeTranscriptLineId() {
+    return 'line-' + Math.random().toString(36).slice(2, 10)
+  }
+
+  function appendTranscriptLine(slug, { speaker, text } = {}) {
+    return withRoom(slug, (content) => {
+      const cleanSpeaker = String(speaker || '').trim().slice(0, MAX_TRANSCRIPT_SPEAKER_LEN)
+      const cleanText = String(text || '').trim().slice(0, MAX_TRANSCRIPT_LINE_LEN)
+      if (!cleanSpeaker || !cleanText) {
+        return { ok: false, error: 'A transcript line needs both a speaker and text' }
+      }
+
+      const line = { id: makeTranscriptLineId(), speaker: cleanSpeaker, text: cleanText, at: Date.now() }
+      // Append-only: this is the ONLY place a room's transcript is ever
+      // mutated. It always pushes; it never reorders or replaces an
+      // existing line (see ADR-0002 — that's the whole reason the
+      // Transcript can't reuse tab_text's last-write-wins mechanism).
+      content.transcript.lines.push(line)
+      return { ok: true, room: content, line }
+    })
+  }
+
   function setTabText(slug, tabId, text) {
     return withRoom(slug, (content) => {
       const tab = findTab(content, String(tabId || ''))
@@ -248,6 +284,7 @@ export function createRoomStateStore({
     closeTab,
     setTabVideo,
     setTabText,
+    appendTranscriptLine,
     _resetForTests
   }
 }
