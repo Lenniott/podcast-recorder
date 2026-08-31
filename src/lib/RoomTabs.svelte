@@ -3,6 +3,7 @@
   import { Plus } from "$lib/icons";
   import TabVideoPlayer from "./TabVideoPlayer.svelte";
   import TranscriptTab from "./TranscriptTab.svelte";
+  import { TRANSCRIPT_TAB_ID } from "./transcript-sync.js";
   import {
     getNotesTextSize,
     setNotesTextSize,
@@ -33,12 +34,15 @@
   let tabTexts = {}; // tabId -> string
 
   // The Transcript is a sibling piece of room content, not an entry in
-  // `tabs` (see room-state-store.js and ADR-0002) — so which pill is
-  // "active" is tracked separately, per-browser, and never sent to the
-  // server (viewing it doesn't change what the room's other tabs consider
-  // active for anyone else).
+  // `tabs` (see room-state-store.js and ADR-0002) — but "which pill the
+  // room is looking at" is still one room-shared value: activeTabId can
+  // hold either a real tab's id or the reserved TRANSCRIPT_TAB_ID, and
+  // switching to either is broadcast to every peer via the same tab_switch/
+  // tabs_state round trip (see room-state-store.js's switchTab). So
+  // whether we're showing the Transcript is *derived* from activeTabId,
+  // never tracked as separate local-only state.
   let transcriptLines = []; // [{id, speaker, text, at}], server (append) order
-  let viewingTranscript = false;
+  $: viewingTranscript = activeTabId === TRANSCRIPT_TAB_ID;
 
   let videoPlayerRef = null; // the mounted TabVideoPlayer for activeTabId
 
@@ -119,7 +123,7 @@
   }
 
   function pushActiveVideoToPlayer() {
-    if (!videoPlayerRef || !activeTabId) return;
+    if (!videoPlayerRef || !activeTabId || viewingTranscript) return;
     const v = tabVideos[activeTabId];
     videoPlayerRef.applyState(
       v
@@ -142,18 +146,18 @@
     send({ type: "tab_create", tabId: makeTabId() });
   }
 
+  // Handles switching to a real tab OR to the Transcript — both go over the
+  // wire as the same 'tab_switch' message (room-state-store.js's switchTab
+  // accepts the reserved TRANSCRIPT_TAB_ID as a valid destination), so
+  // "which pill the room is looking at" is one shared value, broadcast to
+  // every peer exactly like switching to any real tab already was.
   function switchTab(tabId) {
-    viewingTranscript = false;
     if (tabId === activeTabId) return;
     send({ type: "tab_switch", tabId });
   }
 
-  // Viewing the Transcript is a per-browser display choice, not room-shared
-  // state — it never goes over the wire (see room-state-store.js: the
-  // Transcript is sibling content, not an entry in tabs.list, so there is
-  // no tab id for it to "switch" to on the server).
   function switchToTranscript() {
-    viewingTranscript = true;
+    switchTab(TRANSCRIPT_TAB_ID);
   }
 
   function closeTab(tabId, event) {

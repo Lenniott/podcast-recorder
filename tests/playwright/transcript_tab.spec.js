@@ -93,3 +93,39 @@ test('Transcript tab: permanent, uncloseable, read-only, and shared in order bet
   await host.close()
   await guestContext.close()
 })
+
+test('a guest switching to the Transcript is visible to the host too, and switching back is also shared', async ({ browser }) => {
+  // Mirrors guest_adds_tab.spec.js's pattern for proving a structural
+  // change is room-shared, applied to "which pill the room is looking at"
+  // now that the Transcript is a valid tab_switch destination too (see
+  // room-state-store.js's switchTab and ws-tabs.test.js's
+  // "tab_switch to the Transcript" suite).
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'transcript-shared-switch'
+  const roomUrl = await createRoom(host, { name: `E2E TranscriptSwitch ${Date.now()}`, password })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+
+  await guest.getByRole('button', { name: 'Transcript' }).click()
+
+  await expect(guest.locator('.tab-pill.transcript-pill.active')).toBeVisible()
+  // Neither browser sent anything after the guest's click — the host must
+  // see the switch purely from the server's broadcast, exactly like any
+  // other tab_switch already works.
+  await expect(host.locator('.tab-pill.transcript-pill.active')).toBeVisible({ timeout: 15_000 })
+  await expect(
+    host.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })
+  ).toBeHidden()
+
+  // Switching back to a real tab is shared the same way.
+  await guest.getByRole('button', { name: 'Tab 1', exact: true }).click()
+  await expect(guest.locator('.tab-pill.active')).toContainText('Tab 1')
+  await expect(host.locator('.tab-pill.active')).toContainText('Tab 1', { timeout: 15_000 })
+  await expect(host.locator('.tab-pill.transcript-pill')).not.toHaveClass(/active/)
+
+  await guest.close()
+  await host.close()
+})

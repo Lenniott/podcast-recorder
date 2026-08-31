@@ -34,8 +34,23 @@
  *   { type: 'tab_create', tabId, title? }
  *                                        — client-generated tabId (like clientId);
  *                                          host and guest are equally allowed
- *   { type: 'tab_switch', tabId }        — changes the room's shared active tab
- *   { type: 'tab_close',  tabId }        — refused if it's the only tab left
+ *   { type: 'tab_switch', tabId }        — changes the room's shared active tab.
+ *                                          tabId also accepts the reserved
+ *                                          Transcript id (transcript-sync.js's
+ *                                          TRANSCRIPT_TAB_ID) as a valid
+ *                                          destination — "which pill the room
+ *                                          is looking at" is one shared piece
+ *                                          of state, broadcast to every peer
+ *                                          the same way switching to any real
+ *                                          tab already is, even though the
+ *                                          Transcript is never itself an
+ *                                          entry in tabs.list (see ADR-0002).
+ *   { type: 'tab_close',  tabId }        — refused if it's the only tab left,
+ *                                          and always refused for the reserved
+ *                                          Transcript id (it is never in
+ *                                          tabs.list to begin with — "cannot
+ *                                          be closed" is structural, not a
+ *                                          special-cased check)
  *   { type: 'tab_video',  tabId, action, videoId, playing, positionSec }
  *                                        — action: 'load' | 'clear' | 'control';
  *                                          full desired video state for that tab;
@@ -82,7 +97,15 @@
  *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'tabs_state',      tabs: [{id, title}], activeTabId }
  *                                        — structural changes (create/switch/close)
- *                                          and replayed in full to late joiners
+ *                                          and replayed in full to late joiners.
+ *                                          `tabs` never includes the Transcript
+ *                                          (it is sibling content, not a tab —
+ *                                          see room-state-store.js), but
+ *                                          `activeTabId` CAN be the reserved
+ *                                          Transcript id when the room is
+ *                                          currently looking at it — that's
+ *                                          still one shared value for
+ *                                          everyone, exactly like any real tab.
  *   { type: 'tab_video',       tabId, videoId, playing, positionSec,
  *                              positionAtMs, triggerAtMs }
  *                                        — broadcast on command, replayed per-tab

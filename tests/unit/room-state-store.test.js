@@ -353,6 +353,21 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
     expect(store.getRoom('room1').tabs.list).toHaveLength(1)
   })
 
+  it('switchTab accepts the reserved Transcript id as a valid destination — "who the room is looking at" is genuinely shared', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const firstTabId = store.getRoom('room1').tabs.list[0].id
+
+    const toTranscript = store.switchTab('room1', TRANSCRIPT_TAB_ID)
+    expect(toTranscript).toEqual({ ok: true, room: expect.anything() })
+    expect(store.getRoom('room1').tabs.activeTabId).toBe(TRANSCRIPT_TAB_ID)
+
+    // And switching back to a real tab works exactly as before.
+    const backToReal = store.switchTab('room1', firstTabId)
+    expect(backToReal).toEqual({ ok: true, room: expect.anything() })
+    expect(store.getRoom('room1').tabs.activeTabId).toBe(firstTabId)
+  })
+
   it('survives a flush-and-evict/rehydrate cycle exactly like tabs/text/video already do', () => {
     const durable = fakeDurable()
     const clock = fakeClock()

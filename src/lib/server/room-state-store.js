@@ -17,7 +17,7 @@
  */
 
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
-import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN } from '../transcript-sync.js'
+import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../transcript-sync.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -200,7 +200,18 @@ export function createRoomStateStore({
   function switchTab(slug, tabId) {
     return withRoom(slug, (content) => {
       const id = String(tabId || '')
-      if (findTabIndex(content, id) === -1) return { ok: false, error: 'Unknown tab' }
+      // The one exception to "must be a real entry in tabs.list": the
+      // reserved Transcript id is a valid *destination* to switch the
+      // room's shared view to, even though (by design — see ADR-0002 and
+      // createDefaultRoomContent) it is never itself an entry in
+      // tabs.list. This is what makes "which pill the room is looking at"
+      // genuinely room-shared for the Transcript too, broadcast the same
+      // way switching to any real tab already is — not a second,
+      // per-browser-only mechanism. closeTab/setTabText below still find
+      // nothing at this id and refuse it exactly as before.
+      if (id !== TRANSCRIPT_TAB_ID && findTabIndex(content, id) === -1) {
+        return { ok: false, error: 'Unknown tab' }
+      }
       content.tabs.activeTabId = id
       return { ok: true, room: content }
     })
