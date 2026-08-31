@@ -43,6 +43,20 @@ function getDb() {
     }
   }
 
+  // Durable backing for the Room State Store (see room-state-store.js): a
+  // room's tabs/text/video (and, later, transcript/research-assistant
+  // content) once it's evicted from RAM after its grace period. One row
+  // per room, the whole content blob as JSON — the shape is owned by the
+  // Room State Store, not by this table, so it can grow new named pieces
+  // of content without a migration here.
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS room_content (
+      slug       TEXT PRIMARY KEY,
+      content    TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+
   return _db
 }
 
@@ -77,7 +91,25 @@ export function roomExists(slug) {
 
 export function deleteRoom(slug) {
   removeServerCopiesForRoom(slug)
+  deleteRoomContent(slug)
   return getDb().prepare('DELETE FROM rooms WHERE slug = ?').run(slug).changes
+}
+
+/** Durable adapter for the Room State Store — see room-state-store.js. */
+export function saveRoomContent(slug, content) {
+  getDb().prepare(`
+    INSERT INTO room_content (slug, content, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(slug) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
+  `).run(slug, JSON.stringify(content), Date.now())
+}
+
+export function loadRoomContent(slug) {
+  const row = getDb().prepare('SELECT content FROM room_content WHERE slug = ?').get(slug)
+  return row ? JSON.parse(row.content) : null
+}
+
+export function deleteRoomContent(slug) {
+  return getDb().prepare('DELETE FROM room_content WHERE slug = ?').run(slug).changes
 }
 
 export function cleanupExpiredRooms({ now = Date.now() } = {}) {
