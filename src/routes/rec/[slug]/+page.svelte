@@ -34,6 +34,7 @@
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
+  let researchPanel = null     // ResearchPanel component instance
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -192,6 +193,7 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
+  let researchCollapsed = false // ditto, for the right-hand Research Assistant panel
   // The clientId-owning capability token (ticket 11), captured off the
   // WS-exclusive 'server_copy_token' reply to our own 'join' — never
   // broadcast, so this is the only place it ever arrives. May still be
@@ -730,11 +732,20 @@
         if (!audioEngineReady) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
-      if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
+      if (msg.type === 'tabs_state') {
+        roomTabs?.applyTabsState?.(msg)
+        // ResearchPanel only needs to know which tab is active (to scope
+        // which tab's history it shows) — fed from this same broadcast
+        // RoomTabs derives its own activeTabId from, never a second,
+        // independently-tracked copy that could drift from it.
+        researchPanel?.applyTabsState?.(msg)
+      }
       if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
       if (msg.type === 'transcript_state') roomTabs?.applyTranscriptState?.(msg)
       if (msg.type === 'transcript_line')  roomTabs?.applyTranscriptLine?.(msg)
+      if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
+      if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
@@ -902,7 +913,9 @@
 {:else}
   <RecordingRoom
     bind:sidebarCollapsed
+    bind:researchCollapsed
     bind:roomTabs
+    bind:researchPanel
     bind:canvasEl={canvas}
     roomName={data.roomName}
     slug={data.slug}

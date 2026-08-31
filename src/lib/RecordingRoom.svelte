@@ -1,11 +1,17 @@
 <script>
   import RoomSidebar from "$lib/RoomSidebar.svelte";
   import RoomTabs from "$lib/RoomTabs.svelte";
+  import ResearchPanel from "$lib/ResearchPanel.svelte";
   import RoomPresenceTable from "$lib/RoomPresenceTable.svelte";
   import ThemeToggle from "$lib/ThemeToggle.svelte";
 
   export let sidebarCollapsed = false;
+  // Independent of sidebarCollapsed — mirrors RoomSidebar's own local
+  // collapse toggle, but for the right-hand Research Assistant panel (see
+  // ResearchPanel.svelte). Never synced to the room.
+  export let researchCollapsed = false;
   export let roomTabs = null;
+  export let researchPanel = null;
   export let canvasEl;
 
   export let roomName = "";
@@ -55,7 +61,12 @@
   }
 </script>
 
-<div class="room" class:sidebar-collapsed={sidebarCollapsed} use:roomChrome>
+<div
+  class="room"
+  class:sidebar-collapsed={sidebarCollapsed}
+  class:research-collapsed={researchCollapsed}
+  use:roomChrome
+>
   <RoomSidebar
     bind:collapsed={sidebarCollapsed}
     {roomName}
@@ -111,20 +122,30 @@
 
     <RoomTabs {send} {clockOffset} bind:this={roomTabs} />
   </main>
+
+  <ResearchPanel {send} {slug} bind:collapsed={researchCollapsed} bind:this={researchPanel} />
 </div>
 
 <style>
   .room {
     height: 100vh;
     display: grid;
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 240px 1fr 280px;
     gap: 0px;
     margin: 0 auto;
     overflow: hidden;
   }
 
   .room.sidebar-collapsed {
-    grid-template-columns: 72px 1fr;
+    grid-template-columns: 72px 1fr 280px;
+  }
+
+  .room.research-collapsed {
+    grid-template-columns: 240px 1fr 72px;
+  }
+
+  .room.sidebar-collapsed.research-collapsed {
+    grid-template-columns: 72px 1fr 72px;
   }
 
   .room-main {
@@ -146,9 +167,11 @@
 
   @media (max-width: 720px) {
     .room,
-    .room.sidebar-collapsed {
+    .room.sidebar-collapsed,
+    .room.research-collapsed,
+    .room.sidebar-collapsed.research-collapsed {
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto 1fr auto;
     }
   }
 </style>
