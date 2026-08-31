@@ -10,22 +10,25 @@ existing `tabs_sync` replay already uses for tab text/video. The tab
 renders as a distinct, read-only view (no editable textarea, can't be
 closed, can't be renamed).
 
-While touching this state, also close a pre-existing gap: when a room's DB
-row is deleted by the existing expired-room-cleanup job, the matching
-in-memory room state (tabs, text, video, and now the transcript) should be
-dropped too, instead of living in the server process's memory forever.
+The transcript is one of the room content kinds the Room State Store
+(ticket 00) now owns the lifecycle of — it lives in memory while the room
+is occupied, and is flushed to durable storage and evicted 10 seconds
+after the last participant leaves, the same as tabs/text/video. This
+ticket adds the transcript as a new content kind on that Store rather than
+inventing a second, parallel storage mechanism.
 
-**Blocked by:** None — can start immediately
+**Blocked by:** 00
 
 **Status:** ready-for-agent
 
-Read first: `CONTEXT.md` (Transcript Tab, Turn, Research Assistant) and
+Read first: `CONTEXT.md` (Transcript Tab, Turn, Research Assistant),
 `docs/adr/0002-transcript-tab-append-only-shared-state.md` — the
 append-only requirement and the "why not just reuse `tab_text`" reasoning
-are both there, and explain why a last-write-wins approach was rejected.
-This ticket does not include capturing real speech (that's ticket 03) —
-verify this end-to-end with whatever mechanism is natural for sending a
-"new transcript line" message, no microphone required.
+are both there, and explain why a last-write-wins approach was rejected —
+and ticket 00's brief for the Store interface this builds on. This ticket
+does not include capturing real speech (that's ticket 03) — verify this
+end-to-end with whatever mechanism is natural for sending a "new
+transcript line" message, no microphone required.
 
 - [ ] A room's tab list always includes exactly one Transcript tab,
       distinguishable from ordinary tabs, present from the moment the room
@@ -45,15 +48,11 @@ verify this end-to-end with whatever mechanism is natural for sending a
       this is exactly the race today's `tab_text` last-write-wins
       mechanism would fail.
 - [ ] The Transcript tab's content cannot be edited by hand from the UI.
-- [ ] When the expired-room-cleanup job deletes a room's DB row, the
-      corresponding in-memory room state for that slug (tabs, text, video,
-      transcript) is also dropped — verify this doesn't regress the
-      current, intentional behavior of tab/notes state surviving a
-      *temporary* all-peers-disconnected gap for a room that is not yet
-      expired.
-- [ ] Unit/integration test coverage for the append/broadcast/replay logic
-      and the expiry-driven cleanup, following this repo's existing test
-      conventions (see `tests/unit/tab-sync.test.js` and
-      `tests/unit/room-connection.test.js` for the client/server split
-      already in place, and `tests/unit/expired-room-cleanup.test.js` for
-      the cleanup job's existing test shape).
+- [ ] A transcript that was flushed to disk and evicted (per ticket 00's
+      10-second grace window) comes back in full, in order, when the room
+      is next joined — indistinguishable from a transcript that was never
+      evicted.
+- [ ] Unit/integration test coverage for the append/broadcast/replay
+      logic, following this repo's existing test conventions (see
+      `tests/unit/tab-sync.test.js` and `tests/unit/room-connection.test.js`
+      for the client/server split already in place).

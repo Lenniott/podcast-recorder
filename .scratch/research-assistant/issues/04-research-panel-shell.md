@@ -7,12 +7,17 @@ answered or errored) — switching the room's active tab switches which
 history is visible. A manual "ask a question" box is the one way to create
 an entry in this ticket (Quick Actions and Voice Trigger, tickets 05/06,
 reuse this same mechanism). An entry created by any participant is
-broadcast to every other participant and stored the same way ticket 01's
-transcript is (in-memory, per room, replayed to a (re)joining participant)
-— see `docs/adr/0002-transcript-tab-append-only-shared-state.md`'s note
-that Research Assistant results are shared the same way as the transcript.
+broadcast to every other participant and stored as a new content kind on
+the Room State Store (ticket 00) — the same lifecycle as tabs/text/video
+and ticket 01's transcript: in memory while the room is occupied, flushed
+to durable storage and evicted 10 seconds after the last participant
+leaves, restored on the next join. See
+`docs/adr/0002-transcript-tab-append-only-shared-state.md`'s note that
+Research Assistant results are shared the same way as the transcript, and
+ticket 00's brief for why this Store was built to take a new content kind
+like this without changing its interface.
 
-**Blocked by:** 02
+**Blocked by:** 02, 00
 
 **Status:** ready-for-agent
 
@@ -31,7 +36,9 @@ that Research Assistant results are shared the same way as the transcript.
       (possibly empty) history, never Tab A's entries.
 - [ ] A participant who (re)joins the room, or requests a resync, receives
       each tab's accumulated research history, the same way they already
-      receive tab text/video and (ticket 01's) transcript.
+      receive tab text/video and (ticket 01's) transcript — including
+      after the room was flushed to disk and evicted per ticket 00's
+      10-second grace window, not just across a live reconnect.
 - [ ] The manual ask box works regardless of whether anyone is currently
       recording — it sends only typed text, not live audio, so it's
       unaffected by the recording-based consent rule
