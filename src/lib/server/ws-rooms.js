@@ -95,7 +95,7 @@
 
 import { getActiveRoomBySlug, saveRoomContent, loadRoomContent } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
-import { createRoomStateStore } from './room-state-store.js'
+import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -112,8 +112,9 @@ const rooms = new Map()
 // will join them later as sibling content — see ADR-0002 and tickets 01/04)
 // live entirely behind this one small interface now: while >=1 participant
 // is connected content stays in RAM only; the moment the last one
-// disconnects, a 10s grace timer decides whether to flush it to the
-// `room_content` table (extended in db.js) and evict it, or — on a
+// disconnects, a grace timer (ROOM_STATE_GRACE_MS, default 10s — see
+// room-state-store.js's getRoomStateGraceMs) decides whether to flush it to
+// the `room_content` table (extended in db.js) and evict it, or — on a
 // reconnect — keep running hot exactly as before. No handler below reaches
 // into a raw Map or DB row for this content directly. See
 // room-state-store.js for the full contract.
@@ -122,7 +123,8 @@ const roomStateStore = createRoomStateStore({
   durable: {
     save: (slug, content) => saveRoomContent(slug, content),
     load: (slug) => loadRoomContent(slug)
-  }
+  },
+  graceMs: getRoomStateGraceMs()
 })
 
 function send(ws, msg) {

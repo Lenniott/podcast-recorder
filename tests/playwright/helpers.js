@@ -248,6 +248,25 @@ export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
   await expect(page.getByRole('button', { name: /Play|Pause/ })).toBeVisible()
 }
 
+/**
+ * Fakes the browser's own POST /rec/[slug]/research call for whichever
+ * page this is installed on — for Research Assistant UI specs (tickets
+ * 04-06) to test how the panel renders a given outcome without a real
+ * (paid) OpenRouter call. Covers the codes that depend on controlling what
+ * OpenRouter itself would have said (200 success, 502 upstream error, 504
+ * timeout) — the codes reachable for real without a key (401/410/400/500
+ * "not configured") are instead tested directly against the real route in
+ * research_endpoint_status.spec.js, no mocking needed for those.
+ *
+ * Must be installed before whatever action triggers the request (a Quick
+ * Action click, a manual ask submit, a Voice Trigger firing).
+ */
+export async function mockResearchEndpoint(page, { status = 200, body = { answer: 'Mocked answer.', citations: [] } } = {}) {
+  await page.route('**/rec/*/research', (route) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+  )
+}
+
 export async function expandPresenceTable(page) {
   const overlay = page.locator('.check-overlay')
   if (await overlay.isVisible()) {
@@ -270,7 +289,7 @@ export function presenceRow(page, name) {
  * responding (the two are separate processes) — the room's own 3s
  * auto-reconnect needs a couple of cycles to land in that window.
  */
-async function roomTabsReady(page) {
+export async function roomTabsReady(page) {
   // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
   // tab_state WS message is applied) rather than the shared textarea's
   // rendered visibility — the textarea can be attached-but-not-yet-laid-out

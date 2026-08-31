@@ -10,8 +10,10 @@ reuse this same mechanism). An entry created by any participant is
 broadcast to every other participant and stored as a new content kind on
 the Room State Store (ticket 00) — the same lifecycle as tabs/text/video
 and ticket 01's transcript: in memory while the room is occupied, flushed
-to durable storage and evicted 10 seconds after the last participant
-leaves, restored on the next join. See
+to durable storage and evicted after the last participant leaves (the
+grace period is env-configurable — `ROOM_STATE_GRACE_MS`, default 10s;
+the e2e suite runs it at 200ms, see `playwright.config.js`), restored on
+the next join. See
 `docs/adr/0002-transcript-tab-append-only-shared-state.md`'s note that
 Research Assistant results are shared the same way as the transcript, and
 ticket 00's brief for why this Store was built to take a new content kind
@@ -53,3 +55,16 @@ like this without changing its interface.
       component, the same way `$lib/exit-guard.js` or
       `$lib/server-copy-status.js` keep decision logic separate from the
       `.svelte` files that use it.
+- [ ] A Playwright e2e spec (two contexts, matching the pattern in
+      `tests/playwright/guest_notes.spec.js`) covers the manual-ask flow
+      end-to-end: broadcast to both peers, per-tab scoping, and the panel
+      surviving a room re-join (pairs naturally with
+      `room_state_eviction.spec.js`'s pattern). Use
+      `mockResearchEndpoint(page, { status, body })`
+      (`tests/playwright/helpers.js`) to fake the browser's own call to
+      `POST /rec/[slug]/research` via `page.route()` — this is how success
+      (200) and the OpenRouter-dependent error codes (502/504) get e2e
+      coverage without a real API key; the codes reachable for real
+      without one (401/410/400/500 "not configured") already have direct
+      route-level coverage in `research_endpoint_status.spec.js` and don't
+      need re-mocking here.

@@ -56,7 +56,11 @@ export default defineConfig({
       // more POSTs per minute than the production rate limiter (20/min) is
       // meant to constrain for a real user. Loosen it for this server only.
       MAX_POSTS_PER_MIN: '200',
-      MAX_AUTH_POSTS_PER_MIN: '100'
+      MAX_AUTH_POSTS_PER_MIN: '100',
+      // Room State Store's flush-and-evict grace period (default 10s in
+      // production) — shrunk so a spec proving eviction/rehydration works
+      // doesn't have to sleep through a real 10-second wait.
+      ROOM_STATE_GRACE_MS: '200'
     }
   }
 })

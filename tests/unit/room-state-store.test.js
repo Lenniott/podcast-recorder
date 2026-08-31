@@ -1,5 +1,27 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createRoomStateStore } from '../../src/lib/server/room-state-store.js'
+import { createRoomStateStore, getRoomStateGraceMs } from '../../src/lib/server/room-state-store.js'
+
+describe('getRoomStateGraceMs', () => {
+  it('parses a valid ROOM_STATE_GRACE_MS as an integer', () => {
+    expect(getRoomStateGraceMs({ ROOM_STATE_GRACE_MS: '200' })).toBe(200)
+  })
+
+  it('falls back to the 10s default when unset', () => {
+    expect(getRoomStateGraceMs({})).toBe(10_000)
+  })
+
+  it('falls back to the default for a non-numeric value', () => {
+    expect(getRoomStateGraceMs({ ROOM_STATE_GRACE_MS: 'not-a-number' })).toBe(10_000)
+  })
+
+  it('falls back to the default for a negative value', () => {
+    expect(getRoomStateGraceMs({ ROOM_STATE_GRACE_MS: '-5' })).toBe(10_000)
+  })
+
+  it('accepts an explicit 0 (evict immediately, no grace period)', () => {
+    expect(getRoomStateGraceMs({ ROOM_STATE_GRACE_MS: '0' })).toBe(0)
+  })
+})
 
 /** A durable-storage test double — a plain in-memory map, not a real DB file. */
 function fakeDurable() {
