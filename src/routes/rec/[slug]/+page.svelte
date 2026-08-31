@@ -763,9 +763,27 @@
         researchPanel?.applyTabsState?.(msg)
       }
       if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
-      if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
-      if (msg.type === 'transcript_state') roomTabs?.applyTranscriptState?.(msg)
-      if (msg.type === 'transcript_line')  roomTabs?.applyTranscriptLine?.(msg)
+      if (msg.type === 'tab_text') {
+        roomTabs?.applyTabText?.(msg)
+        // ResearchPanel needs its own copy of tab text too (ticket 05, Quick
+        // Actions act on the active tab's whole text) — fed from this exact
+        // same tab_text broadcast RoomTabs derives its own tabTexts from,
+        // never re-derived or copied from RoomTabs' internal state, the
+        // same "one shared broadcast, never two independently-tracked
+        // copies" discipline tabs_state's dual-routing to researchPanel
+        // already follows for activeTabId.
+        researchPanel?.applyTabText?.(msg)
+      }
+      if (msg.type === 'transcript_state') {
+        roomTabs?.applyTranscriptState?.(msg)
+        // Same reasoning as tab_text above — a Quick Action run on the
+        // Transcript tab needs the lines-so-far too.
+        researchPanel?.applyTranscriptState?.(msg)
+      }
+      if (msg.type === 'transcript_line') {
+        roomTabs?.applyTranscriptLine?.(msg)
+        researchPanel?.applyTranscriptLine?.(msg)
+      }
       if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
       if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)

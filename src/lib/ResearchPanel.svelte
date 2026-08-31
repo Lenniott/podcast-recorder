@@ -5,9 +5,28 @@
     applyResearchState as reduceResearchState,
     visibleEntries,
     buildManualAskRequest,
+    buildQuickActionRequest,
+    applyTabText as reduceTabText,
+    applyTranscriptState as reduceTranscriptState,
+    applyTranscriptLine as reduceTranscriptLine,
+    activeTabText,
+    hasQuickActionText,
     describeResearchError,
     makeResearchEntryId,
   } from "./research-panel.js";
+
+  // The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
+  // entry) — actionId must match research-assistant.js's
+  // QUICK_ACTION_INSTRUCTIONS keys exactly. `label` doubles as the entry's
+  // `question` shown in the history, same field a manual ask's typed
+  // question fills.
+  const QUICK_ACTIONS = [
+    { id: "define", label: "Define" },
+    { id: "keyFacts", label: "Key facts" },
+    { id: "factCheck", label: "Fact-check" },
+    { id: "findExamples", label: "Find examples" },
+    { id: "analyze", label: "Analyze" },
+  ];
 
   // (payload) => void — JSON-sends over the room's single WebSocket
   // connection, owned by the page (same contract as RoomTabs.svelte's send).
@@ -35,12 +54,42 @@
 
   $: entries = visibleEntries(entriesByTab, activeTabId);
 
+  // tabId -> full text (ticket 05), fed exclusively by tab_text broadcasts
+  // (see applyTabText below) — never copied or re-derived from RoomTabs'
+  // own tabTexts, the same "one shared broadcast, never two independently-
+  // tracked copies" discipline this component's own activeTabId already
+  // follows.
+  let tabTexts = {};
+
+  // The Transcript's lines-so-far (ticket 01/05), fed exclusively by
+  // transcript_state/transcript_line broadcasts — same discipline, its own
+  // copy of what RoomTabs.svelte separately tracks for display.
+  let transcriptLines = [];
+
+  // The currently active tab's whole text to act on — an ordinary tab's own
+  // tab_text, or (on the reserved Transcript tab) its lines-so-far joined
+  // into one block of text. Never a selection, never another tab's text.
+  $: quickActionText = activeTabText(tabTexts, transcriptLines, activeTabId);
+  $: canQuickAction = hasQuickActionText(quickActionText);
+
   let questionInput = "";
 
   // ─── Inbound — called by the page's ws.onmessage ────────────────────────
 
   export function applyTabsState(msg) {
     activeTabId = msg.activeTabId;
+  }
+
+  export function applyTabText(msg) {
+    tabTexts = reduceTabText(tabTexts, msg);
+  }
+
+  export function applyTranscriptState(msg) {
+    transcriptLines = reduceTranscriptState(transcriptLines, msg);
+  }
+
+  export function applyTranscriptLine(msg) {
+    transcriptLines = reduceTranscriptLine(transcriptLines, msg);
   }
 
   export function applyResearchEntry(msg) {
@@ -65,7 +114,26 @@
     // — every peer (including this browser) learns about it only once the
     // server has actually recorded it, via the research_entry broadcast.
     send({ type: "research_ask", entryId, question });
-    askResearchAssistant(entryId, question);
+    askResearchAssistant(entryId, buildManualAskRequest(question));
+  }
+
+  // ─── Outbound — Quick Actions (ticket 05) ───────────────────────────────
+  // Reuses the exact same research_ask/resolve/error mechanism as the
+  // manual ask box above — the only difference is the request body sent to
+  // ticket 02's endpoint (a quickAction, not a voice ask) and the label
+  // used as the entry's `question`.
+
+  function runQuickAction(actionId, label) {
+    const request = buildQuickActionRequest(actionId, quickActionText);
+    // The button is already disabled whenever this would be null (see
+    // canQuickAction above) — this is the same guard, not a second,
+    // possibly-diverging one, so "disabled" and "would refuse to send" can
+    // never disagree.
+    if (!request) return;
+
+    const entryId = makeResearchEntryId();
+    send({ type: "research_ask", entryId, question: label });
+    askResearchAssistant(entryId, request);
   }
 
   // The browser itself calls ticket 02's endpoint (not the WS server) — see
@@ -73,14 +141,15 @@
   // this fetch. Whatever happens — success, a non-2xx response, or a thrown
   // network error — this always ends by sending research_resolve or
   // research_error, so a request can never leave its entry stuck pending
-  // with no explanation.
-  async function askResearchAssistant(entryId, question) {
+  // with no explanation. Shared by the manual ask box and every Quick
+  // Action button — only the request body they pass in differs.
+  async function askResearchAssistant(entryId, requestBody) {
     let res;
     try {
       res = await fetch(`/rec/${slug}/research`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildManualAskRequest(question)),
+        body: JSON.stringify(requestBody),
       });
     } catch {
       send({ type: "research_error", entryId, message: describeResearchError(null) });
@@ -144,6 +213,20 @@
         Ask
       </button>
     </form>
+
+    <div class="quick-actions" role="group" aria-label="Quick Actions">
+      {#each QUICK_ACTIONS as action (action.id)}
+        <button
+          type="button"
+          class="btn-secondary btn-sm"
+          disabled={!canQuickAction}
+          title={canQuickAction ? "" : "Nothing to act on — this tab has no text yet"}
+          on:click={() => runQuickAction(action.id, action.label)}
+        >
+          {action.label}
+        </button>
+      {/each}
+    </div>
 
     <div class="research-entries">
       {#if entries.length === 0}
@@ -234,6 +317,13 @@
   .research-ask-input:focus {
     outline: none;
     border-color: var(--accent);
+  }
+
+  .quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   .research-entries {
