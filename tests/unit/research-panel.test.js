@@ -5,9 +5,15 @@ import {
   visibleEntries,
   buildManualAskRequest,
   buildQuickActionRequest,
+  applyTabText,
+  applyTranscriptState,
+  applyTranscriptLine,
+  activeTabText,
+  hasQuickActionText,
   describeResearchError,
   makeResearchEntryId
 } from '../../src/lib/research-panel.js'
+import { TRANSCRIPT_TAB_ID } from '../../src/lib/transcript-sync.js'
 
 describe('makeResearchEntryId', () => {
   it('returns a unique-looking, non-empty string each time', () => {
@@ -124,6 +130,75 @@ describe('buildQuickActionRequest', () => {
     const huge = 'x'.repeat(21000)
     const result = buildQuickActionRequest('analyze', huge)
     expect(result.text).toBe(huge.slice(0, 20000))
+  })
+})
+
+describe('applyTabText', () => {
+  it('sets a tab\'s full text under its own tabId, leaving other tabs untouched', () => {
+    const before = { tabB: 'other tab text' }
+    const after = applyTabText(before, { tabId: 'tabA', text: 'hello' })
+    expect(after).toEqual({ tabA: 'hello', tabB: 'other tab text' })
+  })
+
+  it('never mutates the tabTexts object passed in', () => {
+    const before = { tabA: 'old' }
+    const snapshot = { ...before }
+    applyTabText(before, { tabId: 'tabA', text: 'new' })
+    expect(before).toEqual(snapshot)
+  })
+})
+
+describe('applyTranscriptState/applyTranscriptLine', () => {
+  it('applyTranscriptState replaces the full lines-so-far on replay', () => {
+    const lines = [{ id: '1', speaker: 'Host', text: 'Hi', at: 1 }]
+    expect(applyTranscriptState([], { lines })).toEqual(lines)
+  })
+
+  it('applyTranscriptLine appends one line without touching earlier ones', () => {
+    const before = [{ id: '1', speaker: 'Host', text: 'Hi', at: 1 }]
+    const after = applyTranscriptLine(before, { id: '2', speaker: 'Guest', text: 'Hey', at: 2 })
+    expect(after).toEqual([...before, { id: '2', speaker: 'Guest', text: 'Hey', at: 2 }])
+    expect(after).not.toBe(before)
+  })
+})
+
+describe('activeTabText', () => {
+  it('returns an ordinary tab\'s own tab_text, never another tab\'s', () => {
+    const tabTexts = { tabA: 'Tab A content', tabB: 'Tab B content' }
+    expect(activeTabText(tabTexts, [], 'tabA')).toBe('Tab A content')
+    expect(activeTabText(tabTexts, [], 'tabB')).toBe('Tab B content')
+  })
+
+  it('returns empty string for a tab with no text yet', () => {
+    expect(activeTabText({}, [], 'tabA')).toBe('')
+  })
+
+  it('for the reserved Transcript tab id, joins the transcript lines-so-far into one block of text', () => {
+    const lines = [
+      { id: '1', speaker: 'Host', text: 'Welcome to the show.', at: 1 },
+      { id: '2', speaker: 'Guest', text: 'Thanks for having me.', at: 2 }
+    ]
+    expect(activeTabText({ tabA: 'ignored' }, lines, TRANSCRIPT_TAB_ID)).toBe(
+      'Host: Welcome to the show.\nGuest: Thanks for having me.'
+    )
+  })
+
+  it('returns empty string for the Transcript tab when there are no lines yet', () => {
+    expect(activeTabText({}, [], TRANSCRIPT_TAB_ID)).toBe('')
+  })
+})
+
+describe('hasQuickActionText', () => {
+  it('is true when there is non-whitespace text', () => {
+    expect(hasQuickActionText('some notes')).toBe(true)
+    expect(hasQuickActionText('  padded  ')).toBe(true)
+  })
+
+  it('is false for empty, whitespace-only, or missing text', () => {
+    expect(hasQuickActionText('')).toBe(false)
+    expect(hasQuickActionText('   \n\t  ')).toBe(false)
+    expect(hasQuickActionText(null)).toBe(false)
+    expect(hasQuickActionText(undefined)).toBe(false)
   })
 })
 

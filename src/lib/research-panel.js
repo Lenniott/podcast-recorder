@@ -14,6 +14,7 @@
  */
 import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
 import { MAX_TAB_TEXT_LEN } from './tab-sync.js'
+import { TRANSCRIPT_TAB_ID } from './transcript-sync.js'
 
 export { makeResearchEntryId }
 
@@ -54,6 +55,52 @@ export function visibleEntries(entriesByTab, activeTabId) {
  */
 export function buildManualAskRequest(question) {
   return { kind: 'voice', query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN), context: '', notes: '' }
+}
+
+/** Applies a `tab_text` broadcast into ResearchPanel's own tabId -> text
+ *  copy (ticket 05) — fed from the exact same wire message RoomTabs.svelte's
+ *  own `tabTexts` is fed from (see ResearchPanel.svelte), never copied or
+ *  re-derived from RoomTabs' internal state, the same "one shared broadcast,
+ *  never two independently-tracked copies" discipline `tabs_state`'s
+ *  dual-routing to researchPanel already follows for `activeTabId`. */
+export function applyTabText(tabTexts, msg) {
+  return { ...tabTexts, [msg.tabId]: msg.text }
+}
+
+/** Applies a `transcript_state` replay (the full Transcript-so-far) into
+ *  ResearchPanel's own copy of the transcript lines. */
+export function applyTranscriptState(transcriptLines, msg) {
+  return msg.lines
+}
+
+/** Applies one live `transcript_line` broadcast — appended, never reordered
+ *  or dropped (see ADR-0002). */
+export function applyTranscriptLine(transcriptLines, msg) {
+  return [...transcriptLines, { id: msg.id, speaker: msg.speaker, text: msg.text, at: msg.at }]
+}
+
+/** The Transcript's lines-so-far as one block of text, "Speaker: text" per
+ *  line — the same shape TranscriptTab.svelte renders each line as. */
+function transcriptLinesToText(lines) {
+  return (lines || []).map((line) => `${line.speaker}: ${line.text}`).join('\n')
+}
+
+/**
+ * The currently active tab's whole text to act on (ticket 05) — an ordinary
+ * tab's own `tab_text`, or, for the reserved Transcript tab id, its
+ * lines-so-far joined into one block of text. Never a selection, never
+ * another tab's text (see CONTEXT.md's Quick Action entry).
+ */
+export function activeTabText(tabTexts, transcriptLines, activeTabId) {
+  if (activeTabId === TRANSCRIPT_TAB_ID) return transcriptLinesToText(transcriptLines)
+  return tabTexts[activeTabId] || ''
+}
+
+/** Whether there's anything for a Quick Action button to act on — the
+ *  ResearchPanel.svelte button-disabled check is built on this exact
+ *  function, so "disabled" and "would refuse to send" can never disagree. */
+export function hasQuickActionText(text) {
+  return !!String(text || '').trim()
 }
 
 /**
