@@ -93,9 +93,9 @@
  *   { type: 'rejected',        message }
  */
 
-import { getActiveRoomBySlug } from './db.js'
+import { getActiveRoomBySlug, saveRoomContent, loadRoomContent } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
-import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
+import { createRoomStateStore } from './room-state-store.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -108,15 +108,22 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 //         serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
 const rooms = new Map()
 
-// tabRooms: Map<slug, {
-//   tabs: Map<tabId, { id, title, video: {videoId,playing,positionSec,positionAtMs}|null, text }>,
-//   order: [tabId, ...],   // insertion order — stable display + close fallback
-//   activeTabId: string|null
-// }>
-// Kept in memory for the life of this WS process (and cleared by _resetRooms in
-// tests). Occupancy is not the store: a reconnect, HMR blip, or last-peer
-// socket drop must not mint a fresh empty Tab 1 over live notes/video.
-const tabRooms = new Map()
+// A room's tabs/text/video (the Transcript and Research Assistant entries
+// will join them later as sibling content — see ADR-0002 and tickets 01/04)
+// live entirely behind this one small interface now: while >=1 participant
+// is connected content stays in RAM only; the moment the last one
+// disconnects, a 10s grace timer decides whether to flush it to the
+// `room_content` table (extended in db.js) and evict it, or — on a
+// reconnect — keep running hot exactly as before. No handler below reaches
+// into a raw Map or DB row for this content directly. See
+// room-state-store.js for the full contract.
+//
+const roomStateStore = createRoomStateStore({
+  durable: {
+    save: (slug, content) => saveRoomContent(slug, content),
+    load: (slug) => loadRoomContent(slug)
+  }
+})
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg))
@@ -199,43 +206,22 @@ function sendDuck(slug) {
 
 // ── Tabs ─────────────────────────────────────────────────────────────────
 
-function makeTabId() {
-  return 'tab-' + Math.random().toString(36).slice(2, 10)
-}
-
-/** Lazily creates a room's tab state with one default, active, empty tab. */
-function ensureTabRoom(slug) {
-  if (tabRooms.has(slug)) return tabRooms.get(slug)
-  const id = makeTabId()
-  const troom = {
-    tabs: new Map([[id, { id, title: nextTabTitle([]), video: null, text: '' }]]),
-    order: [id],
-    activeTabId: id
-  }
-  tabRooms.set(slug, troom)
-  return troom
-}
-
-function tabsSnapshot(troom) {
-  return troom.order.map((id) => {
-    const tab = troom.tabs.get(id)
-    return { id: tab.id, title: tab.title }
-  })
+function tabsSnapshot(content) {
+  return content.tabs.list.map((tab) => ({ id: tab.id, title: tab.title }))
 }
 
 function sendTabsState(slug) {
   const room = rooms.get(slug)
-  const troom = tabRooms.get(slug)
-  if (!room || !troom) return
-  const msg = { type: 'tabs_state', tabs: tabsSnapshot(troom), activeTabId: troom.activeTabId }
+  if (!room) return
+  const content = roomStateStore.getRoom(slug)
+  const msg = { type: 'tabs_state', tabs: tabsSnapshot(content), activeTabId: content.tabs.activeTabId }
   for (const peer of room.values()) send(peer.ws, msg)
 }
 
 /** Replays a room's full tab state (structure + per-tab video/text) to one late joiner. */
-function replayTabsTo(ws, troom) {
-  send(ws, { type: 'tabs_state', tabs: tabsSnapshot(troom), activeTabId: troom.activeTabId })
-  for (const tabId of troom.order) {
-    const tab = troom.tabs.get(tabId)
+function replayTabsTo(ws, content) {
+  send(ws, { type: 'tabs_state', tabs: tabsSnapshot(content), activeTabId: content.tabs.activeTabId })
+  for (const tab of content.tabs.list) {
     if (tab.video) {
       send(ws, { type: 'tab_video', tabId: tab.id, ...tab.video, triggerAtMs: Date.now() + TAB_VIDEO_LEAD_MS })
     }
@@ -248,7 +234,7 @@ function replayTabsTo(ws, troom) {
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
-  tabRooms.clear()
+  roomStateStore._resetForTests()
 }
 
 export function getPeerRole(slug, clientId) {
@@ -343,7 +329,7 @@ export function setupWss(wss) {
         sendPresence(slug)
 
         if (firstJoin && clientId) {
-          replayTabsTo(ws, ensureTabRoom(slug))
+          replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
           // Exclusive to this connection — never broadcast (see the
           // 'server_copy_token' protocol doc above and ticket 11). This is
@@ -355,7 +341,7 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'tabs_sync' && clientId) {
-        replayTabsTo(ws, ensureTabRoom(slug))
+        replayTabsTo(ws, roomStateStore.getRoom(slug))
       }
 
       if (msg.type === 'ping') {
@@ -414,63 +400,35 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'tab_create' && clientId) {
-        const troom = ensureTabRoom(slug)
-        const tabId = String(msg.tabId || '').slice(0, 64)
-
-        if (!tabId || troom.tabs.has(tabId)) {
-          send(ws, { type: 'error', message: 'Invalid or duplicate tab id' })
+        const result = roomStateStore.createTab(slug, { tabId: msg.tabId, title: msg.title })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
           return
         }
-        if (troom.tabs.size >= MAX_TABS) {
-          send(ws, { type: 'error', message: `Too many tabs open (max ${MAX_TABS}).` })
-          return
-        }
-
-        const requestedTitle = String(msg.title || '').trim().slice(0, 50)
-        const title = requestedTitle || nextTabTitle(tabsSnapshot(troom).map((t) => t.title))
-
-        troom.tabs.set(tabId, { id: tabId, title, video: null, text: '' })
-        troom.order.push(tabId)
-        troom.activeTabId = tabId
         sendTabsState(slug)
       }
 
       if (msg.type === 'tab_switch' && clientId) {
-        const troom = tabRooms.get(slug)
-        const tabId = String(msg.tabId || '')
-        if (!troom || !troom.tabs.has(tabId)) {
-          send(ws, { type: 'error', message: 'Unknown tab' })
+        const result = roomStateStore.switchTab(slug, String(msg.tabId || ''))
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
           return
         }
-        troom.activeTabId = tabId
         sendTabsState(slug)
       }
 
       if (msg.type === 'tab_close' && clientId) {
-        const troom = tabRooms.get(slug)
-        const tabId = String(msg.tabId || '')
-        if (!troom || !troom.tabs.has(tabId)) {
-          send(ws, { type: 'error', message: 'Unknown tab' })
+        const result = roomStateStore.closeTab(slug, String(msg.tabId || ''))
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
           return
-        }
-        if (troom.tabs.size <= 1) {
-          send(ws, { type: 'error', message: 'Cannot close the only remaining tab' })
-          return
-        }
-
-        const idx = troom.order.indexOf(tabId)
-        troom.tabs.delete(tabId)
-        troom.order.splice(idx, 1)
-        if (troom.activeTabId === tabId) {
-          troom.activeTabId = troom.order[Math.max(0, idx - 1)]
         }
         sendTabsState(slug)
       }
 
       if (msg.type === 'tab_video' && clientId) {
-        const troom = tabRooms.get(slug)
         const tabId = String(msg.tabId || '')
-        const tab = troom?.tabs.get(tabId)
+        const tab = roomStateStore.getRoom(slug).tabs.list.find((t) => t.id === tabId)
         if (!tab) {
           send(ws, { type: 'error', message: 'Unknown tab' })
           return
@@ -493,35 +451,35 @@ export function setupWss(wss) {
         }
 
         if (videoId === '') {
-          tab.video = null
+          roomStateStore.setTabVideo(slug, tabId, null)
           for (const p of room.values()) {
-            send(p.ws, { type: 'tab_video', tabId: tab.id, videoId: '', playing: false, positionSec: 0, positionAtMs: 0, triggerAtMs: 0 })
+            send(p.ws, { type: 'tab_video', tabId, videoId: '', playing: false, positionSec: 0, positionAtMs: 0, triggerAtMs: 0 })
           }
           return
         }
 
         const positionSec = Number(msg.positionSec)
         const applyAtMs = Date.now() + TAB_VIDEO_LEAD_MS
-        tab.video = {
+        const video = {
           videoId,
           playing: !!msg.playing,
           positionSec: Number.isFinite(positionSec) && positionSec > 0 ? positionSec : 0,
           positionAtMs: applyAtMs
         }
+        roomStateStore.setTabVideo(slug, tabId, video)
         for (const p of room.values()) {
-          send(p.ws, { type: 'tab_video', tabId: tab.id, ...tab.video, triggerAtMs: applyAtMs })
+          send(p.ws, { type: 'tab_video', tabId, ...video, triggerAtMs: applyAtMs })
         }
       }
 
       if (msg.type === 'tab_text' && clientId) {
-        const troom = tabRooms.get(slug)
         const tabId = String(msg.tabId || '')
-        const tab = troom?.tabs.get(tabId)
-        if (!tab) {
-          send(ws, { type: 'error', message: 'Unknown tab' })
+        const result = roomStateStore.setTabText(slug, tabId, msg.text ?? '')
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
           return
         }
-        tab.text = String(msg.text ?? '').slice(0, MAX_TAB_TEXT_LEN)
+        const tab = result.room.tabs.list.find((t) => t.id === tabId)
         broadcast(slug, { type: 'tab_text', tabId: tab.id, text: tab.text }, clientId)
       }
     })
@@ -536,6 +494,7 @@ export function setupWss(wss) {
       room.delete(clientId)
       if (room.size === 0) {
         rooms.delete(slug)
+        roomStateStore.onParticipantLeft(slug)
       } else {
         recomputeRoles(room)
         sendPresence(slug)
@@ -548,6 +507,11 @@ export function setupWss(wss) {
       const current = room.get(clientId)
       if (current && current.ws !== ws) return
       room.delete(clientId)
+      // Note: unlike 'close' below, an 'error' disconnect doesn't trigger
+      // onParticipantLeft (nor rooms.delete/sendPresence) even when this
+      // was the last peer — matching this handler's pre-existing, narrower
+      // cleanup scope. A subsequent 'close' for the same socket (which a
+      // real ws library still fires after 'error') covers it from there.
     })
   })
 }

@@ -101,7 +101,13 @@ export function createRoomStateStore({
     if (content == null) return // nothing hot to flush
 
     m.flushInFlight = true
-    Promise.resolve(durable.save(slug, content))
+    let savePromise
+    try {
+      savePromise = Promise.resolve(durable.save(slug, content))
+    } catch (err) {
+      savePromise = Promise.resolve() // a synchronous throw fails the flush the same as a rejection
+    }
+    savePromise
       .catch(() => {}) // never lose live state over a failed flush — see below
       .then(() => {
         m.flushInFlight = false
@@ -118,7 +124,15 @@ export function createRoomStateStore({
   function ensureRoom(slug) {
     let content = hot.get(slug)
     if (content) return content
-    content = durable.load(slug) || createDefaultRoomContent()
+    let loaded = null
+    try {
+      loaded = durable.load(slug)
+    } catch {
+      // A durable-storage read failure isn't itself data loss — the room
+      // simply starts fresh rather than taking the whole join down with it.
+      loaded = null
+    }
+    content = loaded || createDefaultRoomContent()
     hot.set(slug, content)
     return content
   }

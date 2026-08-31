@@ -31,6 +31,12 @@ function fakeClock() {
   }
 }
 
+describe('createRoomStateStore — construction', () => {
+  it('requires a durable store adapter', () => {
+    expect(() => createRoomStateStore({})).toThrow('a durable store adapter is required')
+  })
+})
+
 describe('createRoomStateStore — getRoom', () => {
   it('creates a brand-new room with a single default, active tab', () => {
     const store = createRoomStateStore({ durable: fakeDurable() })
@@ -58,6 +64,34 @@ describe('createRoomStateStore — getRoom', () => {
     store.getRoom('room1') // first touch hydrates (load only)
     expect(() => store.getRoom('room1')).not.toThrow()
     expect(throwingDurable.save).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a fresh default room, rather than throwing, when durable.load itself throws', () => {
+    const throwingLoad = {
+      save: vi.fn(),
+      load: vi.fn(() => { throw new Error('disk read failed') })
+    }
+    const store = createRoomStateStore({ durable: throwingLoad })
+    let room
+    expect(() => { room = store.getRoom('room1') }).not.toThrow()
+    expect(room.tabs.list).toHaveLength(1)
+    expect(room.tabs.list[0].title).toBe('Tab 1')
+  })
+
+  it('keeps the room hot rather than crashing the grace-timer callback when durable.save throws synchronously', () => {
+    const throwingSave = {
+      save: vi.fn(() => { throw new Error('disk full') }),
+      load: vi.fn(() => null)
+    }
+    const clock = fakeClock()
+    const store = createRoomStateStore({ durable: throwingSave, ...clock, graceMs: 10_000 })
+
+    store.onParticipantJoined('room1')
+    store.createTab('room1', { tabId: 't2' })
+    store.onParticipantLeft('room1')
+
+    expect(() => clock.fire(1)).not.toThrow()
+    expect(store.getRoom('room1').tabs.list.map((t) => t.id)).toContain('t2')
   })
 })
 
@@ -118,6 +152,11 @@ describe('createRoomStateStore — switchTab', () => {
     expect(result).toEqual({ ok: false, error: 'Unknown tab' })
     expect(store.getRoom('room1').tabs.activeTabId).toBe(before)
   })
+
+  it('rejects a missing/falsy tab id the same as an unknown one', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    expect(store.switchTab('room1', undefined)).toEqual({ ok: false, error: 'Unknown tab' })
+  })
 })
 
 describe('createRoomStateStore — closeTab', () => {
@@ -141,6 +180,15 @@ describe('createRoomStateStore — closeTab', () => {
   it('rejects closing an unknown tab id', () => {
     const store = createRoomStateStore({ durable: fakeDurable() })
     expect(store.closeTab('room1', 'nope')).toEqual({ ok: false, error: 'Unknown tab' })
+  })
+
+  it('closing a tab that is not the active one leaves the active tab untouched', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const firstId = store.getRoom('room1').tabs.list[0].id
+    store.createTab('room1', { tabId: 't2' }) // t2 becomes active
+    const result = store.closeTab('room1', firstId)
+    expect(result.ok).toBe(true)
+    expect(result.room.tabs.activeTabId).toBe('t2')
   })
 })
 
@@ -166,6 +214,11 @@ describe('createRoomStateStore — setTabVideo', () => {
     const store = createRoomStateStore({ durable: fakeDurable() })
     expect(store.setTabVideo('room1', 'nope', null)).toEqual({ ok: false, error: 'Unknown tab' })
   })
+
+  it('rejects a missing/falsy tab id the same as an unknown one', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    expect(store.setTabVideo('room1', undefined, null)).toEqual({ ok: false, error: 'Unknown tab' })
+  })
 })
 
 describe('createRoomStateStore — setTabText', () => {
@@ -189,6 +242,18 @@ describe('createRoomStateStore — setTabText', () => {
   it('rejects setTabText for an unknown tab id', () => {
     const store = createRoomStateStore({ durable: fakeDurable() })
     expect(store.setTabText('room1', 'nope', 'hi')).toEqual({ ok: false, error: 'Unknown tab' })
+  })
+
+  it('rejects a missing/falsy tab id the same as an unknown one', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    expect(store.setTabText('room1', undefined, 'hi')).toEqual({ ok: false, error: 'Unknown tab' })
+  })
+
+  it('treats a missing/null text as empty, same as tab_text\'s existing wire contract', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const tabId = store.getRoom('room1').tabs.list[0].id
+    store.setTabText('room1', tabId, null)
+    expect(store.getRoom('room1').tabs.list[0].text).toBe('')
   })
 })
 
@@ -297,6 +362,19 @@ describe('createRoomStateStore — lifecycle: grace timer eviction', () => {
     const after = store.getRoom('room1')
     expect(after.tabs.list.find((t) => t.id === 't2').text).toBe('typed during the flush')
     expect(savedContents[0].tabs.list.find((t) => t.id === 't2').text).toBe('') // what was actually flushed, pre-edit
+  })
+
+  it('onParticipantLeft for a room that was never actually hot is a harmless no-op when its grace timer fires', () => {
+    const durable = fakeDurable()
+    const clock = fakeClock()
+    const store = createRoomStateStore({ durable, ...clock, graceMs: 10_000 })
+
+    // No onParticipantJoined/getRoom ever happened for this slug — nothing
+    // hydrated it into `hot` — yet a caller still signals a departure.
+    store.onParticipantLeft('never-hot-room')
+
+    expect(() => clock.fire(1)).not.toThrow()
+    expect(durable.save).not.toHaveBeenCalled()
   })
 })
 
