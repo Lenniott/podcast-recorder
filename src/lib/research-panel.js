@@ -75,6 +75,48 @@ function transcriptLinesToText(lines) {
   return (lines || []).map((line) => `${line.speaker}: ${line.text}`).join('\n')
 }
 
+// Manual, button-triggered validation step for what was going to be Research
+// Mode's fully autonomous Gate/Deep Check pipeline (deferred — see
+// docs/adr/0004-research-mode-replaces-voice-trigger.md and ticket 06's
+// current status) — same idea (hand a recent window of conversation to the
+// Research Assistant and let it find something worth surfacing), but a
+// person decides when to press the button instead of a timer deciding for
+// them. Once this is validated as actually useful, the passive version can
+// reuse the exact same window/request shape.
+const RECENT_TRANSCRIPT_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
+
+/** The Transcript's last `windowMs` of lines, as one block of text — empty
+ *  string if nothing was said in that window (or there's no Transcript
+ *  yet). `now` is injectable so this is testable without real timers. */
+export function recentTranscriptText(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
+  const cutoff = now - windowMs
+  return transcriptLinesToText((transcriptLines || []).filter((line) => line.at >= cutoff))
+}
+
+/** Same "is there anything to act on" question as hasQuickActionText, named
+ *  separately since the two buttons are disabled for different reasons
+ *  (no active-tab text vs. no recent conversation) even though the check
+ *  itself is identical. */
+export function hasRecentTranscript(text) {
+  return hasQuickActionText(text)
+}
+
+/**
+ * Turns the Transcript's recent window into a request body for
+ * POST /rec/[slug]/research — reuses the `voice` shape with `query: null`,
+ * the same "no topic named, infer it from context" path a Voice-Trigger-
+ * style ask with no explicit topic already takes (see
+ * research-assistant.js's buildMessages). Returns null when there's
+ * nothing in the window — "nothing to research" is a request that's never
+ * sent, never one sent with empty context (same discipline as
+ * buildQuickActionRequest).
+ */
+export function buildRecentTranscriptRequest(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
+  const context = recentTranscriptText(transcriptLines, windowMs, now)
+  if (!context.trim()) return null
+  return { kind: 'voice', query: null, context, notes: '' }
+}
+
 /**
  * The currently active tab's whole text to act on (ticket 05) — an ordinary
  * tab's own text (`tabTexts`, RoomTabs.svelte's own true, complete, current

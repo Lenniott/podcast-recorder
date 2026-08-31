@@ -6,13 +6,22 @@
     visibleEntries,
     buildManualAskRequest,
     buildQuickActionRequest,
+    buildRecentTranscriptRequest,
     applyTranscriptState as reduceTranscriptState,
     applyTranscriptLine as reduceTranscriptLine,
     activeTabText,
     hasQuickActionText,
+    recentTranscriptText,
+    hasRecentTranscript,
     describeResearchError,
     makeResearchEntryId,
   } from "./research-panel.js";
+
+  // Shown as the entry's `question` — same field a typed manual ask or a
+  // Quick Action's label fills. See research-panel.js's doc comment on
+  // buildRecentTranscriptRequest for why this exists as a manual button
+  // rather than the originally-planned autonomous timer.
+  const RESEARCH_RECENT_LABEL = "Research recent conversation";
 
   // The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
   // entry) — actionId must match research-assistant.js's
@@ -81,6 +90,13 @@
   $: quickActionText = activeTabText(tabTexts, transcriptLines, activeTabId);
   $: canQuickAction = hasQuickActionText(quickActionText);
 
+  // Recomputed whenever transcriptLines changes (a new line arriving) —
+  // not on a wall-clock tick, so the disabled state can lag by up to the
+  // window length after conversation goes quiet. Harmless: the button's
+  // own click handler always recomputes fresh at click time regardless of
+  // what the disabled attribute last showed.
+  $: canResearchRecent = hasRecentTranscript(recentTranscriptText(transcriptLines));
+
   let questionInput = "";
 
   // ─── Inbound — called by the page's ws.onmessage ────────────────────────
@@ -138,6 +154,22 @@
 
     const entryId = makeResearchEntryId();
     send({ type: "research_ask", entryId, question: label });
+    askResearchAssistant(entryId, request);
+  }
+
+  // ─── Outbound — Research recent conversation (manual validation step for
+  //     the deferred Research Mode pipeline) ─────────────────────────────
+  // Reuses the exact same research_ask/resolve/error mechanism as manual
+  // ask and Quick Actions — only the request body differs (the Transcript's
+  // recent window as `context`, no `query`, same shape a topic-less Voice
+  // Trigger ask would have used).
+
+  function runResearchRecent() {
+    const request = buildRecentTranscriptRequest(transcriptLines);
+    if (!request) return; // same guard canResearchRecent is built on
+
+    const entryId = makeResearchEntryId();
+    send({ type: "research_ask", entryId, question: RESEARCH_RECENT_LABEL });
     askResearchAssistant(entryId, request);
   }
 
@@ -232,6 +264,18 @@
         </button>
       {/each}
     </div>
+
+    <button
+      type="button"
+      class="btn-secondary btn-sm research-recent-btn"
+      disabled={!canResearchRecent}
+      title={canResearchRecent
+        ? ""
+        : "Nothing to research yet — no conversation captured recently"}
+      on:click={runResearchRecent}
+    >
+      {RESEARCH_RECENT_LABEL}
+    </button>
 
     <div class="research-entries">
       {#if entries.length === 0}
@@ -329,6 +373,11 @@
     flex-wrap: wrap;
     gap: 6px;
     flex-shrink: 0;
+  }
+
+  .research-recent-btn {
+    flex-shrink: 0;
+    align-self: flex-start;
   }
 
   .research-entries {

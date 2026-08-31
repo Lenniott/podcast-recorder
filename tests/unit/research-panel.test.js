@@ -9,6 +9,9 @@ import {
   applyTranscriptLine,
   activeTabText,
   hasQuickActionText,
+  recentTranscriptText,
+  hasRecentTranscript,
+  buildRecentTranscriptRequest,
   describeResearchError,
   makeResearchEntryId
 } from '../../src/lib/research-panel.js'
@@ -183,6 +186,66 @@ describe('hasQuickActionText', () => {
     expect(hasQuickActionText('   \n\t  ')).toBe(false)
     expect(hasQuickActionText(null)).toBe(false)
     expect(hasQuickActionText(undefined)).toBe(false)
+  })
+})
+
+describe('recentTranscriptText', () => {
+  const NOW = 100_000
+
+  it('joins only lines within the window, oldest first, in "Speaker: text" form', () => {
+    const lines = [
+      { id: '1', speaker: 'Host', text: 'Too old to count.', at: NOW - 700_000 },
+      { id: '2', speaker: 'Guest', text: 'This is recent.', at: NOW - 5_000 },
+      { id: '3', speaker: 'Host', text: 'So is this.', at: NOW - 1_000 }
+    ]
+    expect(recentTranscriptText(lines, 600_000, NOW)).toBe('Guest: This is recent.\nHost: So is this.')
+  })
+
+  it('returns an empty string when nothing falls in the window', () => {
+    const lines = [{ id: '1', speaker: 'Host', text: 'Ancient history.', at: NOW - 700_000 }]
+    expect(recentTranscriptText(lines, 600_000, NOW)).toBe('')
+  })
+
+  it('returns an empty string for an empty or missing transcript', () => {
+    expect(recentTranscriptText([], 600_000, NOW)).toBe('')
+    expect(recentTranscriptText(undefined, 600_000, NOW)).toBe('')
+  })
+
+  it('defaults to a 10-minute window when none is given', () => {
+    const lines = [
+      { id: '1', speaker: 'Host', text: 'Eleven minutes ago.', at: Date.now() - 11 * 60_000 },
+      { id: '2', speaker: 'Host', text: 'Five minutes ago.', at: Date.now() - 5 * 60_000 }
+    ]
+    expect(recentTranscriptText(lines)).toBe('Host: Five minutes ago.')
+  })
+})
+
+describe('hasRecentTranscript', () => {
+  it('is true for non-whitespace text, false otherwise (same rule as hasQuickActionText)', () => {
+    expect(hasRecentTranscript('Host: hello')).toBe(true)
+    expect(hasRecentTranscript('')).toBe(false)
+    expect(hasRecentTranscript('   ')).toBe(false)
+    expect(hasRecentTranscript(null)).toBe(false)
+  })
+})
+
+describe('buildRecentTranscriptRequest', () => {
+  const NOW = 100_000
+
+  it('builds a topic-less voice request with the recent window as context', () => {
+    const lines = [{ id: '1', speaker: 'Host', text: 'Tariffs are back in the news.', at: NOW - 1_000 }]
+    expect(buildRecentTranscriptRequest(lines, 600_000, NOW)).toEqual({
+      kind: 'voice',
+      query: null,
+      context: 'Host: Tariffs are back in the news.',
+      notes: ''
+    })
+  })
+
+  it('returns null when there is nothing in the window — never a request sent with empty context', () => {
+    expect(buildRecentTranscriptRequest([], 600_000, NOW)).toBeNull()
+    const tooOld = [{ id: '1', speaker: 'Host', text: 'Ancient.', at: NOW - 700_000 }]
+    expect(buildRecentTranscriptRequest(tooOld, 600_000, NOW)).toBeNull()
   })
 })
 
