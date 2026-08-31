@@ -13,14 +13,38 @@ text). Its results are room-shared and scoped per Tab, same as the Tab's
 other content.
 _Avoid_: AI panel, sidebar bot
 
-**Voice Trigger**:
+**Voice Trigger** _(superseded by Research Mode — see ADR-0004; kept here
+because `research-trigger.js`'s phrase list predates the change)_:
 A short phrase spoken by either participant (e.g. "let's look that up",
 "define") that the Research Assistant treats as a request to look
 something up, detected from that participant's own local speech
-recognition. Listening for it starts and stops with that participant's own
-local recording — pressing Record is what implies consent to be
-transcribed; there is no separate opt-in toggle.
+recognition.
 _Avoid_: wake word, hotword
+
+**Research Mode**:
+The passive, always-on way the Research Assistant now surfaces things
+during a recording, replacing Voice Trigger — nobody has to say anything
+special. It runs a **Gate Check** every 2 seconds against the last 10
+seconds of the Transcript (a cheap, fast, no-search yes/no model call:
+"is there something here worth researching?"), and only when that says yes
+does it run a **Deep Check** (the existing web-search-grounded Research
+Assistant Client) against the last 10 minutes of the Transcript. A Deep
+Check's result is filed as an entry under the Transcript Tab automatically
+— the server creates and resolves it itself, the same way a person's own
+ask or Quick Action does, just without a person asking. Listening starts
+and stops with a participant's own local recording, same consent boundary
+as Voice Trigger had (ADR-0003) — Research Mode has nothing to watch when
+nobody's transcript is growing.
+_Avoid_: fact-checker, co-host, auto-search
+
+**Gate Check** / **Deep Check**:
+The two stages of one Research Mode tick. A Gate Check is cheap, fast, and
+answers only yes/no — it never itself produces something shown to anyone.
+A Deep Check is the real, sourced answer, and only ever runs after a Gate
+Check said yes.
+_Avoid_: pre-check, filter pass (for Gate Check); the research call (for
+Deep Check — ambiguous with Quick Action/manual-ask calls, which are also
+"the research call" but never gated)
 
 **Quick Action**:
 A one-click prompt (Define, Key facts, Fact-check, Find examples, Analyze)
