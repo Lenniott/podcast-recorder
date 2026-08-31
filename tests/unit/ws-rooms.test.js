@@ -410,3 +410,62 @@ describe('setupWss — yt_duck (hold-to-talk)', () => {
     })
   })
 })
+
+describe('setupWss — transcript_activity (interim-speech "something\'s coming" pulse)', () => {
+  let wss, host, guest
+
+  function activity(ws, active) {
+    ws.emit('message', JSON.stringify({ type: 'transcript_activity', active }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+    host.sent.length = 0
+    guest.sent.length = 0
+  })
+
+  it('broadcasts room-level activity to every peer, including guests', () => {
+    activity(guest, true)
+    for (const ws of [host, guest]) {
+      expect(ws.sent.at(-1)).toEqual({ type: 'transcript_activity', active: true })
+    }
+  })
+
+  it('stays active while either peer has interim speech in flight, and clears when the last stops', () => {
+    activity(host, true)
+    activity(guest, true)
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    activity(host, false)
+    expect(guest.sent.at(-1)).toEqual({ type: 'transcript_activity', active: true })
+
+    activity(guest, false)
+    expect(host.sent.at(-1)).toEqual({ type: 'transcript_activity', active: false })
+  })
+
+  it('clears activity when the active peer disconnects', () => {
+    activity(guest, true)
+    host.sent.length = 0
+    guest.emit('close')
+    expect(host.sent.some(m => m.type === 'transcript_activity' && m.active === false)).toBe(true)
+  })
+
+  it('replays current activity state to a late joiner', () => {
+    guest.emit('close')
+    activity(host, true)
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    expect(late.sent.filter(m => m.type === 'transcript_activity').at(-1)).toEqual({
+      type: 'transcript_activity',
+      active: true
+    })
+  })
+})

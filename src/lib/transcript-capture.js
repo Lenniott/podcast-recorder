@@ -24,10 +24,66 @@ import { createSpeechRecognition } from './speech-recognition.js'
  * WAV write path, which lives entirely outside this module and is never
  * awaited or blocked on by anything here.
  */
-export function createTranscriptCapture({ send, getSpeakerName, onStatusChange, createRecognition = createSpeechRecognition } = {}) {
+// How long after the last interim (non-final) result we keep announcing
+// "something's coming" before giving up and going quiet again — covers the
+// gap between one interim result and the next during a normal, continuous
+// utterance without leaving the room-shared indicator stuck on if the
+// browser just stops sending results (e.g. mid-retry).
+const ACTIVITY_DECAY_MS = 2000
+
+export function createTranscriptCapture({
+  send,
+  getSpeakerName,
+  onStatusChange,
+  createRecognition = createSpeechRecognition,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout
+} = {}) {
+  // Room-shared "a transcript_line is probably about to land" signal (see
+  // ws-rooms.js's transcript_activity protocol doc) — deliberately just a
+  // boolean, never the interim text itself. Tracked here, not in
+  // speech-recognition.js, because it's a decision about what this specific
+  // wiring does with an interim result, same reasoning as the isFinal check
+  // below.
+  let activityActive = false
+  let decayTimer = null
+
+  function clearDecayTimer() {
+    if (decayTimer == null) return
+    clearTimeoutFn(decayTimer)
+    decayTimer = null
+  }
+
+  function setActivity(next) {
+    if (activityActive === next) return
+    activityActive = next
+    try {
+      send({ type: 'transcript_activity', active: next })
+    } catch {
+      // Same reasoning as the transcript_line send below: a closed/
+      // reconnecting room socket must never surface here.
+    }
+  }
+
+  function noteInterimActivity() {
+    setActivity(true)
+    clearDecayTimer()
+    decayTimer = setTimeoutFn(() => {
+      decayTimer = null
+      setActivity(false)
+    }, ACTIVITY_DECAY_MS)
+  }
+
   const recognition = createRecognition({
     onResult(text, isFinal) {
-      if (!isFinal) return
+      if (!isFinal) {
+        if (String(text ?? '').trim()) noteInterimActivity()
+        return
+      }
+      // The line this activity was announcing has now actually arrived —
+      // go quiet immediately rather than waiting out the decay.
+      clearDecayTimer()
+      setActivity(false)
       const trimmed = String(text ?? '').trim()
       if (!trimmed) return
       try {
@@ -44,7 +100,15 @@ export function createTranscriptCapture({ send, getSpeakerName, onStatusChange, 
     // real about whether this participant is actually being transcribed,
     // instead of silence standing in for "everything's fine" (AGENTS.md's
     // recording-health lesson, applied here too).
-    onStatusChange
+    onStatusChange(status) {
+      // A dead or retrying recognizer isn't about to produce anything —
+      // don't leave the room-shared indicator claiming otherwise.
+      if (status === 'stopped' || status === 'retrying') {
+        clearDecayTimer()
+        setActivity(false)
+      }
+      onStatusChange?.(status)
+    }
   })
 
   function start() {

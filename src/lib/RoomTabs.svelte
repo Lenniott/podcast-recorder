@@ -79,6 +79,15 @@
   let talking = false; // true while *this* browser is holding Talk
   let roomTalking = false; // true while any peer (including us) is holding Talk
 
+  // Room-shared "a transcript_line is probably about to land somewhere in
+  // the room" signal (see ws-rooms.js's transcript_activity protocol doc) —
+  // set via applyTranscriptActivity, same routing pattern as applyDuck.
+  // Deliberately separate from transcriptionStatus above: that prop is
+  // this browser's own recognizer health, this is "is anyone's speech
+  // being processed right now," true even for a peer whose own browser
+  // has no microphone or no Web Speech API support at all.
+  let transcriptActivity = false;
+
   let textDebounceTimer = null;
 
   // Shared notes text size — a per-browser display preference (like theme),
@@ -149,6 +158,10 @@
   /** Re-announce a held Talk after a WS reconnect. */
   export function resyncDuck() {
     if (talking) send({ type: "yt_duck", talking: true });
+  }
+
+  export function applyTranscriptActivity(msg) {
+    transcriptActivity = !!msg.active;
   }
 
   function pushActiveVideoToPlayer() {
@@ -266,6 +279,13 @@
             data-status={transcriptionStatus}
             title={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
             aria-label={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
+          ></span>
+        {/if}
+        {#if transcriptActivity}
+          <span
+            class="transcript-activity-pulse"
+            title="Transcript incoming…"
+            aria-label="Transcript incoming…"
           ></span>
         {/if}
       </button>
@@ -429,6 +449,25 @@
   .transcription-status-dot[data-status="retrying"] {
     background: var(--danger);
     box-shadow: 0 0 4px var(--danger);
+  }
+
+  /* Room-shared "something's coming" signal — deliberately a different hue
+     and a pulse (not a solid fill) from transcription-status-dot above, so
+     "my mic's recognizer is healthy" and "someone's speech is being
+     processed right now" never read as the same fact at a glance. */
+  .transcript-activity-pulse {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+    background: var(--accent);
+    animation: transcript-activity-pulse 1s ease-in-out infinite;
+  }
+  @keyframes transcript-activity-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1.15); }
   }
 
   /* Nested inside the already-bordered .tab-pill — no second border. */

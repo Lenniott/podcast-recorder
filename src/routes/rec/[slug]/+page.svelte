@@ -803,6 +803,7 @@
       if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
       if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
+      if (msg.type === 'transcript_activity') roomTabs?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {

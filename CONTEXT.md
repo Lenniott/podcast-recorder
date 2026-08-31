@@ -66,3 +66,14 @@ _Avoid_: live captions tab, notes tab
 **Turn**:
 One transcript line: a single participant's finalized utterance, labeled
 with who said it. The unit the Transcript Tab is built out of.
+
+**Transcript Activity**:
+A room-shared "something's coming" pulse on the Transcript Tab pill, true
+while any participant's speech recognizer has an interim (not-yet-finalized)
+result in flight. Deliberately not the interim words themselves — no live
+streaming of unfinalized text between participants, just a heads-up that a
+Turn is likely about to land. Separate from a participant's own local
+transcription status (their recognizer's health, e.g. "retrying"): Activity
+is about the room, status is about one browser.
+_Avoid_: live captions, interim transcript, typing indicator (in the
+chat-app sense — this carries no text, just a boolean)

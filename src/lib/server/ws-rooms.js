@@ -31,6 +31,26 @@
  *                                          and included in presence. Re-announce on
  *                                          registerResync after reconnect (server forgets it).
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
+ *   { type: 'transcript_activity', active }
+ *                                        — sent by transcript-capture.js while an
+ *                                          interim (non-final) speech result is
+ *                                          in flight, i.e. "a transcript_line is
+ *                                          probably about to land" — cleared the
+ *                                          moment that line is finalized, or
+ *                                          after a short no-further-interim
+ *                                          decay, or on stop(). Ephemeral, like
+ *                                          yt_duck's `talking`: tracked only on
+ *                                          the peer object, never persisted, and
+ *                                          the room broadcasts the OR across all
+ *                                          peers (anyoneTranscribing) rather than
+ *                                          this sender's raw value — so it means
+ *                                          "someone's speech is being processed
+ *                                          right now," not "this specific peer
+ *                                          is." This is deliberately NOT the
+ *                                          interim text itself — no live
+ *                                          streaming of unfinalized words to
+ *                                          other peers, just a heads-up that
+ *                                          something is coming.
  *   { type: 'tab_create', tabId, title? }
  *                                        — client-generated tabId (like clientId);
  *                                          host and guest are equally allowed
@@ -123,6 +143,13 @@
  *   { type: 'clap',            timestamp, from }
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
+ *   { type: 'transcript_activity', active }
+ *                                        — true while ANY peer currently has an
+ *                                          interim result in flight (same OR
+ *                                          shape as yt_duck's talking); sent to
+ *                                          every peer including the sender, and
+ *                                          replayed once on join so a late
+ *                                          joiner isn't stuck assuming false.
  *   { type: 'tabs_state',      tabs: [{id, title}], activeTabId }
  *                                        — structural changes (create/switch/close)
  *                                          and replayed in full to late joiners.
@@ -212,7 +239,7 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
-//         serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
+//         transcribing, serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
 const rooms = new Map()
 
 // A room's tabs/text/video, Transcript (ticket 01), and per-tab Research
@@ -310,6 +337,22 @@ function sendDuck(slug) {
   const room = rooms.get(slug)
   if (!room) return
   const msg = { type: 'yt_duck', talking: anyoneTalking(slug) }
+  for (const peer of room.values()) send(peer.ws, msg)
+}
+
+function anyoneTranscribing(slug) {
+  const room = rooms.get(slug)
+  if (!room) return false
+  for (const peer of room.values()) {
+    if (peer.transcribing) return true
+  }
+  return false
+}
+
+function sendTranscriptActivity(slug) {
+  const room = rooms.get(slug)
+  if (!room) return
+  const msg = { type: 'transcript_activity', active: anyoneTranscribing(slug) }
   for (const peer of room.values()) send(peer.ws, msg)
 }
 
@@ -462,6 +505,7 @@ export function setupWss(wss) {
         if (firstJoin && clientId) {
           replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
+          send(ws, { type: 'transcript_activity', active: anyoneTranscribing(slug) })
           // Exclusive to this connection — never broadcast (see the
           // 'server_copy_token' protocol doc above and ticket 11). This is
           // the one channel that can prove "this connection owns
@@ -528,6 +572,11 @@ export function setupWss(wss) {
       if (msg.type === 'yt_duck' && clientId) {
         peer.talking = !!msg.talking
         sendDuck(slug)
+      }
+
+      if (msg.type === 'transcript_activity' && clientId) {
+        peer.transcribing = !!msg.active
+        sendTranscriptActivity(slug)
       }
 
       if (msg.type === 'tab_create' && clientId) {
@@ -684,6 +733,7 @@ export function setupWss(wss) {
         recomputeRoles(room)
         sendPresence(slug)
         sendDuck(slug)
+        sendTranscriptActivity(slug)
       }
     })
 

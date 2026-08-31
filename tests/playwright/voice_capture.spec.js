@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, passRecordingCheck } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './helpers.js'
 
 /**
  * Ticket 03 (research-assistant): voice capture wired to the Record
@@ -147,4 +147,51 @@ test('a browser without SpeechRecognition still records normally, with no error 
   expect(dialogMessage).toBeNull()
 
   await page.close()
+})
+
+test('an interim result shows a room-shared "transcript incoming" pulse to every peer, which clears once the line finalizes', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubSpeechRecognition(host)
+  await stubYouTubeApi(host)
+  const password = 'voice-capture-activity'
+  const roomUrl = await createRoom(host, { name: `E2E Voice Capture Activity ${Date.now()}`, password, hostDisplayName: 'Host' })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+
+  await host.getByRole('button', { name: 'Start Recording' }).click()
+  await passRecordingCheck(host)
+  await expect.poll(() => host.evaluate(() => window.__srStartCount || 0)).toBeGreaterThan(0)
+
+  // Nothing said yet — no pulse for either peer.
+  await expect(host.locator('.transcript-activity-pulse')).toHaveCount(0)
+  await expect(guest.locator('.transcript-activity-pulse')).toHaveCount(0)
+
+  await host.evaluate(() => {
+    const instance = window.__srInstances.at(-1)
+    instance.onresult({
+      resultIndex: 0,
+      results: [Object.assign([{ transcript: 'still tal' }], { isFinal: false })]
+    })
+  })
+
+  // Room-shared: the guest sees it too, not just the peer whose mic picked
+  // up the interim result.
+  await expect(host.locator('.transcript-activity-pulse')).toBeVisible()
+  await expect(guest.locator('.transcript-activity-pulse')).toBeVisible()
+
+  await fireFinalResult(host, 'Still talking now.')
+
+  // Finalizing clears it immediately, for both peers — not just after the
+  // decay timer would eventually have fired.
+  await expect(host.locator('.transcript-activity-pulse')).toHaveCount(0)
+  await expect(guest.locator('.transcript-activity-pulse')).toHaveCount(0)
+
+  await host.getByRole('button', { name: 'Stop Recording' }).click()
+  await expect.poll(() => host.evaluate(() => window.__srStopCount || 0)).toBeGreaterThan(0)
+  await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+
+  await guest.close()
+  await host.close()
 })
