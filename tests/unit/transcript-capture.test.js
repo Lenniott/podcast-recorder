@@ -12,19 +12,23 @@ import { createTranscriptCapture } from '../../src/lib/transcript-capture.js'
 function createFakeRecognition(overrides = {}) {
   const calls = { start: 0, stop: 0 }
   let onResult = null
+  let onStatusChange = null
   const recognition = {
     start: vi.fn(() => { calls.start++ }),
     stop: vi.fn(() => { calls.stop++ }),
-    supported: overrides.supported ?? true
+    supported: overrides.supported ?? true,
+    status: overrides.status ?? 'stopped'
   }
   const createRecognition = vi.fn((opts) => {
     onResult = opts.onResult
+    onStatusChange = opts.onStatusChange
     return recognition
   })
   return {
     createRecognition,
     recognition,
-    fireResult: (text, isFinal) => onResult(text, isFinal)
+    fireResult: (text, isFinal) => onResult(text, isFinal),
+    fireStatusChange: (status) => onStatusChange?.(status)
   }
 }
 
@@ -119,6 +123,23 @@ describe('createTranscriptCapture', () => {
 
     expect(() => capture.start()).not.toThrow()
     expect(() => capture.stop()).not.toThrow()
+  })
+
+  it('forwards onStatusChange straight through from the underlying recognition', () => {
+    const { createRecognition, fireStatusChange } = createFakeRecognition()
+    const onStatusChange = vi.fn()
+    createTranscriptCapture({ send: vi.fn(), getSpeakerName: () => 'Host', onStatusChange, createRecognition })
+
+    fireStatusChange('retrying')
+
+    expect(onStatusChange).toHaveBeenCalledWith('retrying')
+  })
+
+  it('exposes the underlying recognition\'s current status', () => {
+    const { createRecognition } = createFakeRecognition({ status: 'running' })
+    const capture = createTranscriptCapture({ send: vi.fn(), getSpeakerName: () => 'Host', createRecognition })
+
+    expect(capture.status).toBe('running')
   })
 
   it('never sends for a finalized result that is empty or whitespace-only', () => {

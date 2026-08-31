@@ -15,6 +15,24 @@
   export let send = () => {};
   export let clockOffset = 0;
 
+  // This participant's own speech-recognition status — 'stopped' |
+  // 'unsupported' | 'starting' | 'running' | 'retrying' (see
+  // $lib/speech-recognition.js). Deliberately per-browser, never
+  // room-shared: whether *you* are being transcribed is your own local
+  // fact, same as your own mic selection. Shown as a small dot on the
+  // Transcript pill so it's visible without switching to that tab — the
+  // same "never let silence stand in for everything's fine" lesson
+  // AGENTS.md already states for recording health.
+  export let transcriptionStatus = "stopped";
+
+  const TRANSCRIPTION_STATUS_LABEL = {
+    stopped: "Not transcribing",
+    unsupported: "Transcription isn't supported in this browser",
+    starting: "Starting transcription…",
+    running: "Transcribing your mic",
+    retrying: "Transcription lost connection — retrying…",
+  };
+
   const TEXT_DEBOUNCE_MS = 300;
 
   // ─── Shared room state, driven entirely by inbound WS messages ─────────
@@ -242,6 +260,14 @@
         on:click={switchToTranscript}
       >
         Transcript
+        {#if transcriptionStatus !== "stopped"}
+          <span
+            class="transcription-status-dot"
+            data-status={transcriptionStatus}
+            title={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
+            aria-label={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
+          ></span>
+        {/if}
       </button>
     </div>
     <button
@@ -383,6 +409,26 @@
     cursor: pointer;
     width: 100%;
     text-align: center;
+  }
+
+  .transcription-status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+    background: var(--muted);
+  }
+  .transcription-status-dot[data-status="running"] {
+    background: var(--success);
+  }
+  .transcription-status-dot[data-status="starting"] {
+    background: var(--warn);
+  }
+  .transcription-status-dot[data-status="retrying"] {
+    background: var(--danger);
+    box-shadow: 0 0 4px var(--danger);
   }
 
   /* Nested inside the already-bordered .tab-pill — no second border. */

@@ -16,6 +16,10 @@
   // two-way bound so it can be handed to ResearchPanel as a plain prop
   // (see RoomTabs.svelte's own comment on `export let tabTexts`).
   export let tabTexts = {};
+  // This browser's own speech-recognition status — passed straight through
+  // to RoomTabs' status dot (see its own prop doc comment). Per-browser,
+  // never synced to the room.
+  export let transcriptionStatus = "stopped";
   export let canvasEl;
 
   export let roomName = "";
@@ -124,7 +128,7 @@
       </RoomPresenceTable>
     </div>
 
-    <RoomTabs {send} {clockOffset} bind:this={roomTabs} bind:tabTexts />
+    <RoomTabs {send} {clockOffset} {transcriptionStatus} bind:this={roomTabs} bind:tabTexts />
   </main>
 
   <ResearchPanel {send} {slug} {tabTexts} bind:collapsed={researchCollapsed} bind:this={researchPanel} />

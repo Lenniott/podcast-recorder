@@ -21,7 +21,13 @@ async function stubSpeechRecognition(page) {
         this.onend = null
         this.onerror = null
       }
-      start() {}
+      start() {
+        // Real browsers fire onstart shortly after start() is called —
+        // the status dot (RoomTabs.svelte) only reaches "running" once
+        // that happens, same as speech-recognition.js's own retry logic
+        // only resets its backoff on a confirmed onstart.
+        queueMicrotask(() => this.onstart?.())
+      }
       stop() {
         window.__srStopCount = (window.__srStopCount || 0) + 1
       }
@@ -64,6 +70,11 @@ test('Start Recording starts speech recognition; a finalized utterance appears i
   // button, no separate consent step (ADR-0003).
   await expect.poll(() => page.evaluate(() => window.__srStartCount || 0)).toBeGreaterThan(0)
 
+  // Status dot on the Transcript tab pill confirms a confirmed-running
+  // session, not just an attempted one (speech-recognition.js only fires
+  // onStatusChange('running') after the fake's onstart callback lands).
+  await expect(page.locator('.transcription-status-dot')).toHaveAttribute('data-status', 'running')
+
   await fireFinalResult(page, 'Hello from the test.')
 
   await page.getByRole('button', { name: 'Transcript' }).click()
@@ -74,6 +85,9 @@ test('Start Recording starts speech recognition; a finalized utterance appears i
   await page.getByRole('button', { name: 'Stop Recording' }).click()
   await expect.poll(() => page.evaluate(() => window.__srStopCount || 0)).toBeGreaterThan(0)
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+
+  // Stopped is the "nothing to show" state — the dot itself is hidden.
+  await expect(page.locator('.transcription-status-dot')).toHaveCount(0)
 
   await page.close()
 })

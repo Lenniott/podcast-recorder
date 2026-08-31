@@ -24,7 +24,7 @@ import { createSpeechRecognition } from './speech-recognition.js'
  * WAV write path, which lives entirely outside this module and is never
  * awaited or blocked on by anything here.
  */
-export function createTranscriptCapture({ send, getSpeakerName, createRecognition = createSpeechRecognition } = {}) {
+export function createTranscriptCapture({ send, getSpeakerName, onStatusChange, createRecognition = createSpeechRecognition } = {}) {
   const recognition = createRecognition({
     onResult(text, isFinal) {
       if (!isFinal) return
@@ -37,7 +37,14 @@ export function createTranscriptCapture({ send, getSpeakerName, createRecognitio
         // transcript line is simply lost, same as any other room message
         // sent while disconnected.
       }
-    }
+    },
+    // Forwarded straight through — see speech-recognition.js's own doc
+    // comment for the status values ('unsupported' | 'starting' | 'running'
+    // | 'retrying' | 'stopped'). This is what lets the UI show something
+    // real about whether this participant is actually being transcribed,
+    // instead of silence standing in for "everything's fine" (AGENTS.md's
+    // recording-health lesson, applied here too).
+    onStatusChange
   })
 
   function start() {
@@ -48,5 +55,5 @@ export function createTranscriptCapture({ send, getSpeakerName, createRecognitio
     try { recognition.stop() } catch { /* never throw into stopRecording() */ }
   }
 
-  return { start, stop, get supported() { return recognition.supported } }
+  return { start, stop, get supported() { return recognition.supported }, get status() { return recognition.status } }
 }

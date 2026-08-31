@@ -454,9 +454,17 @@
   // Every failure path inside transcriptCapture is already swallowed by
   // that module, so nothing here needs its own try/catch to protect
   // startRecording/stopRecording's own critical sections.
+  // Per-browser, never sent over the WS — see RoomTabs.svelte's own prop
+  // doc comment. Drives the small status dot on the Transcript pill so a
+  // silently-dead recognizer (the bug speech-recognition.js's retry logic
+  // now recovers from on its own) is still visible in the meantime, not
+  // indistinguishable from "everything's fine."
+  let transcriptionStatus = 'stopped'
+
   const transcriptCapture = createTranscriptCapture({
     send: (msg) => room.send(msg),
-    getSpeakerName: () => getJoinName()
+    getSpeakerName: () => getJoinName(),
+    onStatusChange: (status) => { transcriptionStatus = status }
   })
 
   /**
@@ -966,6 +974,7 @@
     bind:roomTabs
     bind:researchPanel
     bind:tabTexts
+    {transcriptionStatus}
     bind:canvasEl={canvas}
     roomName={data.roomName}
     slug={data.slug}
