@@ -384,6 +384,137 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
   })
 })
 
+describe('createRoomStateStore — research entries (per-tab, shared — see ADR-0002 and ticket 04)', () => {
+  it('a brand-new room starts with no research entries for any tab', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const room = store.getRoom('room1')
+    expect(room.research).toEqual({})
+  })
+
+  it('adds a pending entry under a specific tab id and returns it alongside the updated room', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const result = store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Who invented the transistor?' })
+    expect(result.ok).toBe(true)
+    expect(result.entry).toMatchObject({
+      id: 'e1',
+      tabId: 'tabA',
+      question: 'Who invented the transistor?',
+      status: 'pending',
+      answer: null,
+      citations: [],
+      error: null
+    })
+    expect(result.room.research.tabA).toEqual([result.entry])
+    expect(store.getRoom('room1').research.tabA).toEqual([result.entry])
+  })
+
+  it('entries are strictly per-tab — adding under tab A never appears under tab B', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Question for A' })
+    store.addResearchEntry('room1', 'tabB', { id: 'e2', question: 'Question for B' })
+
+    const room = store.getRoom('room1')
+    expect(room.research.tabA.map((e) => e.id)).toEqual(['e1'])
+    expect(room.research.tabB.map((e) => e.id)).toEqual(['e2'])
+  })
+
+  it('rejects an empty/blank question, leaving research state unchanged', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    const result = store.addResearchEntry('room1', 'tabA', { id: 'e1', question: '   ' })
+    expect(result).toEqual({ ok: false, error: 'A research question cannot be empty' })
+    expect(store.getRoom('room1').research).toEqual({})
+  })
+
+  it('rejects a duplicate or missing entry id', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'first' })
+
+    const dup = store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'second' })
+    expect(dup).toEqual({ ok: false, error: 'Invalid or duplicate research entry id' })
+
+    const missing = store.addResearchEntry('room1', 'tabA', { id: '', question: 'third' })
+    expect(missing).toEqual({ ok: false, error: 'Invalid or duplicate research entry id' })
+
+    expect(store.getRoom('room1').research.tabA).toHaveLength(1)
+  })
+
+  it('moves a pending entry to answered, storing the answer and citations', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'What is a haiku?' })
+
+    const result = store.resolveResearchEntry('room1', 'e1', {
+      answer: 'A haiku is a three-line Japanese poem.',
+      citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }]
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.tabId).toBe('tabA')
+    expect(result.entry).toMatchObject({
+      id: 'e1',
+      status: 'answered',
+      answer: 'A haiku is a three-line Japanese poem.',
+      citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }],
+      error: null
+    })
+    expect(store.getRoom('room1').research.tabA[0]).toEqual(result.entry)
+  })
+
+  it('moves a pending entry to errored, storing a visible error message', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'What is a haiku?' })
+
+    const result = store.errorResearchEntry('room1', 'e1', { message: 'The Research Assistant could not be reached.' })
+
+    expect(result.ok).toBe(true)
+    expect(result.tabId).toBe('tabA')
+    expect(result.entry).toMatchObject({
+      id: 'e1',
+      status: 'errored',
+      answer: null,
+      error: 'The Research Assistant could not be reached.'
+    })
+    expect(store.getRoom('room1').research.tabA[0]).toEqual(result.entry)
+  })
+
+  it('rejects resolving/erroring an unknown entry id', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    expect(store.resolveResearchEntry('room1', 'nope', { answer: 'x' })).toEqual({ ok: false, error: 'Unknown research entry' })
+    expect(store.errorResearchEntry('room1', 'nope', { message: 'x' })).toEqual({ ok: false, error: 'Unknown research entry' })
+  })
+
+  it('backfills an empty research map for content hydrated from durable storage saved before Research Assistant entries existed', () => {
+    const legacyDurable = {
+      save: vi.fn(),
+      // A room saved by a pre-ticket-04 build — no `research` key at all.
+      load: vi.fn(() => ({
+        tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: '' }], activeTabId: 't1' },
+        transcript: { lines: [] }
+      }))
+    }
+    const store = createRoomStateStore({ durable: legacyDurable })
+    const room = store.getRoom('room1')
+    expect(room.research).toEqual({})
+    expect(() => store.addResearchEntry('room1', 't1', { id: 'e1', question: 'hi' })).not.toThrow()
+  })
+
+  it('survives a flush-and-evict/rehydrate cycle exactly like tabs/text/video/transcript already do', () => {
+    const durable = fakeDurable()
+    const clock = fakeClock()
+    const store = createRoomStateStore({ durable, ...clock, graceMs: 10_000 })
+
+    store.onParticipantJoined('room1')
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Persisted question?' })
+    store.resolveResearchEntry('room1', 'e1', { answer: 'Persisted answer.', citations: [] })
+    store.onParticipantLeft('room1')
+    clock.fire(1) // grace elapses, nobody reconnects — flush + evict
+
+    const restored = store.onParticipantJoined('room1')
+    expect(restored.research.tabA).toEqual([
+      expect.objectContaining({ id: 'e1', status: 'answered', answer: 'Persisted answer.' })
+    ])
+  })
+})
+
 describe('createRoomStateStore — lifecycle: grace timer eviction', () => {
   it('exactly 10 seconds (graceMs) after the last participant leaves, with nobody reconnecting, flushes to durable storage and evicts from hot', () => {
     const durable = fakeDurable()

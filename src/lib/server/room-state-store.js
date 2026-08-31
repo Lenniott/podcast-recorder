@@ -1,7 +1,8 @@
 /**
- * Room State Store — the deep module owning a room's shared content
- * (tabs/text/video today; the Transcript and Research Assistant entries
- * are later, same-shaped additions — see ADR-0002 and tickets 01/04).
+ * Room State Store — the deep module owning a room's shared content:
+ * tabs/text/video, the Transcript (ticket 01), and per-tab Research
+ * Assistant entries (ticket 04) — all same-shaped sibling content kinds,
+ * see ADR-0002.
  *
  * Lifecycle: while >=1 participant is connected, a room's content lives
  * only in the injected `hot` store (no disk I/O). The instant the last
@@ -18,6 +19,7 @@
 
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
 import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../transcript-sync.js'
+import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations } from '../research-sync.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -62,7 +64,13 @@ function createDefaultRoomContent() {
     // the room's UI tab strip is a client-side concern (RoomTabs.svelte
     // always renders one, alongside whatever real tabs.list holds); here
     // it's just the append-only line log every room always has.
-    transcript: { lines: [] }
+    transcript: { lines: [] },
+    // Sibling content, keyed by tab id (never an entry in tabs.list either —
+    // see ADR-0002 and ticket 04). `research[tabId]` is that tab's own
+    // history of research entries, in the order they were asked; a tab with
+    // no entries yet simply has no key here rather than an empty array, so
+    // a brand-new room's research map is `{}`.
+    research: {}
   }
 }
 
@@ -160,6 +168,7 @@ export function createRoomStateStore({
     // missing kind. This is the extension point ticket 00 promised: a new
     // content kind slots in without changing getRoom's shape or callers.
     if (!content.transcript) content.transcript = { lines: [] }
+    if (!content.research) content.research = {}
     hot.set(slug, content)
     return content
   }
@@ -277,6 +286,84 @@ export function createRoomStateStore({
     })
   }
 
+  // ── Research Assistant entries (per-tab, shared — see ADR-0002 and
+  //    ticket 04) ────────────────────────────────────────────────────────
+
+  /** Finds an entry by id across every tab's history (an entry's tabId is
+   *  fixed at creation — see addResearchEntry — so a later resolve/error
+   *  never needs the caller to know or re-supply which tab it lives under,
+   *  even if the room's currently-active tab has since changed). */
+  function findResearchEntry(content, entryId) {
+    for (const tabId of Object.keys(content.research)) {
+      const idx = content.research[tabId].findIndex((e) => e.id === entryId)
+      if (idx !== -1) return { tabId, idx }
+    }
+    return null
+  }
+
+  function addResearchEntry(slug, tabId, { id, question } = {}) {
+    return withRoom(slug, (content) => {
+      const entryId = String(id || '').slice(0, 64)
+      if (!entryId || findResearchEntry(content, entryId)) {
+        return { ok: false, error: 'Invalid or duplicate research entry id' }
+      }
+
+      const cleanQuestion = String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN)
+      if (!cleanQuestion) {
+        return { ok: false, error: 'A research question cannot be empty' }
+      }
+
+      const tid = String(tabId || '')
+      const entry = {
+        id: entryId,
+        tabId: tid,
+        question: cleanQuestion,
+        status: 'pending',
+        answer: null,
+        citations: [],
+        error: null,
+        at: Date.now()
+      }
+      // A pending entry is real, broadcast state the instant it's created
+      // (see ws-rooms.js's research_ask handler) — never a client-only
+      // illusion invented before the server has recorded anything.
+      if (!content.research[tid]) content.research[tid] = []
+      content.research[tid].push(entry)
+      return { ok: true, room: content, entry, tabId: tid }
+    })
+  }
+
+  function resolveResearchEntry(slug, entryId, { answer, citations } = {}) {
+    return withRoom(slug, (content) => {
+      const found = findResearchEntry(content, String(entryId || ''))
+      if (!found) return { ok: false, error: 'Unknown research entry' }
+
+      const entry = content.research[found.tabId][found.idx]
+      entry.status = 'answered'
+      entry.answer = String(answer || '').slice(0, MAX_RESEARCH_ANSWER_LEN)
+      entry.citations = sanitizeCitations(citations)
+      entry.error = null
+      return { ok: true, room: content, entry, tabId: found.tabId }
+    })
+  }
+
+  function errorResearchEntry(slug, entryId, { message } = {}) {
+    return withRoom(slug, (content) => {
+      const found = findResearchEntry(content, String(entryId || ''))
+      if (!found) return { ok: false, error: 'Unknown research entry' }
+
+      const entry = content.research[found.tabId][found.idx]
+      entry.status = 'errored'
+      // A failed request must always resolve to a visible error, never an
+      // entry stuck pending forever — this is the ONLY other place a
+      // pending entry's status ever changes, alongside resolveResearchEntry
+      // above.
+      entry.error = String(message || 'Something went wrong.').slice(0, MAX_RESEARCH_ANSWER_LEN)
+      entry.answer = null
+      return { ok: true, room: content, entry, tabId: found.tabId }
+    })
+  }
+
   /** For tests only — clears hot content and cancels every pending grace
    *  timer, so each test starts clean (mirrors ws-rooms.js's own
    *  _resetRooms, since this Store now owns what that used to hold). */
@@ -296,6 +383,9 @@ export function createRoomStateStore({
     setTabVideo,
     setTabText,
     appendTranscriptLine,
+    addResearchEntry,
+    resolveResearchEntry,
+    errorResearchEntry,
     _resetForTests
   }
 }
