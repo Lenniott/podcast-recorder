@@ -4,6 +4,7 @@ import {
   applyResearchState,
   visibleEntries,
   buildManualAskRequest,
+  buildQuickActionRequest,
   describeResearchError,
   makeResearchEntryId
 } from '../../src/lib/research-panel.js'
@@ -84,6 +85,45 @@ describe('buildManualAskRequest', () => {
     const huge = 'x'.repeat(1000)
     const result = buildManualAskRequest(`  ${huge}  `)
     expect(result.query).toBe(huge.slice(0, 500))
+  })
+})
+
+describe('buildQuickActionRequest', () => {
+  it.each([
+    ['define', 'Define the term.'],
+    ['keyFacts', 'Some facts here.'],
+    ['factCheck', 'A claim to check.'],
+    ['findExamples', 'A topic to exemplify.'],
+    ['analyze', 'Some text to analyze.']
+  ])('builds a quickAction request for %s using the active tab\'s full text', (actionId, text) => {
+    expect(buildQuickActionRequest(actionId, text)).toEqual({ kind: 'quickAction', actionId, text })
+  })
+
+  it('trims surrounding whitespace from the tab text', () => {
+    expect(buildQuickActionRequest('define', '  hello world  ')).toEqual({
+      kind: 'quickAction',
+      actionId: 'define',
+      text: 'hello world'
+    })
+  })
+
+  it('returns null for empty text — nothing to act on, never a request with empty text', () => {
+    expect(buildQuickActionRequest('define', '')).toBeNull()
+  })
+
+  it('returns null for whitespace-only text — nothing to act on', () => {
+    expect(buildQuickActionRequest('define', '   \n\t  ')).toBeNull()
+  })
+
+  it('returns null for a missing/unknown actionId', () => {
+    expect(buildQuickActionRequest('notARealAction', 'some text')).toBeNull()
+    expect(buildQuickActionRequest(undefined, 'some text')).toBeNull()
+  })
+
+  it('caps an overlong tab text at the endpoint\'s own max text length', () => {
+    const huge = 'x'.repeat(21000)
+    const result = buildQuickActionRequest('analyze', huge)
+    expect(result.text).toBe(huge.slice(0, 20000))
   })
 })
 

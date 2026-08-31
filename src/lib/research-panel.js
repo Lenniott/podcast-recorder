@@ -13,8 +13,14 @@
  * discipline RoomTabs.svelte's `viewingTranscript` now follows.
  */
 import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
+import { MAX_TAB_TEXT_LEN } from './tab-sync.js'
 
 export { makeResearchEntryId }
+
+// The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
+// entry) — must match research-assistant.js's own QUICK_ACTION_INSTRUCTIONS
+// keys exactly, since actionId is forwarded verbatim to that server-side map.
+const QUICK_ACTION_IDS = new Set(['define', 'keyFacts', 'factCheck', 'findExamples', 'analyze'])
 
 /** Applies a `research_entry` (create/update) broadcast into entriesByTab. */
 export function applyResearchEntry(entriesByTab, msg) {
@@ -48,6 +54,26 @@ export function visibleEntries(entriesByTab, activeTabId) {
  */
 export function buildManualAskRequest(question) {
   return { kind: 'voice', query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN), context: '', notes: '' }
+}
+
+/**
+ * Turns a Quick Action id + the active tab's whole text into a request body
+ * for POST /rec/[slug]/research (ticket 02's endpoint) — the `quickAction`
+ * shape ticket 02 already defined server-side: `{ kind: 'quickAction',
+ * actionId, text }`. The client never builds instruction text itself —
+ * research-assistant.js's QUICK_ACTION_INSTRUCTIONS owns that wording.
+ *
+ * Returns null for an unknown actionId, or for empty/whitespace-only text —
+ * "nothing to act on" is a request that's never sent at all, never a request
+ * sent with empty text (this is also what ResearchPanel.svelte's button-
+ * disabled check is built on, so "disabled" and "would refuse to send" can
+ * never disagree).
+ */
+export function buildQuickActionRequest(actionId, text) {
+  if (!QUICK_ACTION_IDS.has(actionId)) return null
+  const trimmed = String(text || '').trim().slice(0, MAX_TAB_TEXT_LEN)
+  if (!trimmed) return null
+  return { kind: 'quickAction', actionId, text: trimmed }
 }
 
 // Maps the research endpoint's error codes (see
