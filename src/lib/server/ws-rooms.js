@@ -44,8 +44,23 @@
  *   { type: 'tab_text',   tabId, text }  — full shared text for that tab
  *                                          (last write wins, no host gate)
  *   { type: 'tabs_sync' }                — request a full replay (structure +
- *                                          per-tab video/text). Used when the
+ *                                          per-tab video/text, and the full
+ *                                          transcript-so-far). Used when the
  *                                          UI remounts without a WS reconnect.
+ *   { type: 'transcript_line', speaker, text }
+ *                                        — append one new, already-finalized
+ *                                          Transcript Tab line (see
+ *                                          CONTEXT.md's Turn/Transcript Tab
+ *                                          and ADR-0002). Any peer may send
+ *                                          one at any time — this is
+ *                                          deliberately NOT the same
+ *                                          mechanism as tab_text: the server
+ *                                          only ever appends, never replaces,
+ *                                          so two lines from two speakers
+ *                                          arriving close together both
+ *                                          survive in a stable (arrival)
+ *                                          order instead of one silently
+ *                                          overwriting the other.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
@@ -89,6 +104,26 @@
  *                                          clobbered mid-keystroke), replayed
  *                                          per-tab (for tabs with non-empty text)
  *                                          to late joiners
+ *   { type: 'transcript_state', lines: [{id, speaker, text, at}] }
+ *                                        — the room's full Transcript-so-far, in
+ *                                          order; sent once per join and once per
+ *                                          tabs_sync (mirrors tabs_state/tab_text's
+ *                                          own replay-on-join pattern), always
+ *                                          BEFORE any live transcript_line for
+ *                                          that connection. Not scoped to a tab —
+ *                                          the Transcript is one room-wide,
+ *                                          permanent, uncloseable Tab, not an
+ *                                          entry in tabs_state's tabs list.
+ *   { type: 'transcript_line',  id, speaker, text, at }
+ *                                        — one appended line, broadcast to EVERY
+ *                                          peer including the sender (unlike
+ *                                          tab_text) since the Transcript has no
+ *                                          local optimistic UI to protect from a
+ *                                          clobber — the server is the single
+ *                                          source of truth for line order. `at`
+ *                                          is the server's Date.now() when it was
+ *                                          appended; `id` is stable for Svelte
+ *                                          keying, never reused.
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -231,6 +266,14 @@ function replayTabsTo(ws, content) {
       send(ws, { type: 'tab_text', tabId: tab.id, text: tab.text })
     }
   }
+  replayTranscriptTo(ws, content)
+}
+
+// ── Transcript (append-only — see ADR-0002 and ticket 01) ─────────────────
+
+/** Replays a room's full transcript-so-far, in order, to one late joiner/resyncer. */
+function replayTranscriptTo(ws, content) {
+  send(ws, { type: 'transcript_state', lines: content.transcript.lines })
 }
 
 /** For tests only — wipes all rooms so each test starts clean */
@@ -471,6 +514,22 @@ export function setupWss(wss) {
         roomStateStore.setTabVideo(slug, tabId, video)
         for (const p of room.values()) {
           send(p.ws, { type: 'tab_video', tabId, ...video, triggerAtMs: applyAtMs })
+        }
+      }
+
+      if (msg.type === 'transcript_line' && clientId) {
+        const result = roomStateStore.appendTranscriptLine(slug, { speaker: msg.speaker, text: msg.text })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        // Broadcast to every peer, including the sender — unlike tab_text
+        // there is no local optimistic echo to protect (the Transcript is
+        // read-only in the UI), and the server is the single source of
+        // ordering truth for two near-simultaneous lines from different
+        // speakers (see ADR-0002).
+        for (const p of room.values()) {
+          send(p.ws, { type: 'transcript_line', ...result.line })
         }
       }
 
