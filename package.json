@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "rooms": "node scripts/rooms.js list",
     "rooms:delete": "node scripts/rooms.js delete",
+    "research:eval": "node --env-file=.env scripts/research-eval.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
