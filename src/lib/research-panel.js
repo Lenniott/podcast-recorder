@@ -19,8 +19,8 @@ import { TRANSCRIPT_TAB_ID } from './transcript-sync.js'
 export { makeResearchEntryId }
 
 // The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
-// entry) — must match research-assistant.js's own QUICK_ACTION_INSTRUCTIONS
-// keys exactly, since actionId is forwarded verbatim to that server-side map.
+// entry) — must match research-card.js's own MODES keys exactly, since
+// actionId is forwarded verbatim as MODE to the shared system prompt.
 const QUICK_ACTION_IDS = new Set(['define', 'keyFacts', 'factCheck', 'findExamples', 'analyze'])
 
 /** Applies a `research_entry` (create/update) broadcast into entriesByTab. */
@@ -72,7 +72,7 @@ export function applyTranscriptLine(transcriptLines, msg) {
 /** The Transcript's lines-so-far as one block of text, "Speaker: text" per
  *  line — the same shape TranscriptTab.svelte renders each line as. */
 function transcriptLinesToText(lines) {
-  return (lines || []).map((line) => `${line.speaker}: ${line.text}`).join('\n')
+  return joinTranscriptLines(lines)
 }
 
 // Manual, button-triggered validation step for what was going to be Research
@@ -84,13 +84,40 @@ function transcriptLinesToText(lines) {
 // them. Once this is validated as actually useful, the passive version can
 // reuse the exact same window/request shape.
 const RECENT_TRANSCRIPT_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
+const RESEARCH_TRANSCRIPT_BUDGET = MAX_TAB_TEXT_LEN // same 20_000 as the research route's per-field cap
+
+function formatTranscriptLine(line) {
+  return `${line.speaker}: ${line.text}`
+}
+
+function joinTranscriptLines(lines) {
+  return (lines || []).map(formatTranscriptLine).join('\n')
+}
+
+/** Keep the end of `text` (closest to Focus) when a single field is over budget. */
+function newestEnd(text, budget) {
+  if (text.length <= budget) return text
+  return text.slice(-budget)
+}
+
+/** Drop oldest whole lines until `lines` fit in `budget`; if one line still overflows, keep its suffix. */
+function trimOldestToFit(lines, budget) {
+  if (budget <= 0) return ''
+  let start = 0
+  let text = joinTranscriptLines(lines)
+  while (start < lines.length && text.length > budget) {
+    start += 1
+    text = joinTranscriptLines(lines.slice(start))
+  }
+  return newestEnd(text, budget)
+}
 
 /** The Transcript's last `windowMs` of lines, as one block of text — empty
  *  string if nothing was said in that window (or there's no Transcript
  *  yet). `now` is injectable so this is testable without real timers. */
 export function recentTranscriptText(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
   const cutoff = now - windowMs
-  return transcriptLinesToText((transcriptLines || []).filter((line) => line.at >= cutoff))
+  return joinTranscriptLines((transcriptLines || []).filter((line) => line.at >= cutoff))
 }
 
 /** Same "is there anything to act on" question as hasQuickActionText, named
@@ -102,19 +129,26 @@ export function hasRecentTranscript(text) {
 }
 
 /**
- * Turns the Transcript's recent window into a request body for
- * POST /rec/[slug]/research — reuses the `voice` shape with `query: null`,
- * the same "no topic named, infer it from context" path a Voice-Trigger-
- * style ask with no explicit topic already takes (see
- * research-assistant.js's buildMessages). Returns null when there's
- * nothing in the window — "nothing to research" is a request that's never
- * sent, never one sent with empty context (same discipline as
- * buildQuickActionRequest).
+ * Turns the Transcript into a Research Mode request: Focus (last 10 minutes
+ * of wall-clock `at`) in `context`, Grounding (everything older) in `notes`.
+ * Jump-in attaches to Focus only; Grounding resolves "they" / "that cover"
+ * after a recording pause. Returns null when Focus is empty — never a
+ * request of earlier-only history. Combined payload stays within
+ * RESEARCH_TRANSCRIPT_BUDGET: keep all of Focus, trim oldest Grounding.
  */
 export function buildRecentTranscriptRequest(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
-  const context = recentTranscriptText(transcriptLines, windowMs, now)
-  if (!context.trim()) return null
-  return { kind: 'voice', query: null, context, notes: '' }
+  const cutoff = now - windowMs
+  const recentLines = (transcriptLines || []).filter((line) => line.at >= cutoff)
+  const earlierLines = (transcriptLines || []).filter((line) => line.at < cutoff)
+  const recent = joinTranscriptLines(recentLines)
+  if (!recent.trim()) return null
+
+  if (recent.length >= RESEARCH_TRANSCRIPT_BUDGET) {
+    return { kind: 'voice', query: null, context: newestEnd(recent, RESEARCH_TRANSCRIPT_BUDGET), notes: '' }
+  }
+
+  const notes = trimOldestToFit(earlierLines, RESEARCH_TRANSCRIPT_BUDGET - recent.length)
+  return { kind: 'voice', query: null, context: recent, notes }
 }
 
 /**

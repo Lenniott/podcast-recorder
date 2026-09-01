@@ -16,6 +16,7 @@
     describeResearchError,
     makeResearchEntryId,
   } from "./research-panel.js";
+  import { parseResearchCard } from "./research-card.js";
 
   // Shown as the entry's `question` — same field a typed manual ask or a
   // Quick Action's label fills. See research-panel.js's doc comment on
@@ -24,10 +25,10 @@
   const RESEARCH_RECENT_LABEL = "Research recent conversation";
 
   // The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
-  // entry) — actionId must match research-assistant.js's
-  // QUICK_ACTION_INSTRUCTIONS keys exactly. `label` doubles as the entry's
-  // `question` shown in the history, same field a manual ask's typed
-  // question fills.
+  // entry) — actionId must match research-card.js's own MODES keys
+  // exactly, since actionId is forwarded verbatim as MODE to the shared
+  // system prompt. `label` doubles as the entry's `question` shown in the
+  // history, same field a manual ask's typed question fills.
   const QUICK_ACTIONS = [
     { id: "define", label: "Define" },
     { id: "keyFacts", label: "Key facts" },
@@ -160,9 +161,8 @@
   // ─── Outbound — Research recent conversation (manual validation step for
   //     the deferred Research Mode pipeline) ─────────────────────────────
   // Reuses the exact same research_ask/resolve/error mechanism as manual
-  // ask and Quick Actions — only the request body differs (the Transcript's
-  // recent window as `context`, no `query`, same shape a topic-less Voice
-  // Trigger ask would have used).
+  // ask and Quick Actions — only the request body differs (Focus = last 10
+  // minutes as `context`, Grounding = older transcript as `notes`).
 
   function runResearchRecent() {
     const request = buildRecentTranscriptRequest(transcriptLines);
@@ -287,7 +287,18 @@
             {#if entry.status === "pending"}
               <p class="research-pending">Thinking…</p>
             {:else if entry.status === "answered"}
-              <p class="research-answer">{entry.answer}</p>
+              {@const card = parseResearchCard(entry.answer)}
+              {#if card}
+                <div class="research-card">
+                  <p class="research-context-summary">{card.contextSummary}</p>
+                  <p class="research-answer">{card.mainTakeaway}</p>
+                  {#if card.sources.length}
+                    <p class="research-detail-inline">{card.sources.join(", ")}</p>
+                  {/if}
+                </div>
+              {:else}
+                <p class="research-pending">Nothing new to add.</p>
+              {/if}
               {#if entry.citations?.length}
                 <ul class="research-citations">
                   {#each entry.citations as citation}
@@ -410,9 +421,40 @@
 
   .research-answer {
     margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.35;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .research-context-summary {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .research-detail-inline {
+    display: block;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
+  }
+
+  .research-card {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     font-size: 13px;
-    line-height: 1.5;
-    white-space: pre-wrap;
+    font-weight: 400;
   }
 
   .research-pending {
@@ -430,8 +472,12 @@
 
   .research-citations {
     margin: 0;
-    padding-left: 16px;
-    font-size: 12px;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font-size: 11px;
     color: var(--muted);
   }
 

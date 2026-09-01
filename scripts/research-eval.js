@@ -30,6 +30,8 @@
  *   node --env-file=.env scripts/research-eval.js --http=http://localhost:3000 --ws-port=3000
  *                                                                # against `npm run start` (single port)
  *
+ * Each run writes `.eval-runs/<timestamp>/` (gitignored): summary.json plus
+ * per-case .json (diffable) and .md (skimmable). --list writes nothing.
  * Or via the npm script (same env-file convention as `dev`/`start`):
  *   npm run research:eval -- wrong-fact
  */
@@ -88,6 +90,20 @@ const CASES = {
       { speaker: 'Host', text: "So first, remind me — what year did the Titanic actually sink?", afterMs: 0 },
       { speaker: 'Guest', text: "1912, I think. Anyway, totally different topic, but did you know octopuses have three hearts?", afterMs: 4000 },
       { speaker: 'Host', text: "Wait really? That seems made up.", afterMs: 3500 }
+    ]
+  },
+  // Gold case from `.scratch/context/example_tests/` — only the male-POV
+  // Jolene question is a live ask; Diane is already in the transcript.
+  'jolene-male-pov': {
+    description: 'One live ask buried in filler: is there a Jolene cover from the man\'s perspective? Diane is already answered in-window.',
+    lines: [
+      { speaker: 'Ben', text: 'the quick brown fox jumps over the lazy dog', afterMs: 0 },
+      { speaker: 'Ben', text: 'flowers quack', afterMs: 400 },
+      { speaker: 'Ben', text: 'Jack Black wait what his name white Jack White', afterMs: 400 },
+      { speaker: 'Ben', text: "it's quite a good cover but is a good enough", afterMs: 400 },
+      { speaker: 'Ben', text: 'I wonder if anyone has done a cover of Jolene where the singing it from the guys perspective', afterMs: 800 },
+      { speaker: 'Ben', text: "so apparently there's a song called Diane by Cam which is from jolene's point of view", afterMs: 800 },
+      { speaker: 'Ben', text: 'but is there one from the males point of view singing about Jolene', afterMs: 800 }
     ]
   }
 }
@@ -224,19 +240,73 @@ function transcriptText(lines) {
   return lines.map((l) => `${l.speaker}: ${l.text}`).join('\n')
 }
 
+function writeCaseArtifacts(outDir, record) {
+  writeFileSync(join(outDir, `${record.name}.json`), JSON.stringify(record, null, 2) + '\n')
+  const request = record.request
+  const context = request?.context ?? ''
+  writeFileSync(
+    join(outDir, `${record.name}.md`),
+    [
+      `# ${record.name}`,
+      '',
+      record.description,
+      '',
+      `Duration: ${record.durationMs}ms · HTTP ${record.httpStatus ?? 'n/a'}`,
+      `kind: ${request?.kind ?? ''} · query: ${JSON.stringify(request?.query ?? null)} · notes: ${JSON.stringify(request?.notes ?? '')}`,
+      '',
+      '## Transcript fed in',
+      '```',
+      context,
+      '```',
+      '',
+      `## Response (HTTP ${record.httpStatus ?? 'n/a'})`,
+      '```json',
+      JSON.stringify(record.response ?? { threw: record.threw }, null, 2),
+      '```'
+    ].join('\n') + '\n'
+  )
+}
+
+function summaryRow(record) {
+  return {
+    name: record.name,
+    status: record.httpStatus,
+    ok: record.httpStatus === 200,
+    error: record.threw || record.response?.error || null,
+    durationMs: record.durationMs,
+    files: { json: `${record.name}.json`, md: `${record.name}.md` }
+  }
+}
+
 async function runCase(name, { description, lines }, outDir) {
   console.log(`\n=== ${name} ===`)
   console.log(description)
 
+  const startedAt = new Date().toISOString()
+  const t0 = Date.now()
   const { slug, passwordHash } = await createEvalRoom(`Eval — ${name}`)
   console.log(`Room: ${slug} (feeding ${lines.length} lines over ~${lines.reduce((s, l) => s + l.afterMs, 0) / 1000}s)`)
 
+  const request = { kind: 'voice', query: null, context: transcriptText(lines), notes: '' }
+  const record = {
+    name,
+    description,
+    startedAt,
+    durationMs: 0,
+    roomSlug: slug,
+    request,
+    httpStatus: null,
+    response: null,
+    threw: null
+  }
+
   try {
     await feedTranscript(slug, lines)
-    const context = transcriptText(lines)
-    const { status, body } = await askResearchAssistant(slug, passwordHash, context)
+    const { status, body } = await askResearchAssistant(slug, passwordHash, request.context)
+    record.httpStatus = status
+    record.response = body
 
-    console.log(`\n--- Transcript fed in ---\n${context}`)
+    console.log(`\n--- Transcript fed in ---\n${request.context}`)
     console.log(`\n--- Response (HTTP ${status}) ---`)
     if (body.answer) {
       console.log(body.answer)
@@ -247,42 +317,51 @@ async function runCase(name, { description, lines }, outDir) {
     } else {
       console.log(JSON.stringify(body, null, 2))
     }
-
-    writeFileSync(
-      join(outDir, `${name}.md`),
-      [
-        `# ${name}`,
-        '',
-        description,
-        '',
-        '## Transcript fed in',
-        '```',
-        context,
-        '```',
-        '',
-        `## Response (HTTP ${status})`,
-        '```json',
-        JSON.stringify(body, null, 2),
-        '```'
-      ].join('\n')
-    )
+  } catch (err) {
+    record.threw = err?.message || String(err)
+    console.error(`\n--- Failed ---\n${record.threw}`)
   } finally {
+    record.durationMs = Date.now() - t0
+    writeCaseArtifacts(outDir, record)
     if (!KEEP_ROOMS) deleteEvalRoom(slug)
   }
+
+  return summaryRow(record)
 }
 
 async function main() {
-  const outDir = join('.scratch', 'research-assistant', 'eval-runs', new Date().toISOString().replace(/[:.]/g, '-'))
+  const startedAt = new Date().toISOString()
+  const t0 = Date.now()
+  const outDir = join('.eval-runs', startedAt.replace(/[:.]/g, '-'))
   mkdirSync(outDir, { recursive: true })
   console.log(`Server: ${HTTP_BASE} (HTTP) / ${WS_BASE} (WS)`)
   console.log(`Saving results to ${outDir}/`)
 
+  const results = []
   for (const [name, def] of Object.entries(selectedCases)) {
-    await runCase(name, def, outDir)
+    results.push(await runCase(name, def, outDir))
   }
+
+  writeFileSync(
+    join(outDir, 'summary.json'),
+    JSON.stringify({
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - t0,
+      httpBase: HTTP_BASE,
+      wsBase: WS_BASE,
+      casesRequested: Object.keys(selectedCases),
+      openrouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+      openrouterKeyPresent: Boolean(process.env.OPENROUTER_API_KEY),
+      keepRooms: KEEP_ROOMS,
+      results
+    }, null, 2) + '\n'
+  )
 
   console.log(`\nDone. Results saved to ${outDir}/`)
   db.close()
+
+  if (results.some((r) => !r.ok)) process.exit(1)
 }
 
 main().catch((err) => {

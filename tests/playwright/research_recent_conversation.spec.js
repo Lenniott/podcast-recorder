@@ -8,13 +8,15 @@ import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets } from './hel
  * docs/adr/0004-research-mode-replaces-voice-trigger.md and ticket 06's
  * current status). Reuses ticket 04's research_ask/resolve/error mechanism
  * exactly like Quick Actions do (see research_quick_actions.spec.js) — the
- * only new thing is the request body (the Transcript's recent window as
- * `context`, no `query`) and when the button is enabled at all.
+ * only new thing is the request body (Focus = last 10 minutes as `context`,
+ * Grounding = older transcript as `notes`, no `query`) and when the button
+ * is enabled at all.
  *
- * The 10-minute window itself is unit-tested (recentTranscriptText,
+ * The 10-minute split and the 20k trim are unit-tested (buildRecentTranscriptRequest,
  * tests/unit/research-panel.test.js) with an injected clock — not
  * re-proven here, since an e2e spec can't practically wait 10 real minutes
- * to exercise the boundary.
+ * to age `at`. Injected live lines all stamp `at = Date.now()`, so this spec
+ * still sees `notes: ''`.
  */
 
 const RECENT_LABEL = 'Research recent conversation'

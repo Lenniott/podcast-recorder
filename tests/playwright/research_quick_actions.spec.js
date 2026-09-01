@@ -231,3 +231,38 @@ test('a Quick Action works against the read-only Transcript tab\'s lines-so-far'
 
   await page.close()
 })
+
+test('Fact-check renders a skim card from the labeled field response, not raw field text', async ({ page }) => {
+  await trackLiveSockets(page)
+  await stubYouTubeApi(page)
+  await createRoom(page, { name: `E2E ResearchSkimCard ${Date.now()}`, password: 'skim-card' })
+
+  await notesTextarea(page).fill(
+    'Ben: so Jack White married his sister turned out not to be a sister and they only did that for the artistry. were they married before they were famous?'
+  )
+  await expect(page.getByRole('button', { name: 'Fact-check' })).toBeEnabled()
+
+  const mainTakeaway = 'They married in 1996, before they were famous.'
+  const answer = [
+    'PROVEN IN TRANSCRIPT: 0',
+    'UBIQUITOUS KNOWLEDGE: 0',
+    'OUTPUT TYPE: factCheck',
+    'CONTEXT SUMMARY: whether they married before fame',
+    `MAIN TAKEAWAY: ${mainTakeaway}`,
+    'SOURCES: Wikipedia'
+  ].join('\n')
+  await captureResearchRequests(page, {
+    delayMs: 200,
+    body: {
+      answer,
+      citations: [{ url: 'https://example.com/jack', title: 'Jack White' }]
+    }
+  })
+
+  await page.getByRole('button', { name: 'Fact-check' }).click()
+
+  await expect(page.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.research-answer')).toHaveText(mainTakeaway)
+  await expect(page.locator('.research-answer')).not.toContainText('MAIN TAKEAWAY')
+  await expect(page.locator('.research-citations a')).toHaveText('Jack White')
+})

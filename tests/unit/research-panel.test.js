@@ -16,6 +16,7 @@ import {
   makeResearchEntryId
 } from '../../src/lib/research-panel.js'
 import { TRANSCRIPT_TAB_ID } from '../../src/lib/transcript-sync.js'
+import { MAX_TAB_TEXT_LEN } from '../../src/lib/tab-sync.js'
 
 describe('makeResearchEntryId', () => {
   it('returns a unique-looking, non-empty string each time', () => {
@@ -246,6 +247,61 @@ describe('buildRecentTranscriptRequest', () => {
     expect(buildRecentTranscriptRequest([], 600_000, NOW)).toBeNull()
     const tooOld = [{ id: '1', speaker: 'Host', text: 'Ancient.', at: NOW - 700_000 }]
     expect(buildRecentTranscriptRequest(tooOld, 600_000, NOW)).toBeNull()
+  })
+
+  it('puts older lines in notes as Grounding and keeps the in-window lines as Focus', () => {
+    const lines = [
+      { id: '1', speaker: 'Ben', text: 'so Jack White', at: NOW - 700_000 },
+      { id: '2', speaker: 'Ben', text: 'I think they did a cover of Jolene', at: NOW - 1_000 }
+    ]
+    expect(buildRecentTranscriptRequest(lines, 600_000, NOW)).toEqual({
+      kind: 'voice',
+      query: null,
+      context: 'Ben: I think they did a cover of Jolene',
+      notes: 'Ben: so Jack White'
+    })
+  })
+
+  it('leaves notes empty when the whole transcript is in the window', () => {
+    const lines = [
+      { id: '1', speaker: 'Host', text: 'One.', at: NOW - 2_000 },
+      { id: '2', speaker: 'Guest', text: 'Two.', at: NOW - 1_000 }
+    ]
+    expect(buildRecentTranscriptRequest(lines, 600_000, NOW)).toEqual({
+      kind: 'voice',
+      query: null,
+      context: 'Host: One.\nGuest: Two.',
+      notes: ''
+    })
+  })
+
+  it('keeps all of Focus and drops the oldest Grounding when the pair would exceed the wire budget', () => {
+    const recent = { id: 'r', speaker: 'Ben', text: 'I think they did a cover of Jolene', at: NOW - 1_000 }
+    const focus = `Ben: ${recent.text}`
+    const budgetForGrounding = MAX_TAB_TEXT_LEN - focus.length
+    const oldKeep = { id: 'k', speaker: 'Ben', text: 'x'.repeat(80), at: NOW - 700_000 }
+    const keepText = `Ben: ${oldKeep.text}`
+    const dropText = 'Ben: ' + 'y'.repeat(budgetForGrounding) // one oversized old line, dropped whole
+    const oldDrop = { id: 'd', speaker: 'Ben', text: dropText.slice('Ben: '.length), at: NOW - 800_000 }
+
+    const result = buildRecentTranscriptRequest([oldDrop, oldKeep, recent], 600_000, NOW)
+    expect(result.context).toBe(focus)
+    expect(result.notes).toBe(keepText)
+    expect(result.context.length + result.notes.length).toBeLessThanOrEqual(MAX_TAB_TEXT_LEN)
+    expect(result.notes).not.toContain('y')
+  })
+
+  it('keeps the newest end of Focus and drops Grounding when Focus alone exceeds the wire budget', () => {
+    const huge = 'z'.repeat(MAX_TAB_TEXT_LEN + 50)
+    const lines = [
+      { id: '1', speaker: 'Ben', text: 'earlier', at: NOW - 700_000 },
+      { id: '2', speaker: 'Ben', text: huge, at: NOW - 1_000 }
+    ]
+    const result = buildRecentTranscriptRequest(lines, 600_000, NOW)
+    expect(result.notes).toBe('')
+    expect(result.context.length).toBe(MAX_TAB_TEXT_LEN)
+    expect(result.context.endsWith('z'.repeat(20))).toBe(true)
+    expect(result.context).not.toContain('earlier')
   })
 })
 

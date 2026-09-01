@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { askResearchAssistant, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
+import { serializeResearchCard } from '../../src/lib/research-card.js'
 
 beforeEach(() => {
   delete process.env.OPENROUTER_API_KEY
@@ -27,7 +28,31 @@ function okResponse(body) {
   return { ok: true, status: 200, json: async () => body }
 }
 
-function successBody({ answer = 'Some answer.', citations = [] } = {}) {
+// A well-formed model response for the given mode — plain labeled text,
+// not JSON (see research-card.js's doc comment).
+function fieldAnswer(mode, overrides = {}) {
+  const fields = {
+    provenInTranscript: 0,
+    ubiquitousKnowledge: 0,
+    outputType: mode,
+    contextSummary: 'the claim in question',
+    mainTakeaway: 'The actual answer, stated as fact.',
+    sources: 'Wikipedia',
+    ...overrides
+  }
+  return [
+    `PROVEN IN TRANSCRIPT: ${fields.provenInTranscript}`,
+    `UBIQUITOUS KNOWLEDGE: ${fields.ubiquitousKnowledge}`,
+    `OUTPUT TYPE: ${fields.outputType}`,
+    `CONTEXT SUMMARY: ${fields.contextSummary}`,
+    `MAIN TAKEAWAY: ${fields.mainTakeaway}`,
+    fields.sources != null ? `SOURCES: ${fields.sources}` : null
+  ]
+    .filter((line) => line != null)
+    .join('\n')
+}
+
+function successBody({ answer = fieldAnswer('research'), citations = [] } = {}) {
   return {
     choices: [
       {
@@ -75,7 +100,7 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     expect(body.model.length).toBeGreaterThan(0)
   })
 
-  it('a voice request with an explicit topic mentions that topic in the prompt', async () => {
+  it('a voice ask always sends MODE: research, and mentions the topic asked', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
     await askResearchAssistant(
@@ -84,11 +109,13 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    const system = body.messages.find((m) => m.role === 'system').content
     const userContent = body.messages.find((m) => m.role === 'user').content
+    expect(system).toMatch(/MODE: research/)
     expect(userContent).toContain('the Monroe Doctrine')
   })
 
-  it('a voice request with no topic falls back to conversation context instead of naming a topic', async () => {
+  it('a voice ask with no topic still runs in research mode over the transcript window', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
     await askResearchAssistant(
@@ -97,11 +124,35 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    const system = body.messages.find((m) => m.role === 'system').content
     const userContent = body.messages.find((m) => m.role === 'user').content
+    expect(system).toMatch(/MODE: research/)
+    expect(userContent).toContain('FOCUS WINDOW:')
     expect(userContent).toContain('Alice: so anyway that thing from the news')
+    expect(userContent).not.toMatch(/GROUNDING:/)
   })
 
-  it('includes the active tab\'s notes for grounding when present', async () => {
+  it('a topic-less voice request with notes labels them GROUNDING, after FOCUS WINDOW', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant(
+      {
+        kind: 'voice',
+        query: null,
+        context: 'Ben: I think they did a cover of Jolene',
+        notes: 'Ben: so Jack White\nBen: married his sister turned out not to be a sister'
+      },
+      { fetchImpl }
+    )
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    const userContent = body.messages.find((m) => m.role === 'user').content
+    expect(userContent).toContain('FOCUS WINDOW:\nBen: I think they did a cover of Jolene')
+    expect(userContent).toContain('GROUNDING:\nBen: so Jack White')
+    expect(userContent.indexOf('FOCUS WINDOW:')).toBeLessThan(userContent.indexOf('GROUNDING:'))
+  })
+
+  it('includes notes for grounding when present alongside an explicit query', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
     await askResearchAssistant(
@@ -123,14 +174,16 @@ describe('askResearchAssistant — Quick Actions', () => {
   const QUICK_ACTIONS = ['define', 'keyFacts', 'factCheck', 'findExamples', 'analyze']
 
   it.each(QUICK_ACTIONS)('builds a well-formed request for the %s Quick Action, including the tab text', async (actionId) => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: fieldAnswer(actionId) })))
 
     await askResearchAssistant({ kind: 'quickAction', actionId, text: 'Some tab text about tariffs.' }, { fetchImpl })
 
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(body.plugins).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'web' })]))
+    const system = body.messages.find((m) => m.role === 'system').content
     const userContent = body.messages.find((m) => m.role === 'user').content
+    expect(system).toContain(`MODE: ${actionId}`)
     expect(userContent).toContain('Some tab text about tariffs.')
   })
 
@@ -146,11 +199,14 @@ describe('askResearchAssistant — response shaping', () => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
 
-  it('returns the answer text and the web-search citations, discarding nothing', async () => {
+  it('returns the parsed card and the web-search citations for a well-formed, on-mode answer', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       okResponse(
         successBody({
-          answer: 'The Monroe Doctrine was a US policy stance from 1823.',
+          answer: fieldAnswer('research', {
+            contextSummary: 'when the Monroe Doctrine was issued',
+            mainTakeaway: 'The Monroe Doctrine was a US policy stance from 1823.'
+          }),
           citations: [
             { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' },
             { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' }
@@ -164,31 +220,56 @@ describe('askResearchAssistant — response shaping', () => {
       { fetchImpl }
     )
 
-    expect(result).toEqual({
-      answer: 'The Monroe Doctrine was a US policy stance from 1823.',
-      citations: [
-        { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' },
-        { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' }
-      ]
-    })
+    const card = JSON.parse(result.answer)
+    expect(card.mainTakeaway).toBe('The Monroe Doctrine was a US policy stance from 1823.')
+    expect(card.outputType).toBe('research')
+    expect(result.citations).toEqual([
+      { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' },
+      { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' }
+    ])
   })
 
-  it('returns an empty citations array when web search returned no sources', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: 'Just an answer.', citations: [] })))
+  it('discards the answer and citations when the model returns nothing (no claim survived selection)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: 'nothing useful here, no fields at all' })))
 
     const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
 
-    expect(result).toEqual({ answer: 'Just an answer.', citations: [] })
+    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
   })
 
-  it('returns an empty citations array when the response omits annotations entirely', async () => {
+  it('suppresses (score-threshold guard) an answer already proven in the transcript, even with citations present', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse({ choices: [{ message: { content: 'An answer with no annotations field at all.' } }] })
+      okResponse(
+        successBody({
+          answer: fieldAnswer('research', { provenInTranscript: 95 }),
+          citations: [{ url: 'https://example.com/x', title: 'X' }]
+        })
+      )
     )
 
     const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
 
-    expect(result).toEqual({ answer: 'An answer with no annotations field at all.', citations: [] })
+    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
+  })
+
+  it('suppresses (score-threshold guard) an answer that is ubiquitous knowledge', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse(successBody({ answer: fieldAnswer('research', { ubiquitousKnowledge: 90 }) }))
+    )
+
+    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+
+    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
+  })
+
+  it('discards (mode-match guard) an answer whose OUTPUT TYPE does not match the requested mode', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse(successBody({ answer: fieldAnswer('factCheck') })) // requested mode is 'research' below
+    )
+
+    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+
+    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
   })
 })
 

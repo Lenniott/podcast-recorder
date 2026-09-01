@@ -19,7 +19,8 @@ Thumbs.db
 *.log
 .cursor/
 .playwright-mcp/
-
+# scripts/research-eval.js output — ephemeral; cases live in the script.
+.eval-runs/
 # Playwright
 test-results/
 playwright-report/
@@ -33,6 +34,5 @@ coverage/
 # nested checkout of this repo).
 .claude/worktrees/
 
-# scripts/research-eval.js output — ephemeral eval runs, not meant to be
-# committed (the cases that produced them live in the script itself).
+# Legacy eval path; new runs go to .eval-runs/.
 .scratch/research-assistant/eval-runs/
