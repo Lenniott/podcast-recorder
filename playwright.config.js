@@ -60,7 +60,13 @@ export default defineConfig({
       // Room State Store's flush-and-evict grace period (default 10s in
       // production) — shrunk so a spec proving eviction/rehydration works
       // doesn't have to sleep through a real 10-second wait.
-      ROOM_STATE_GRACE_MS: '200'
+      ROOM_STATE_GRACE_MS: '200',
+      // Specs inherit this process env (including a real key from `.env` via
+      // loadEnvFile above). Blank it here so POST /research can still prove
+      // the 500 NOT_CONFIGURED path without a paid OpenRouter call. Does not
+      // apply when reuseExistingServer attaches to an already-running
+      // `npm run dev` — that spec skips in that case.
+      OPENROUTER_API_KEY: ''
     }
   }
 })
