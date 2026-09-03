@@ -7,6 +7,7 @@
   export let lines = []; // [{id, speaker, text, at}], in server (append) order
   export let pendingTurnId = null;
   export let pendingActionId = null;
+  export let doneActionsByTurn = {}; // turnId -> actionId[], see RoomTabs.svelte
   export let onTurnAction = (_actionId, _turnId) => {};
 </script>
 
@@ -23,6 +24,7 @@
             label={line.speaker}
             text={line.text}
             pendingActionId={pendingTurnId === line.id ? pendingActionId : null}
+            doneActionIds={doneActionsByTurn[line.id] ?? []}
             onAction={(actionId) => onTurnAction(actionId, line.id)}
           />
         </li>

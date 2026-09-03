@@ -20,6 +20,7 @@
 import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../room/tab-sync.js'
 import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations } from '../research/research-sync.js'
+import { TURN_ACTION_IDS } from '../research/research-card.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -301,7 +302,7 @@ export function createRoomStateStore({
     return null
   }
 
-  function addResearchEntry(slug, tabId, { id, question } = {}) {
+  function addResearchEntry(slug, tabId, { id, question, turnId, actionId } = {}) {
     return withRoom(slug, (content) => {
       const entryId = String(id || '').slice(0, 64)
       if (!entryId || findResearchEntry(content, entryId)) {
@@ -322,7 +323,12 @@ export function createRoomStateStore({
         answer: null,
         citations: [],
         error: null,
-        at: Date.now()
+        at: Date.now(),
+        // Set only for a Turn Action ask (see ws-rooms.js's research_ask
+        // doc comment) — never trust a client-supplied actionId beyond the
+        // known set, same discipline as every other field here.
+        turnId: turnId ? String(turnId).slice(0, 64) : null,
+        actionId: TURN_ACTION_IDS.includes(actionId) ? actionId : null
       }
       // A pending entry is real, broadcast state the instant it's created
       // (see ws-rooms.js's research_ask handler) — never a client-only

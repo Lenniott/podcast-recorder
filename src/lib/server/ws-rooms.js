@@ -96,10 +96,18 @@
  *                                          survive in a stable (arrival)
  *                                          order instead of one silently
  *                                          overwriting the other.
- *   { type: 'research_ask', entryId, question }
+ *   { type: 'research_ask', entryId, question, turnId?, actionId? }
  *                                        — manual "ask a question" (ticket 04;
  *                                          Quick Actions/Voice Trigger, tickets
  *                                          05/06, will reuse this same message).
+ *                                          turnId/actionId are set only for a
+ *                                          Turn Action ask (TextBlock.svelte's
+ *                                          icon row) — carried onto the entry
+ *                                          so every peer's `entries` can derive
+ *                                          "this Turn Action already ran on
+ *                                          this Block" (deriveDoneActionsByTurn
+ *                                          in research-panel.js) and keep that
+ *                                          icon disabled after a refresh.
  *                                          Host-only by default — same gate
  *                                          as Custom on the HTTP endpoint
  *                                          (getHostClaim); a guest peer is
@@ -720,7 +728,12 @@ export function setupWss(wss) {
         // while Tab A is active only ever appears under Tab A" holds even
         // if a hostile/buggy client tried to name a different tab.
         const activeTabId = roomStateStore.getRoom(slug).tabs.activeTabId
-        const result = roomStateStore.addResearchEntry(slug, activeTabId, { id: msg.entryId, question: msg.question })
+        const result = roomStateStore.addResearchEntry(slug, activeTabId, {
+          id: msg.entryId,
+          question: msg.question,
+          turnId: msg.turnId,
+          actionId: msg.actionId
+        })
         if (!result.ok) {
           send(ws, { type: 'error', message: result.error })
           return

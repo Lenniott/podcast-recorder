@@ -6,6 +6,7 @@
     applyResearchState as reduceResearchState,
     applyResearchRemove as reduceResearchRemove,
     visibleEntries,
+    deriveDoneActionsByTurn,
     buildManualAskRequest,
     buildTurnActionRequest,
     buildCustomRequest,
@@ -67,6 +68,13 @@
   let entriesByTab = {};
 
   $: entries = visibleEntries(entriesByTab, activeTabId);
+
+  // Read by RecordingRoom.svelte via bind:doneActionsByTurn and passed down
+  // into RoomTabs — same "computed here, bound up, handed down as a plain
+  // prop" pattern this file's own `tabTexts` prop follows in reverse (see
+  // this file's `export let tabTexts` doc comment above).
+  export let doneActionsByTurn = {};
+  $: doneActionsByTurn = deriveDoneActionsByTurn(entriesByTab);
 
   let transcriptLines = [];
 
@@ -148,7 +156,16 @@
     const request = buildTurnActionRequest(transcriptLines, turnId, actionId);
     if (!request) return;
     const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question: TURN_ACTION_LABEL[actionId] || actionId });
+    // turnId/actionId ride along so every peer's `entriesByTab` can derive
+    // "this Turn Action already ran" (see deriveDoneActionsByTurn) — a
+    // manual ask/Custom never sets these, only Turn Actions do.
+    send({
+      type: "research_ask",
+      entryId,
+      question: TURN_ACTION_LABEL[actionId] || actionId,
+      turnId,
+      actionId,
+    });
     revealPanel();
     const posted = await postResearch(request);
     if (!posted.ok) {

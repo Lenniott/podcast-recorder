@@ -16,6 +16,11 @@
   // two-way bound so it can be handed to ResearchPanel as a plain prop
   // (see RoomTabs.svelte's own comment on `export let tabTexts`).
   export let tabTexts = {};
+  // turnId -> actionId[] — ResearchPanel's own derived, room-shared "which
+  // Turn Actions already ran" (see its own doc comment on the prop of the
+  // same name). Local to this component, unlike tabTexts: nothing above
+  // this needs it, it only flows sideways from ResearchPanel into RoomTabs.
+  let doneActionsByTurn = {};
   // This browser's own speech-recognition status — passed straight through
   // to RoomTabs' status dot (see its own prop doc comment). Per-browser,
   // never synced to the room.
@@ -135,6 +140,7 @@
       {transcriptionStatus}
       bind:this={roomTabs}
       bind:tabTexts
+      {doneActionsByTurn}
       onTurnAction={(actionId, turnId) => researchPanel?.runTurnAction?.(actionId, turnId)}
     />
   </main>
@@ -147,6 +153,7 @@
     {guestCanAskResearch}
     bind:collapsed={researchCollapsed}
     bind:this={researchPanel}
+    bind:doneActionsByTurn
   />
 </div>
 
@@ -165,11 +172,11 @@
   }
 
   .room.research-collapsed {
-    grid-template-columns: 240px 1fr 72px;
+    grid-template-columns: 240px 1fr 46px;
   }
 
   .room.sidebar-collapsed.research-collapsed {
-    grid-template-columns: 72px 1fr 72px;
+    grid-template-columns: 72px 1fr 46px;
   }
 
   .room-main {

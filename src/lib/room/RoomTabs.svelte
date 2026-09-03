@@ -29,6 +29,14 @@
   // the Block can spin without a room-shared pending card.
   export let onTurnAction = async () => {};
 
+  // turnId -> actionId[] — which Turn Actions have already run on which
+  // Block, so their icons disable rather than firing the same question at
+  // Research Assistant twice. Room-shared and owned by ResearchPanel (it's
+  // derived from `entriesByTab`, replayed to every peer on join — see
+  // ResearchPanel.svelte's `doneActionsByTurn` prop), so it survives a
+  // refresh; RoomTabs only reads it, via RecordingRoom.svelte's plumbing.
+  export let doneActionsByTurn = {};
+
   let pendingTurnId = null;
   let pendingActionId = null;
 
@@ -323,6 +331,7 @@
         lines={transcriptLines}
         {pendingTurnId}
         {pendingActionId}
+        {doneActionsByTurn}
         onTurnAction={handleTurnAction}
       />
     {:else if activeTabId}

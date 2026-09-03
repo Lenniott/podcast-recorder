@@ -122,6 +122,26 @@ export function buildTurnActionRequest(transcriptLines, focusTurnId, actionId) {
   return { kind: 'turnAction', actionId, focus: focusText, grounding }
 }
 
+/** Which Turn Action icons should stay disabled because they've already
+ *  been run — room-shared (derived from `entriesByTab`, the same
+ *  research_entry state every peer replays on join) rather than a local
+ *  "I clicked this in my browser" flag, so it survives a refresh and is
+ *  consistent for every participant. Scans every tab's entries, not just
+ *  the active one — a Turn Action's entry is filed under whichever tab was
+ *  active *when it was asked* (see ws-rooms.js's research_ask handler),
+ *  which may not be the tab that's active now. */
+export function deriveDoneActionsByTurn(entriesByTab) {
+  const result = {}
+  for (const list of Object.values(entriesByTab || {})) {
+    for (const entry of list || []) {
+      if (!entry?.turnId || !TURN_ACTION_ID_SET.has(entry.actionId)) continue
+      const done = result[entry.turnId] || (result[entry.turnId] = [])
+      if (!done.includes(entry.actionId)) done.push(entry.actionId)
+    }
+  }
+  return result
+}
+
 /**
  * The currently active notes tab's whole text (never the Transcript Tab —
  * Custom does not run on Turns).

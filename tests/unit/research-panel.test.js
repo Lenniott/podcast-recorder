@@ -13,7 +13,8 @@ import {
   hasCustomText,
   isSkimVisibleEntry,
   describeResearchError,
-  makeResearchEntryId
+  makeResearchEntryId,
+  deriveDoneActionsByTurn
 } from '../../src/lib/research/research-panel.js'
 import { TRANSCRIPT_TAB_ID } from '../../src/lib/room/transcript-sync.js'
 
@@ -233,3 +234,25 @@ describe('describeResearchError', () => {
     expect(describeResearchError(undefined)).toMatch(/something went wrong/i)
   })
 })
+
+describe('deriveDoneActionsByTurn', () => {
+  it('groups turn-action entries by turnId, ignoring manual/custom asks with no turnId', () => {
+    const entriesByTab = {
+      transcript: [
+        { id: 'e1', turnId: 't1', actionId: 'definition' },
+        { id: 'e2', turnId: 't1', actionId: 'facts' },
+        { id: 'e3', question: 'a manual question' } // no turnId/actionId
+      ],
+      notesTab: [{ id: 'e4', turnId: 't2', actionId: 'answer' }]
+    }
+    expect(deriveDoneActionsByTurn(entriesByTab)).toEqual({
+      t1: ['definition', 'facts'],
+      t2: ['answer']
+    })
+  })
+
+  it('returns an empty object for no entries anywhere', () => {
+    expect(deriveDoneActionsByTurn({})).toEqual({})
+  })
+})
+

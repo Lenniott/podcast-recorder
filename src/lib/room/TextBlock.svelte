@@ -1,5 +1,6 @@
 <script>
   import { Annotation, AnnotationPlus, ClipboardCheck } from "$lib/icons";
+  import Tooltip from "$lib/Tooltip.svelte";
 
   /**
    * One unit of text in a tab surface (ADR-0005). On the Transcript Tab
@@ -12,6 +13,7 @@
     editable = false,
     actions = true,
     pendingActionId = null,
+    doneActionIds = [],
     onAction = (_actionId) => {},
   } = $props();
 
@@ -25,27 +27,31 @@
 </script>
 
 <div class="text-block" class:is-pending={busy} class:is-editable={editable}>
-  {#if label}
-    <span class="text-block-label">{label}</span>
-  {/if}
-  <span class="text-block-text">{text}</span>
+  <div class="text-block-content">
+    {#if label}
+      <span class="text-block-label">{label}</span>
+    {/if}
+    <span class="text-block-text">{text}</span>
+  </div>
   {#if actions}
     <span class="text-block-actions" role="group" aria-label="Turn Actions">
       {#each TURN_ACTIONS as action (action.id)}
-        <button
-          type="button"
-          class="text-block-action"
-          class:is-busy={pendingActionId === action.id}
-          aria-label={action.label}
-          title={action.label}
-          disabled={busy}
-          onclick={(e) => {
-            e.stopPropagation();
-            onAction(action.id);
-          }}
-        >
-          <action.Icon size="14" />
-        </button>
+        {@const done = doneActionIds.includes(action.id)}
+        <Tooltip label={done ? `${action.label} (already run)` : action.label}>
+          <button
+            type="button"
+            class="text-block-action"
+            class:is-busy={pendingActionId === action.id}
+            aria-label={action.label}
+            disabled={busy || done}
+            onclick={(e) => {
+              e.stopPropagation();
+              onAction(action.id);
+            }}
+          >
+            <action.Icon size="14" />
+          </button>
+        </Tooltip>
       {/each}
     </span>
   {/if}
@@ -53,21 +59,27 @@
 
 <style>
   .text-block {
-    display: flex;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 78px; /* Fixed right column width for buttons to avoid movement */
     gap: 8px;
-    align-items: baseline;
     line-height: 1.5;
     position: relative;
-    padding: 4px 6px;
-    margin: 0 -6px;
+    padding: 4px;
+    margin: 0 -4px;
     border-radius: 8px;
+    align-items: start;
   }
-
+  
   .text-block:hover,
   .text-block:focus-within {
     background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
-
+  .text-block-content {
+    display: flex;
+    width: 100%;
+    gap: 8px;
+  }
   .text-block-label {
     flex-shrink: 0;
     font-weight: 600;
@@ -114,8 +126,8 @@
   }
 
   .text-block-action.is-busy {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--accent-dim);
+    color: var(--accent-dim);
   }
 
   .text-block-action:focus-visible {
