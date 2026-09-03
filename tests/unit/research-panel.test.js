@@ -138,7 +138,9 @@ describe('buildManualAskRequest', () => {
       kind: 'voice',
       query: 'What is a haiku?',
       context: '',
-      notes: ''
+      notes: '',
+      currentTab: '',
+      transcript: ''
     })
   })
 
@@ -146,6 +148,16 @@ describe('buildManualAskRequest', () => {
     const huge = 'x'.repeat(1000)
     const result = buildManualAskRequest(`  ${huge}  `)
     expect(result.query).toBe(huge.slice(0, 500))
+  })
+
+  // currentTab/transcript are Placeholder ingredients only (see
+  // CONTEXT.md) — sent along so the asker can opt in with {current_tab}/
+  // {transcript} in their own question text, never auto-injected into it.
+  it('carries currentTab/transcript as separate fields, capped the same way Custom caps them', () => {
+    const lines = [{ speaker: 'Host', text: 'hello there' }]
+    const result = buildManualAskRequest('Summarize {current_tab}', 'the active tab text', lines)
+    expect(result.currentTab).toBe('the active tab text')
+    expect(result.transcript).toBe('Host: hello there')
   })
 })
 

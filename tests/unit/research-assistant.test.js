@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { askResearchAssistant, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
+import { askResearchAssistant, applyPlaceholders, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
 import { serializeResearchCard } from '../../src/lib/research/research-card.js'
 import { appendResearchEvalLog } from '../../src/lib/server/research-eval-log.js'
 
@@ -209,13 +209,28 @@ describe('askResearchAssistant — Turn Actions', () => {
   })
 })
 
-describe('askResearchAssistant — Interpretation Mode (Custom)', () => {
+describe('applyPlaceholders', () => {
+  it('substitutes {current_tab} and {transcript}, leaves unknown placeholders untouched', () => {
+    const template = 'Lyrics: {current_tab}\nContext: {transcript}\nAlso: {unknown}'
+    const result = applyPlaceholders(template, { currentTab: 'verse one', transcript: 'Host: hi' })
+    expect(result).toBe('Lyrics: verse one\nContext: Host: hi\nAlso: {unknown}')
+  })
+
+  it('resolves a placeholder with no value supplied to an empty string, not an error', () => {
+    expect(applyPlaceholders('Transcript: {transcript}', { currentTab: 'x' })).toBe('Transcript: ')
+  })
+
+  it('is a no-op on text with no placeholders', () => {
+    expect(applyPlaceholders('plain text', { currentTab: 'x' })).toBe('plain text')
+  })
+})
+
+describe('askResearchAssistant — Custom (the Research Prompt)', () => {
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
 
-  it('uses the Interpretation Mode prompt, lyrics as Stage 1, transcript as Stage 2', async () => {
-    const { INTERPRETATION_MODE_PROMPT } = await import('../../src/lib/server/interpretation-mode-prompt.js')
+  it('sends the Research Prompt as the whole request, with {current_tab}/{transcript} substituted', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       okResponse({
         choices: [{ message: { content: 'TSIA: This song is about X.\nEvidence: line 1.', annotations: [] } }]
@@ -225,6 +240,7 @@ describe('askResearchAssistant — Interpretation Mode (Custom)', () => {
     const result = await askResearchAssistant(
       {
         kind: 'custom',
+        instruction: 'Read {current_tab} against {transcript} and give a TSIA.',
         text: 'verse one about the river',
         transcript: 'Host: I think it is about grief'
       },
@@ -232,20 +248,49 @@ describe('askResearchAssistant — Interpretation Mode (Custom)', () => {
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const system = body.messages.find((m) => m.role === 'system').content
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(system).toBe(INTERPRETATION_MODE_PROMPT)
-    expect(system).toContain('Stage 1 — Blind read')
-    expect(userContent).toContain('STAGE 1 INPUT')
-    expect(userContent).toContain('verse one about the river')
-    expect(userContent.indexOf('STAGE 1 INPUT')).toBeLessThan(userContent.indexOf('STAGE 2 INPUT'))
-    expect(userContent).toContain('Host: I think it is about grief')
+    // No hardcoded Stage1/Stage2 wrapper any more — the Research Prompt,
+    // substituted, is the entire request in one message.
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'Read verse one about the river against Host: I think it is about grief and give a TSIA.' }
+    ])
     const card = JSON.parse(result.answer)
     expect(card.outputType).toBe('custom')
     expect(card.mainTakeaway).toContain('TSIA:')
-    // Custom/Interpretation Mode isn't forced through the research-card
-    // schema — its reply is used as freeform prose, not field-parsed.
+    // Custom isn't forced through the research-card schema — its reply is
+    // used as freeform prose, not field-parsed.
     expect(body.response_format).toBeUndefined()
+  })
+
+  it('rejects Custom when no Research Prompt is configured', async () => {
+    await expect(
+      askResearchAssistant({ kind: 'custom', instruction: '', text: 'verse one', transcript: '' }, { fetchImpl: vi.fn() })
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+  })
+})
+
+describe('askResearchAssistant — voice Ask with a {current_tab}/{transcript} Placeholder', () => {
+  beforeEach(() => {
+    process.env.OPENROUTER_API_KEY = 'test-api-key'
+  })
+
+  it('substitutes a Placeholder written into the typed question itself', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant(
+      {
+        kind: 'voice',
+        query: 'Summarize {current_tab}',
+        context: '',
+        notes: '',
+        currentTab: 'the notes tab text',
+        transcript: ''
+      },
+      { fetchImpl }
+    )
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    const userContent = body.messages.find((m) => m.role === 'user').content
+    expect(userContent).toContain('Summarize the notes tab text')
   })
 })
 

@@ -15,7 +15,7 @@ vi.mock('../../src/lib/server/research-assistant.js', async () => {
 })
 
 import { hashPassword, makeSessionToken } from '../../src/lib/server/auth.js'
-import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
+import db, { createRoom, _resetDb, setResearchPrompt } from '../../src/lib/server/db.js'
 import { askResearchAssistant } from '../../src/lib/server/research-assistant.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
@@ -31,17 +31,17 @@ async function loadRoute() {
   return import('../../src/routes/rec/[slug]/research/+server.js')
 }
 
-async function seedRoom({ createdAt } = {}) {
+async function seedRoom({ createdAt, guestAiAllowed = false } = {}) {
   const passwordHash = await hashPassword(ROOM_PASS)
-  createRoom({ slug: SLUG, name: 'Test Episode', passwordHash })
+  createRoom({ slug: SLUG, name: 'Test Episode', passwordHash, guestAiAllowed })
   if (createdAt != null) {
     db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(createdAt, SLUG)
   }
   return passwordHash
 }
 
-async function authedCookies() {
-  const passwordHash = await seedRoom()
+async function authedCookies(opts) {
+  const passwordHash = await seedRoom(opts)
   const token = makeSessionToken(SLUG, passwordHash, SECRET)
   return makeCookies({ [`pr_auth_${SLUG}`]: token })
 }
@@ -111,10 +111,10 @@ describe('POST /rec/[slug]/research — success', () => {
   })
 })
 
-describe('POST /rec/[slug]/research — Custom is host-only', () => {
-  it('rejects (403) Custom from a participant who is not the host', async () => {
-    process.env.RESEARCH_CUSTOM_PROMPT = 'Summarise the notes.'
-    const cookies = await authedCookies()
+describe('POST /rec/[slug]/research — Custom gated by Guest Research Access', () => {
+  it('rejects (403) Custom from a non-host when Guest Research Access is off', async () => {
+    setResearchPrompt('Summarise the notes.')
+    const cookies = await authedCookies() // guestAiAllowed defaults to false
     const { POST } = await loadRoute()
 
     const res = await POST({
@@ -127,6 +127,24 @@ describe('POST /rec/[slug]/research — Custom is host-only', () => {
     expect(res.status).toBe(403)
     expect(askResearchAssistant).not.toHaveBeenCalled()
   })
+
+  it('allows Custom from a non-host when the room has Guest Research Access on, sending the stored Research Prompt', async () => {
+    setResearchPrompt('Summarise the notes.')
+    const cookies = await authedCookies({ guestAiAllowed: true })
+    const { POST } = await loadRoute()
+    askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      fetch: fakeFetch,
+      request: { json: async () => ({ kind: 'custom', text: 'some notes' }) }
+    })
+
+    expect(res.status).toBe(200)
+    const [passedRequest] = askResearchAssistant.mock.calls[0]
+    expect(passedRequest.instruction).toBe('Summarise the notes.')
+  })
 })
 
 describe('POST /rec/[slug]/research — request validation', () => {
@@ -138,7 +156,9 @@ describe('POST /rec/[slug]/research — request validation', () => {
     ['turnAction with oversized focus', { kind: 'turnAction', actionId: 'facts', focus: 'x'.repeat(20_001), grounding: '' }],
     ['voice with an oversized query', { kind: 'voice', query: 'x'.repeat(501), context: '', notes: '' }],
     ['voice with a non-string context', { kind: 'voice', query: 'x', context: 42, notes: '' }],
-    ['voice with an oversized notes field', { kind: 'voice', query: 'x', context: '', notes: 'x'.repeat(20_001) }]
+    ['voice with an oversized notes field', { kind: 'voice', query: 'x', context: '', notes: 'x'.repeat(20_001) }],
+    ['voice with a non-string currentTab', { kind: 'voice', query: 'x', context: '', notes: '', currentTab: 42 }],
+    ['voice with an oversized transcript', { kind: 'voice', query: 'x', context: '', notes: '', transcript: 'x'.repeat(20_001) }]
   ])('rejects (400) a request body: %s', async (_label, body) => {
     const cookies = await authedCookies()
     const { POST } = await loadRoute()

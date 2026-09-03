@@ -31,6 +31,7 @@
   export let slug = "";
   export let isHostClaim = false;
   export let guestCanAskResearch = false;
+  export let customEnabled = false;
   export let roomPassword = "";
   export let wsStatus = "disconnected";
   export let peers = [];
@@ -151,6 +152,7 @@
     {tabTexts}
     {isHostClaim}
     {guestCanAskResearch}
+    {customEnabled}
     bind:collapsed={researchCollapsed}
     bind:this={researchPanel}
     bind:doneActionsByTurn

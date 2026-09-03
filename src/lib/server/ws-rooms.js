@@ -108,13 +108,13 @@
  *                                          this Block" (deriveDoneActionsByTurn
  *                                          in research-panel.js) and keep that
  *                                          icon disabled after a refresh.
- *                                          Host-only by default — same gate
- *                                          as Custom on the HTTP endpoint
- *                                          (getHostClaim); a guest peer is
- *                                          refused with `error` and no entry
- *                                          is created — unless
- *                                          RESEARCH_GUEST_CAN_ASK opts every
- *                                          guest in (researchGuestCanAsk).
+ *                                          Host-only by default — a guest
+ *                                          peer is refused with `error` and
+ *                                          no entry is created — unless
+ *                                          Guest Research Access is on for
+ *                                          this room (see CONTEXT.md);
+ *                                          covers Ask, Turn Actions, and
+ *                                          Custom alike, one gate.
  *                                          entryId is client-generated (like
  *                                          tab_create's tabId) so the asking
  *                                          browser can correlate its own later
@@ -141,7 +141,6 @@
  *                                          stuck with no explanation.
  *   { type: 'research_remove', entryId }
  *                                        — host-only by default (same gate
- *                                          and RESEARCH_GUEST_CAN_ASK opt-in
  *                                          as research_ask) discards one
  *                                          research card outright (unlike
  *                                          resolve/error, which change
@@ -263,18 +262,6 @@ import { getActiveRoomBySlug, saveRoomContent, loadRoomContent } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 
-/**
- * Reads `RESEARCH_GUEST_CAN_ASK` — same injectable-`env`/truthy-string shape
- * as research-eval-log.js's isResearchEvalLogEnabled. Off by default: a
- * guest can view the Research Assistant panel but not create or remove
- * entries (research_ask/research_remove below) unless a room operator
- * opts in.
- */
-export function researchGuestCanAsk(env = process.env) {
-  const raw = String(env.RESEARCH_GUEST_CAN_ASK || '').trim().toLowerCase()
-  return raw === '1' || raw === 'true' || raw === 'yes'
-}
-
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
 const TAB_VIDEO_LEAD_MS = 250 // same idea as clap: schedule apply slightly in the future
@@ -282,8 +269,9 @@ const YT_VIDEO_ID = /^[\w-]{11}$/
 const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'failed'])
 
 // rooms: Map<slug, Map<clientId, peer>>
-// peer: { ws, clientId, name, recording, slug, role, claimedHost, joinedAt, talking,
-//         transcribing, serverCopyState, serverCopyPercent, serverCopyTakeId, micLabel }
+// peer: { ws, clientId, name, recording, slug, role, claimedHost, guestAiAllowed,
+//         joinedAt, talking, transcribing, serverCopyState, serverCopyPercent,
+//         serverCopyTakeId, micLabel }
 const rooms = new Map()
 
 // A room's tabs/text/video, Transcript (ticket 01), and per-tab Research
@@ -296,7 +284,6 @@ const rooms = new Map()
 // reconnect — keep running hot exactly as before. No handler below reaches
 // into a raw Map or DB row for this content directly. See
 // room-state-store.js for the full contract.
-//
 const roomStateStore = createRoomStateStore({
   durable: {
     save: (slug, content) => saveRoomContent(slug, content),
@@ -499,6 +486,10 @@ export function setupWss(wss) {
       slug,
       role: 'guest',
       claimedHost: connectionHostClaim,
+      // Guest Research Access (see CONTEXT.md) — fixed for the life of the
+      // room, read once here off `roomRow` rather than re-checked per
+      // message; see research_ask/research_remove below.
+      guestAiAllowed: !!roomRow.guest_ai_allowed,
       joinedAt: Date.now(),
       talking: false,
       serverCopyState: 'unavailable',
@@ -713,13 +704,13 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'research_ask' && clientId) {
-        // Host-only by default, like Custom/Interpret on the HTTP endpoint
-        // — a guest can view the panel but not create an entry (see
-        // ResearchPanel.svelte, which hides the ask form/Quick Actions from
-        // a non-host the same way it already hides Interpret). A room
-        // operator can opt every guest into asking too via
-        // RESEARCH_GUEST_CAN_ASK (researchGuestCanAsk above).
-        if (peer.role !== 'host' && !researchGuestCanAsk()) {
+        // Host-only by default — a guest can view the panel but not create
+        // an entry (see ResearchPanel.svelte, which hides the ask
+        // form/Turn Actions/Custom from a non-host the same way). One
+        // gate for every Research Assistant action, Custom included — see
+        // Guest Research Access in CONTEXT.md — cached on the peer at
+        // connect (see `guestAiAllowed` above), not re-read per message.
+        if (peer.role !== 'host' && !peer.guestAiAllowed) {
           send(ws, { type: 'error', message: 'Only the host can ask the Research Assistant.' })
           return
         }
@@ -766,10 +757,9 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'research_remove' && clientId) {
-        // Same gate (and same RESEARCH_GUEST_CAN_ASK opt-in) as research_ask
-        // above — a guest can view the list but not create or delete an
-        // entry unless a room operator has opted every guest in.
-        if (peer.role !== 'host' && !researchGuestCanAsk()) {
+        // Same gate as research_ask above — a guest can view the list but
+        // not create or delete an entry unless Guest Research Access is on.
+        if (peer.role !== 'host' && !peer.guestAiAllowed) {
           send(ws, { type: 'error', message: 'Only the host can remove a research card.' })
           return
         }

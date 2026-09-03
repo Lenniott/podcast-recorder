@@ -77,9 +77,21 @@ export function isSkimVisibleEntry(entry) {
  * a Quick Action (ticket 05), which supplies the active tab's own text as
  * grounding. Wiring transcript/tab-text into this ticket's manual ask would
  * blur scope better left to those tickets' own judgment calls.
+ *
+ * `currentTab`/`transcript` are sent anyway, separately from `context`/
+ * `notes` — not folded into the question automatically, only substituted
+ * server-side (research-assistant.js) if the asker wrote a `{current_tab}`/
+ * `{transcript}` Placeholder into `query` themselves (see CONTEXT.md).
  */
-export function buildManualAskRequest(question) {
-  return { kind: 'voice', query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN), context: '', notes: '' }
+export function buildManualAskRequest(question, currentTabText = '', transcriptLines = []) {
+  return {
+    kind: 'voice',
+    query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN),
+    context: '',
+    notes: '',
+    currentTab: String(currentTabText || '').slice(0, MAX_TAB_TEXT_LEN),
+    transcript: joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
+  }
 }
 
 /** Applies a `transcript_state` replay (the full Transcript-so-far) into
@@ -199,7 +211,7 @@ export function hasUsableResearchAnswer(answer) {
 // message, never a stuck, unexplained pending card.
 const ERROR_MESSAGES = {
   unauthorized: 'You need to rejoin the room to ask a question.',
-  forbidden: 'Only the host can run Custom right now.',
+  forbidden: 'You do not have access to Custom in this room.',
   'room-unavailable': 'This room is no longer available.',
   NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
   TIMEOUT: 'The Research Assistant took too long to respond. Try again.',

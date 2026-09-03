@@ -65,7 +65,8 @@ describe('+page.server', () => {
         siteAuthed: true,
         siteProtected: false,
         notFound: false,
-        expired: false
+        expired: false,
+        researchPrompt: ''
       })
     })
 

@@ -5,6 +5,7 @@
   export let form;
 
   let loading = false;
+  let promptSaving = false;
 
   // bind:value (not a one-way value={...} expression) so a component
   // re-render — e.g. from dev-server HMR after editing an unrelated file —
@@ -144,6 +145,18 @@
             >Your guest needs this to join. Not stored in plain text.</span
           >
         </div>
+
+        <div class="field field-checkbox">
+          <label class="checkbox-label">
+            <input type="checkbox" name="guest-ai-allowed" />
+            Let your guest use the Research Assistant too
+          </label>
+          <span class="hint"
+            >Off by default — only you can Ask, run Turn Actions, or run
+            Interpret. Set once, here; not editable from inside the room.</span
+          >
+        </div>
+
         <button type="submit" class="btn-primary btn-block" disabled={loading}>
           {loading ? "Creating…" : "Create Room & Get Link"}
         </button>
@@ -154,6 +167,40 @@
       Share the room link and password with your guest.<br />
       Audio is recorded locally and uploaded for download afterwards.
     </p>
+
+    <div class="card form-card prompt-card">
+      <h2>Research Prompt</h2>
+      <p class="sub">
+        The instruction Custom/Interpret sends, written using {"{current_tab}"}
+        and {"{transcript}"} for whatever live content it wants. Empty disables
+        Custom in every room.
+      </p>
+      <form
+        method="POST"
+        action="?/save_research_prompt"
+        use:enhance={() => {
+          promptSaving = true;
+          return async ({ update }) => {
+            await update();
+            promptSaving = false;
+          };
+        }}
+      >
+        <textarea
+          name="research-prompt"
+          class="research-prompt-input"
+          rows="10"
+          placeholder="Write the Research Prompt here…">{data.researchPrompt}</textarea
+        >
+        <button
+          type="submit"
+          class="btn-primary btn-block"
+          disabled={promptSaving}
+        >
+          {promptSaving ? "Saving…" : "Save Research Prompt"}
+        </button>
+      </form>
+    </div>
   {/if}
 </main>
 
@@ -253,4 +300,31 @@
     line-height: 1.7;
   }
 
+  .field-checkbox {
+    margin-bottom: 20px;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .prompt-card {
+    margin-top: 24px;
+  }
+
+  .research-prompt-input {
+    width: 100%;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border, rgba(148, 163, 184, 0.3));
+    resize: vertical;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+  }
 </style>

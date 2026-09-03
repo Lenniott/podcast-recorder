@@ -62,15 +62,19 @@
   export let tabTexts = {};
   export let isHostClaim = false;
 
-  // Server-side opt-in (RESEARCH_GUEST_CAN_ASK — see ws-rooms.js's
-  // researchGuestCanAsk) letting every guest ask/remove too, not just the
-  // host. Off by default. Does NOT extend to Custom/Interpret, which stays
-  // strictly host-only regardless (see canCustom below) — this only widens
-  // research_ask/research_remove, the same two the server actually gates
-  // on this flag.
+  // Guest Research Access (see CONTEXT.md) — a per-room flag set at room
+  // creation. Off by default. One gate for every Research Assistant
+  // action: Ask, Turn Actions, and Custom/Interpret alike, no per-action
+  // carve-out (see canCustom below, which layers customEnabled on top of
+  // this same canAskResearch, not a separate host check).
   export let guestCanAskResearch = false;
 
   $: canAskResearch = isHostClaim || guestCanAskResearch;
+
+  // Whether the Research Prompt (see CONTEXT.md) is configured at all —
+  // set on the create-room page, not per-room. Custom stays disabled
+  // (regardless of canAskResearch) until it is.
+  export let customEnabled = false;
 
   let activeTabId = null;
   let entriesByTab = {};
@@ -87,7 +91,7 @@
   let transcriptLines = [];
 
   $: customText = activeNotesTabText(tabTexts, activeTabId);
-  $: canCustom = isHostClaim && hasCustomText(customText);
+  $: canCustom = canAskResearch && customEnabled && hasCustomText(customText);
 
   let questionInput = "";
   let entriesEl;
@@ -143,7 +147,7 @@
   }
 
   function removeEntry(entryId) {
-    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_remove
+    if (!canAskResearch) return; // same gate as ws-rooms.js's research_remove
     send({ type: "research_remove", entryId });
   }
 
@@ -152,7 +156,7 @@
   //     mechanism) ────────────────────────────────────────────────────────
 
   function submitQuestion() {
-    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_ask
+    if (!canAskResearch) return; // same gate as ws-rooms.js's research_ask
     const question = questionInput.trim();
     if (!question) return;
     questionInput = "";
@@ -160,11 +164,17 @@
     const entryId = makeResearchEntryId();
     send({ type: "research_ask", entryId, question });
     revealPanel();
-    publishResearchResult(entryId, buildManualAskRequest(question));
+    // customText/transcriptLines ride along only as Placeholder ingredients
+    // ({current_tab}/{transcript} — see CONTEXT.md) — substitution itself
+    // happens server-side (research-assistant.js), never here.
+    publishResearchResult(
+      entryId,
+      buildManualAskRequest(question, customText, transcriptLines),
+    );
   }
 
   function runCustom() {
-    if (!isHostClaim) return; // strictly host-only — Custom has no RESEARCH_GUEST_CAN_ASK opt-in
+    if (!canAskResearch || !customEnabled) return;
     const request = buildCustomRequest(customText, transcriptLines);
     if (!request) return;
     const entryId = makeResearchEntryId();
@@ -174,7 +184,7 @@
   }
 
   export async function runTurnAction(actionId, turnId) {
-    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_ask
+    if (!canAskResearch) return; // same gate as ws-rooms.js's research_ask
     const request = buildTurnActionRequest(transcriptLines, turnId, actionId);
     if (!request) return;
     const entryId = makeResearchEntryId();
@@ -293,14 +303,14 @@
       </form>
     {/if}
 
-    {#if isHostClaim}
+    {#if canAskResearch && customEnabled}
       <button
         type="button"
         class="btn-secondary btn-sm"
         disabled={!canCustom}
         title={canCustom
-          ? "Run Interpretation Mode on this tab's lyrics, then score against the transcript"
-          : "Interpret runs on notes-tab lyrics (not the Transcript tab)"}
+          ? "Run the Research Prompt against this tab's text and the transcript"
+          : "Interpret runs on notes-tab text (not the Transcript tab)"}
         on:click={runCustom}
       >
         Interpret

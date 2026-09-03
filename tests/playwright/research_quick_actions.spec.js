@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets, saveResearchPrompt, roomTabsReady } from './helpers.js'
 
 function cardAnswer(takeaway, mode = 'facts') {
   return JSON.stringify({
@@ -94,19 +94,34 @@ test('empty Turn Action lookups do not leave a skim card in the panel', async ({
   await page.close()
 })
 
-test('Custom is host-only; guests do not see the button', async ({ browser }) => {
+test('Interpret follows Guest Research Access; empty Research Prompt hides it', async ({ browser }) => {
   const host = await browser.newPage()
   await stubYouTubeApi(host)
-  const password = 'custom-host'
-  const roomUrl = await createRoom(host, { name: `E2E Custom ${Date.now()}`, password })
+  const previousPrompt = await saveResearchPrompt(host, '')
 
-  const guest = await browser.newPage()
-  await stubYouTubeApi(guest)
-  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+  try {
+    const password = 'custom-host'
+    const roomUrl = await createRoom(host, { name: `E2E Custom ${Date.now()}`, password })
 
-  await expect(host.getByRole('button', { name: 'Interpret' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
+    const guest = await browser.newPage()
+    await stubYouTubeApi(guest)
+    await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
-  await guest.close()
-  await host.close()
+    await expect(host.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
+    await expect(guest.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
+
+    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}')
+    await host.goto(roomUrl)
+    await roomTabsReady(host)
+    await guest.reload()
+    await roomTabsReady(guest)
+
+    await expect(host.getByRole('button', { name: 'Interpret' })).toBeVisible()
+    await expect(guest.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
+
+    await guest.close()
+  } finally {
+    await saveResearchPrompt(host, previousPrompt)
+    await host.close()
+  }
 })

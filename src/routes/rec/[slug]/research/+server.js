@@ -4,7 +4,7 @@
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { verifySessionToken, getHostClaim } from '$lib/server/auth.js'
-import { getActiveRoomBySlug } from '$lib/server/db.js'
+import { getActiveRoomBySlug, getResearchPrompt } from '$lib/server/db.js'
 import { askResearchAssistant, ResearchAssistantError } from '$lib/server/research-assistant.js'
 import { TURN_ACTION_IDS } from '$lib/research/research-card.js'
 
@@ -25,7 +25,20 @@ function validateRequestBody(body) {
     if (!isOptionalString(body.query, MAX_QUERY_LENGTH)) return null
     if (!isOptionalString(body.context, MAX_TEXT_LENGTH)) return null
     if (!isOptionalString(body.notes, MAX_TEXT_LENGTH)) return null
-    return { kind: 'voice', query: body.query ?? null, context: body.context ?? '', notes: body.notes ?? '' }
+    // currentTab/transcript are Placeholder ingredients only (see
+    // CONTEXT.md) — substituted into `query` in research-assistant.js when
+    // the asker wrote {current_tab}/{transcript} themselves, never added
+    // to the request automatically.
+    if (!isOptionalString(body.currentTab, MAX_TEXT_LENGTH)) return null
+    if (!isOptionalString(body.transcript, MAX_TEXT_LENGTH)) return null
+    return {
+      kind: 'voice',
+      query: body.query ?? null,
+      context: body.context ?? '',
+      notes: body.notes ?? '',
+      currentTab: body.currentTab ?? '',
+      transcript: body.transcript ?? ''
+    }
   }
 
   if (body.kind === 'turnAction') {
@@ -65,11 +78,14 @@ export async function POST({ params, request, cookies, fetch }) {
   if (!validated) return json({ error: 'invalid-request' }, { status: 400 })
 
   if (validated.kind === 'custom') {
-    if (!getHostClaim(slug, cookies, room, env.SECRET)) {
+    // Same gate as ws-rooms.js's research_ask/research_remove — Guest
+    // Research Access covers Custom exactly like Ask and Turn Actions, no
+    // special-case host-only rule of its own (see CONTEXT.md).
+    const isHost = !!getHostClaim(slug, cookies, room, env.SECRET)
+    if (!isHost && !room.guest_ai_allowed) {
       return json({ error: 'forbidden' }, { status: 403 })
     }
-    const override = String(env.RESEARCH_CUSTOM_PROMPT || '').trim()
-    if (override) validated.instruction = override
+    validated.instruction = getResearchPrompt()
   }
 
   try {

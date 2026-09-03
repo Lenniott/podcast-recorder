@@ -208,11 +208,26 @@ export async function passRecordingCheck(page) {
   await expect(overlay).toBeHidden()
 }
 
-export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
+export async function saveResearchPrompt(page, text) {
+  await page.goto('/')
+  await unlockIfNeeded(page)
+  const textarea = page.locator('textarea[name="research-prompt"]')
+  await textarea.waitFor()
+  const previous = await textarea.inputValue()
+  await textarea.fill(text)
+  await page.getByRole('button', { name: 'Save Research Prompt' }).click()
+  await expect(page.getByRole('button', { name: 'Save Research Prompt' })).toBeEnabled()
+  return previous
+}
+
+export async function createRoom(page, { name, password, hostDisplayName = 'Host', guestAiAllowed = false }) {
   await page.goto('/')
   await unlockIfNeeded(page)
   await fillField(page.locator('#room-episode-name'), name)
   await fillField(page.locator('#room-episode-code'), password)
+  if (guestAiAllowed) {
+    await page.getByRole('checkbox', { name: /Let your guest use the Research Assistant/i }).check()
+  }
   // Generous timeout: if the form's click lands before use:enhance has
   // hydrated, the browser falls back to a real full-page POST + redirect +
   // GET of /rec/[slug] — on a cold `npm run dev` worker that route's (now

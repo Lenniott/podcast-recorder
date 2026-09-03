@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { createRoom, getRoomBySlug } from '$lib/server/db.js'
+import { createRoom, getRoomBySlug, getResearchPrompt, setResearchPrompt } from '$lib/server/db.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
@@ -36,7 +36,8 @@ export async function load({ cookies, url }) {
     siteAuthed,
     siteProtected: !!env.SITE_PASSWORD,
     notFound: url.searchParams.has('notfound'),
-    expired: url.searchParams.has('expired')
+    expired: url.searchParams.has('expired'),
+    researchPrompt: siteAuthed ? getResearchPrompt() : ''
   }
 }
 
@@ -68,6 +69,15 @@ export const actions = {
     throw redirect(303, '/')
   },
 
+  save_research_prompt: async ({ request, cookies }) => {
+    if (env.SITE_PASSWORD && !verifySiteToken(cookies.get(SITE_COOKIE))) {
+      return fail(403, { promptError: 'Not authorised.' })
+    }
+    const data = await request.formData()
+    setResearchPrompt(String(data.get('research-prompt') || ''))
+    throw redirect(303, '/')
+  },
+
   create: async ({ request, cookies }) => {
     console.log('[action create] called')
 
@@ -76,11 +86,12 @@ export const actions = {
       return fail(403, { siteError: 'Not authorised.' })
     }
 
-    const data     = await request.formData()
-    const name     = String(data.get('room-episode-name') || '').trim()
-    const password = String(data.get('room-episode-code') || '').trim()
+    const data            = await request.formData()
+    const name            = String(data.get('room-episode-name') || '').trim()
+    const password        = String(data.get('room-episode-code') || '').trim()
+    const guestAiAllowed  = data.get('guest-ai-allowed') === 'on'
 
-    console.log('[action create] name=%s passwordLen=%d', name, password.length)
+    console.log('[action create] name=%s passwordLen=%d guestAiAllowed=%s', name, password.length, guestAiAllowed)
 
     if (!name)               return fail(400, { error: 'Episode name is required', name, password })
     if (name.length > 100)   return fail(400, { error: 'Name too long (max 100 chars)', name, password })
@@ -94,7 +105,7 @@ export const actions = {
         if (!getRoomBySlug(slug)) break
       }
       const passwordHash = await hashPassword(password)
-      createRoom({ slug, name, passwordHash, passwordPlain: password })
+      createRoom({ slug, name, passwordHash, passwordPlain: password, guestAiAllowed })
       const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
       const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
       cookies.set(ROOM_COOKIE(slug), roomToken, {

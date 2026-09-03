@@ -41,12 +41,11 @@ export const SUPPRESS_THRESHOLD = 80 // tunable client-side constant, not baked 
 // schema" — same one-schema-many-modes idea the findings doc set out.
 export const MODE_RULES = {
   definition:
-    'Explain an obscure word, name, or reference in the FOCUS TURN, including a plausible mishear if the transcript likely garbled it. If nothing needs defining, output nothing.',
+    'Explain an obscure word, name, or reference in the FOCUS TURN, including a plausible mishear if the transcript likely garbled it. include how to pronounce it phonetically if it is not a common word. If nothing needs defining, output nothing.',
   facts:
     'Surface general background about what the FOCUS TURN is talking about. Do not say whether the speaker was right. Grounding is only for references — never the subject.',
   answer:
     'Reply to a question asked in the FOCUS TURN itself. If that Turn is not a question, output nothing rather than answering a different, easier question.',
-  ask: "The question asked IS the claim to resolve. Look up and state the actual answer. Never substitute a meta-claim about what a speaker said, knows, or doesn't know. If you cannot determine the real answer, output nothing.",
   custom: 'Follow Interpretation Mode. Tab text is lyrics (Stage 1). Transcript is the human reading (Stage 2 only).'
 }
 

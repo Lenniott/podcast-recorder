@@ -86,15 +86,49 @@ If that Turn is not a question, there is nothing to Answer.
 _Avoid_: research (the old mode name), Research recent conversation
 
 **Ask**:
-A one-off typed question in the Research Assistant panel. It carries no
-Transcript and no tab text — the question is the whole request.
+A one-off typed question in the Research Assistant panel. Carries no
+Transcript and no tab text unless the asker opts in with a **Placeholder**
+— the question is the whole request otherwise.
 _Avoid_: custom (that's a saved instruction, not a one-off question)
 
+**Placeholder**:
+`{current_tab}` or `{transcript}`, written inline in free text handed to
+the Research Assistant (an Ask question, or the **Research Prompt**) and
+substituted with the live active-Tab text / room Transcript right before
+the request is sent. Substitution happens in one place — the Research
+Assistant Client — so it never matters which free-text field it came from.
+_Avoid_: prop (collides with Svelte component props, used constantly
+elsewhere in this codebase), token, variable
+
+**Research Prompt**:
+The one instruction text the **Custom** action sends as its whole request,
+written using **Placeholders** for whatever live content it wants. Global
+to the deployment, not per-room, and not written by a room's Host — it's
+set on the create-room page by whoever holds the site password, before any
+room exists, then simply available for
+Custom to use inside every room afterward. Custom is disabled (button off)
+whenever the Research Prompt is empty.
+_Avoid_: Custom prompt, Interpretation Mode, custom instruction, host-set
+(ambiguous with room Host)
+
 **Custom**:
-Interpretation Mode on a notes Tab: Stage 1 is a blind read of that Tab's
-text (the lyrics); Stage 2 scores it against the room Transcript. Host-only
-for now. The prompt lives with the Research Assistant, not in the browser.
-_Avoid_: Ask, Quick Action, Interpret (the button label — the lookup is Custom)
+The panel action that runs the **Research Prompt** against the active
+notes Tab's text and the room Transcript. Gated by **Guest Research
+Access** exactly like Ask and Turn Actions — no special-case host-only
+rule of its own. Distinct from the Research Prompt itself: Custom is the
+button/call, the Research Prompt is the text it sends.
+_Avoid_: Ask, Quick Action, Interpret (the button label — the lookup is
+Custom), host-only (that carve-out is gone — see Guest Research Access)
+_Avoid_: Ask, Quick Action, Interpret (the button label — the lookup is
+Custom), Interpretation Mode (the old two-stage structure this replaced)
+
+**Guest Research Access**:
+A per-room, host-set-at-creation checkbox letting every guest in that room
+use every Research Assistant action — Ask, Turn Actions, and Custom alike
+— not just the Host. One flag, no per-action carve-outs. Off by default.
+Set once, at room creation, on the create-room form — not editable
+afterward from inside the room.
+_Avoid_: RESEARCH_GUEST_CAN_ASK (the retired deployment-wide env var this replaced)
 
 **Research Eval Log**:
 An append-only, gitignored record of live Research Assistant calls

@@ -4,7 +4,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('../../src/lib/server/db.js', () => ({
   getActiveRoomBySlug: vi.fn(() => ({
     slug: 'room1',
-    password_hash: 'mock-hash'
+    password_hash: 'mock-hash',
+    guest_ai_allowed: 0
   })),
   default: {}
 }))
@@ -16,7 +17,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
-import { setupWss, _resetRooms, researchGuestCanAsk } from '../../src/lib/server/ws-rooms.js'
+import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
 function latest(ws, type) {
@@ -27,20 +28,6 @@ function ask(ws, { entryId, question }) {
   ws.emit('message', JSON.stringify({ type: 'research_ask', entryId, question }))
 }
 
-describe('researchGuestCanAsk', () => {
-  it('is off (host-only) by default and for any unrecognized value', () => {
-    expect(researchGuestCanAsk({})).toBe(false)
-    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: '0' })).toBe(false)
-    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'nope' })).toBe(false)
-  })
-
-  it('is on for 1/true/yes, case-insensitively', () => {
-    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: '1' })).toBe(true)
-    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'true' })).toBe(true)
-    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'YES' })).toBe(true)
-  })
-})
-
 describe('setupWss — research assistant entries (per-tab, shared — see ADR-0002 and ticket 04)', () => {
   let wss, host, guest
 
@@ -48,7 +35,7 @@ describe('setupWss — research assistant entries (per-tab, shared — see ADR-0
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -87,26 +74,30 @@ describe('setupWss — research assistant entries (per-tab, shared — see ADR-0
     expect(host.sent.some((m) => m.type === 'research_entry')).toBe(false)
   })
 
-  it('RESEARCH_GUEST_CAN_ASK=true lets a guest ask and remove too', () => {
-    process.env.RESEARCH_GUEST_CAN_ASK = 'true'
-    try {
-      const tabId = activeTabId(guest)
-      host.sent.length = 0
-      guest.sent.length = 0
-      ask(guest, { entryId: 'e1', question: 'Can a guest ask now?' })
+  it('Guest Research Access (guest_ai_allowed on the room row) lets a guest ask and remove too', () => {
+    // guestAiAllowed is cached on the peer at connect time (see
+    // ws-rooms.js) — a fresh guest connection is what picks up the flag,
+    // not a mid-session env change.
+    guest.emit('close')
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 1 })
+    const allowedGuest = mockWs()
+    wss.connect(allowedGuest, 'room1')
+    join(allowedGuest, 'Guest', 'c2')
 
-      for (const ws of [host, guest]) {
-        expect(latest(ws, 'research_entry')).toMatchObject({ tabId, entry: { id: 'e1', status: 'pending' } })
-      }
+    const tabId = activeTabId(allowedGuest)
+    host.sent.length = 0
+    allowedGuest.sent.length = 0
+    ask(allowedGuest, { entryId: 'e1', question: 'Can a guest ask now?' })
 
-      host.sent.length = 0
-      guest.sent.length = 0
-      guest.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'e1' }))
-      for (const ws of [host, guest]) {
-        expect(latest(ws, 'research_removed')).toEqual({ type: 'research_removed', tabId, entryId: 'e1' })
-      }
-    } finally {
-      delete process.env.RESEARCH_GUEST_CAN_ASK
+    for (const ws of [host, allowedGuest]) {
+      expect(latest(ws, 'research_entry')).toMatchObject({ tabId, entry: { id: 'e1', status: 'pending' } })
+    }
+
+    host.sent.length = 0
+    allowedGuest.sent.length = 0
+    allowedGuest.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'e1' }))
+    for (const ws of [host, allowedGuest]) {
+      expect(latest(ws, 'research_removed')).toEqual({ type: 'research_removed', tabId, entryId: 'e1' })
     }
   })
 

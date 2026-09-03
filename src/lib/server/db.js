@@ -33,6 +33,16 @@ function getDb() {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
 
+  // Guest Research Access (see CONTEXT.md) — set once, at room creation,
+  // replacing the old deployment-wide RESEARCH_GUEST_CAN_ASK env var.
+  // Stored as 0/1 (SQLite has no boolean type); read back as a JS boolean
+  // by getRoomBySlug/getActiveRoomBySlug's callers via `!!room.guest_ai_allowed`.
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_ai_allowed INTEGER NOT NULL DEFAULT 0`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
   // Drop retired columns from existing DBs (SQLite 3.35+). No-op if a column
   // is already gone, or if the SQLite version can't drop columns.
   for (const column of ['show_upload', 'guest_can_control_playback']) {
@@ -57,6 +67,19 @@ function getDb() {
     )
   `)
 
+  // Deployment-wide settings — one row per key. Currently holds only the
+  // Research Prompt (see CONTEXT.md), replacing the retired
+  // RESEARCH_CUSTOM_PROMPT env var and the hardcoded INTERPRETATION_MODE_PROMPT
+  // constant. A key/value shape (rather than a dedicated column-per-setting
+  // table) because this is expected to be the only deployment-wide setting
+  // for a while, and doesn't want a migration every time a new one appears.
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `)
+
   return _db
 }
 
@@ -66,11 +89,11 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash, passwordPlain = null }) {
+export function createRoom({ slug, name, passwordHash, passwordPlain = null, guestAiAllowed = false }) {
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, password_plain, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, passwordPlain, Date.now())
+    INSERT INTO rooms (slug, name, password_hash, password_plain, guest_ai_allowed, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, Date.now())
 }
 
 export function getRoomBySlug(slug) {
@@ -110,6 +133,21 @@ export function loadRoomContent(slug) {
 
 export function deleteRoomContent(slug) {
   return getDb().prepare('DELETE FROM room_content WHERE slug = ?').run(slug).changes
+}
+
+const RESEARCH_PROMPT_KEY = 'research_prompt'
+
+/** The Research Prompt (see CONTEXT.md) — '' when unset, meaning Custom is disabled. */
+export function getResearchPrompt() {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(RESEARCH_PROMPT_KEY)
+  return row ? row.value : ''
+}
+
+export function setResearchPrompt(value) {
+  getDb().prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(RESEARCH_PROMPT_KEY, String(value ?? ''))
 }
 
 export function cleanupExpiredRooms({ now = Date.now() } = {}) {

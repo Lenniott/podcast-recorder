@@ -982,6 +982,7 @@
     slug={data.slug}
     isHostClaim={data.isHostClaim}
     guestCanAskResearch={data.guestCanAskResearch}
+    customEnabled={data.customEnabled}
     roomPassword={data.roomPassword}
     {wsStatus}
     {peers}

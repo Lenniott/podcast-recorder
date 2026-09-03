@@ -142,10 +142,11 @@ test("the panel's own collapsed/expanded state is local, not synced between peer
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
-  // The ask input is host-only by default (RESEARCH_GUEST_CAN_ASK opt-in
-  // gates it for guests — see ResearchPanel.svelte's canAskResearch), so
-  // expanded/collapsed is asserted here via the panel title instead, which
-  // both host and guest always see when expanded.
+  // The ask input is host-only by default (Guest Research Access — a
+  // per-room checkbox set at creation, see CONTEXT.md — gates it for
+  // guests; ResearchPanel.svelte's canAskResearch), so expanded/collapsed
+  // is asserted here via the panel title instead, which both host and
+  // guest always see when expanded.
   const panelTitle = (page) => page.locator('.research-panel-title')
   await expect(askInput(host)).toBeVisible()
   await expect(panelTitle(guest)).toBeVisible()

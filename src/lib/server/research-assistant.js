@@ -4,7 +4,6 @@
  */
 import { env } from '$env/dynamic/private'
 import { matchesMode, MODE_RULES, MODES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
-import { INTERPRETATION_MODE_PROMPT } from './interpretation-mode-prompt.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -41,6 +40,22 @@ Hard rules:
 - If nothing survives the mode rule, leave mainTakeaway an empty string and the scores 0 — that combination means "nothing to report".`
 }
 
+// Placeholder substitution (see CONTEXT.md) — the one place `{current_tab}`/
+// `{transcript}` get resolved, so every free-text field that accepts them
+// (the Research Prompt, an Ask question) goes through this same rule
+// rather than each caller splicing strings its own way. A placeholder with
+// no value supplied (e.g. `{transcript}` before any transcript exists)
+// resolves to '' — silently, not an error: the host's own prompt text is
+// what decides whether that's worth noting.
+const PLACEHOLDERS = { current_tab: 'currentTab', transcript: 'transcript' }
+
+export function applyPlaceholders(template, values = {}) {
+  return String(template || '').replace(/\{(\w+)\}/g, (match, name) => {
+    const key = PLACEHOLDERS[name]
+    return key ? String(values[key] ?? '') : match
+  })
+}
+
 function buildMessages(request, pressTime = new Date()) {
   const pressTimeIso = pressTime.toISOString()
 
@@ -64,33 +79,29 @@ function buildMessages(request, pressTime = new Date()) {
   }
 
   if (request.kind === 'custom') {
-    const instruction = String(request.instruction || INTERPRETATION_MODE_PROMPT).trim()
-    if (!instruction) {
-      throw new ResearchAssistantError('INVALID_REQUEST', 'Custom instruction is missing')
+    // The Research Prompt (see CONTEXT.md) is the whole request — no
+    // hardcoded stage structure wraps it any more (see ADR-0006).
+    // Whatever `{current_tab}`/`{transcript}` the host's own prompt text
+    // references is resolved here, the one seam every Placeholder goes
+    // through (applyPlaceholders above).
+    const template = String(request.instruction || '').trim()
+    if (!template) {
+      throw new ResearchAssistantError('INVALID_REQUEST', 'Research Prompt is not configured')
     }
-    const lyrics = request.text
-    const transcript = String(request.transcript || '').trim()
+    const instruction = applyPlaceholders(template, {
+      currentTab: request.text,
+      transcript: request.transcript
+    })
     const mode = 'custom'
     return {
       mode,
-      messages: [
-        { role: 'system', content: instruction },
-        {
-          role: 'user',
-          content: [
-            'STAGE 1 INPUT — lyrics only. Complete and lock Stage 1 before reading Stage 2.',
-            `LYRICS:\n${lyrics}`,
-            transcript
-              ? `---\nSTAGE 2 INPUT — host/guest reading. Use only after Stage 1 is locked.\nTRANSCRIPT:\n${transcript}`
-              : '---\nSTAGE 2 INPUT — no transcript was captured. Complete Stage 1; for Stage 2 note that the human reading is missing.'
-          ].join('\n\n')
-        }
-      ]
+      messages: [{ role: 'user', content: instruction }]
     }
   }
 
   if (request.kind === 'voice') {
-    const { query, context, notes } = request
+    const { context, notes } = request
+    const query = applyPlaceholders(request.query, { currentTab: request.currentTab, transcript: request.transcript })
     const mode = 'ask'
     return {
       mode,
@@ -113,9 +124,9 @@ function buildMessages(request, pressTime = new Date()) {
   throw new ResearchAssistantError('INVALID_REQUEST', `Unknown request kind: ${request?.kind}`)
 }
 
-// Structured-output schema for every mode except `custom` — Interpretation
-// Mode has its own prompt (INTERPRETATION_MODE_PROMPT) and its reply is
-// used as freeform prose (see askResearchAssistant's `mode === 'custom'`
+// Structured-output schema for every mode except `custom` — Custom sends
+// the Research Prompt (see CONTEXT.md) as-is and its reply is used as
+// freeform prose (see askResearchAssistant's `mode === 'custom'`
 // branch), not parsed field-by-field, so it isn't forced through this.
 // Forcing the shape here (rather than just asking for it in the prompt
 // text) is what stops the model from e.g. echoing a placeholder/wrong
