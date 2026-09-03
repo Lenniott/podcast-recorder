@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createSpeechRecognition } from '../../src/lib/speech-recognition.js'
+import { createSpeechRecognition } from '../../src/lib/research/speech-recognition.js'
 
 /**
  * A fake SpeechRecognition constructor mirroring audio-engine.test.js's

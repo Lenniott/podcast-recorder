@@ -17,7 +17,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
-import { MAX_TABS } from '../../src/lib/tab-sync.js'
+import { MAX_TABS } from '../../src/lib/room/tab-sync.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
 function latest(ws, type) {
@@ -183,7 +183,7 @@ describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 foll
   })
 
   it('a peer switching to the Transcript is room-shared — broadcast to every peer, not just the one who clicked it', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     guest.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
     for (const ws of [host, guest]) {
       expect(latest(ws, 'tabs_state').activeTabId).toBe(TRANSCRIPT_TAB_ID)
@@ -194,7 +194,7 @@ describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 foll
   })
 
   it('switching away from the Transcript back to a real tab is also broadcast to every peer', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     const realTabId = latest(host, 'tabs_state').tabs[0].id
     host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
     host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: realTabId }))
@@ -204,7 +204,7 @@ describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 foll
   })
 
   it('a late joiner is replayed the Transcript as the room\'s current view, same as any real active tab', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
     guest.emit('close') // free a slot — room is capped at MAX_PEERS
 
@@ -214,7 +214,7 @@ describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 foll
   })
 
   it('still refuses tab_close/tab_text for the reserved Transcript id even via the live WS handlers', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     host.sent.length = 0
     host.emit('message', JSON.stringify({ type: 'tab_close', tabId: TRANSCRIPT_TAB_ID }))
     expect(host.sent.some((m) => m.type === 'error')).toBe(true)
@@ -341,7 +341,7 @@ describe('setupWss — tab_text (shared textarea, symmetric)', () => {
   })
 
   it('truncates text to MAX_TAB_TEXT_LEN', async () => {
-    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/tab-sync.js')
+    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/room/tab-sync.js')
     const huge = 'x'.repeat(MAX_TAB_TEXT_LEN + 500)
     guest.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: huge }))
     expect(latest(host, 'tab_text').text).toHaveLength(MAX_TAB_TEXT_LEN)

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createServerCopyUpload } from '../../src/lib/server-copy-upload.js'
-import { deriveServerCopyUploadState, shouldAnnounceServerCopyFailure } from '../../src/lib/server-copy-status.js'
-import { isIncompleteServerCopyUpload } from '../../src/lib/exit-guard.js'
+import { createServerCopyUpload } from '../../src/lib/server-copy/server-copy-upload.js'
+import { deriveServerCopyUploadState, shouldAnnounceServerCopyFailure } from '../../src/lib/server-copy/server-copy-status.js'
+import { isIncompleteServerCopyUpload } from '../../src/lib/recording/exit-guard.js'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -115,7 +115,7 @@ describe('post-stop upload-wait modal — open/closed derivation', () => {
 // is deliberately false for it (see exit-guard.js) — nothing left to wait
 // for — so the modal above closes exactly as if the copy had finished. This
 // pins down the page's other reaction to that same transition: a one-time
-// explanation ($lib/server-copy-status.js's shouldAnnounceServerCopyFailure)
+// explanation ($lib/server-copy/server-copy-status.js's shouldAnnounceServerCopyFailure)
 // so a failure is never left completely unremarked once the modal is gone.
 describe('post-stop server-copy failure notice — fires exactly where the wait modal goes silent', () => {
   it('announces once the copy fails and recording has already stopped — right when the wait modal would otherwise just vanish', async () => {

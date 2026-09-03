@@ -2,7 +2,7 @@
  * Pure state-transition + request-shaping logic for the Research Assistant
  * panel (ticket 04) — kept out of ResearchPanel.svelte because
  * vitest.config.js excludes .svelte files from coverage entirely (see
- * $lib/exit-guard.js / $lib/server-copy-status.js for the same split on
+ * $lib/recording/exit-guard.js / $lib/server-copy/server-copy-status.js for the same split on
  * other features: decision logic lives in a plain module, the component
  * just calls it).
  *
@@ -14,8 +14,8 @@
  */
 import { parseResearchCard, TURN_ACTION_IDS } from './research-card.js'
 import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
-import { MAX_TAB_TEXT_LEN } from './tab-sync.js'
-import { TRANSCRIPT_TAB_ID } from './transcript-sync.js'
+import { MAX_TAB_TEXT_LEN } from '../room/tab-sync.js'
+import { TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 
 export { makeResearchEntryId, TURN_ACTION_IDS }
 

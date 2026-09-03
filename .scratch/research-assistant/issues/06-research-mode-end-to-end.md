@@ -4,7 +4,7 @@
 Voice Trigger phrase detection ("let's look that up" wired end-to-end).
 That's replaced — see `docs/adr/0004-research-mode-replaces-voice-trigger.md`
 — by a passive, always-on process with no phrase or button required.
-`src/lib/research-trigger.js` (built for the old design) is no longer part
+`src/lib/research/research-trigger.js` (built for the old design) is no longer part
 of this ticket's scope; it can stay unused or be removed, your call, but
 nothing in this ticket depends on it.
 

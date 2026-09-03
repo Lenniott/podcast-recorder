@@ -3,7 +3,7 @@
   import {
     canShowServerCopyDownload,
     formatServerCopyLine,
-  } from "./server-copy-status.js";
+  } from "../server-copy/server-copy-status.js";
   import { clampMicLabel, participantPresence } from "./participant-display.js";
 
   export let peer;

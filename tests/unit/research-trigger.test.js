@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectResearchTrigger } from '../../src/lib/research-trigger.js'
+import { detectResearchTrigger } from '../../src/lib/research/research-trigger.js'
 
 describe('detectResearchTrigger', () => {
   it('detects "define" followed by a topic', () => {

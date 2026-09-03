@@ -17,9 +17,9 @@
  * `durable` directly, and never sees whether a room was ever evicted.
  */
 
-import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../tab-sync.js'
-import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../transcript-sync.js'
-import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations } from '../research-sync.js'
+import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../room/tab-sync.js'
+import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
+import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations } from '../research/research-sync.js'
 
 const DEFAULT_GRACE_MS = 10_000
 

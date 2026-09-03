@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { askResearchAssistant, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
-import { serializeResearchCard } from '../../src/lib/research-card.js'
+import { serializeResearchCard } from '../../src/lib/research/research-card.js'
 import { appendResearchEvalLog } from '../../src/lib/server/research-eval-log.js'
 
 vi.mock('../../src/lib/server/research-eval-log.js', () => ({

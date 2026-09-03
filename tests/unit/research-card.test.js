@@ -7,7 +7,7 @@ import {
   serializeResearchCard,
   shouldSuppress,
   SUPPRESS_THRESHOLD
-} from '../../src/lib/research-card.js'
+} from '../../src/lib/research/research-card.js'
 
 function fieldText(fields) {
   return [

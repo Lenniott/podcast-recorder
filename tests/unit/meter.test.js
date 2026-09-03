@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { METER_MIN, dbfs, nextFillDb, dbToMeterPct, formatMeterReadout, METER_COLOR_STOPS, meterGradientCss } from '../../src/lib/meter.js'
+import { METER_MIN, dbfs, nextFillDb, dbToMeterPct, formatMeterReadout, METER_COLOR_STOPS, meterGradientCss } from '../../src/lib/recording/meter.js'
 
 describe('dbfs', () => {
   it('converts linear amplitude to dBFS', () => {

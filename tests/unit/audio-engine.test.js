@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createAudioEngine } from '../../src/lib/audio-engine.js'
+import { createAudioEngine } from '../../src/lib/recording/audio-engine.js'
 
 function createTrack(label = 'Input') {
   return { label, onended: null, stop: vi.fn() }

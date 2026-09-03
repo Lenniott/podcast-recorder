@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createCaptureWriter } from '../../src/lib/capture-writer.js'
+import { createCaptureWriter } from '../../src/lib/recording/capture-writer.js'
 
 const SAMPLE_RATE = 48000
 const BUFFER_SIZE = 8192 // matches static/worklet/recorder-processor.js

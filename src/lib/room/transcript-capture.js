@@ -1,4 +1,4 @@
-import { createSpeechRecognition } from './speech-recognition.js'
+import { createSpeechRecognition } from '../research/speech-recognition.js'
 
 /**
  * Wires the Record button's lifecycle to speech recognition and the
@@ -10,8 +10,8 @@ import { createSpeechRecognition } from './speech-recognition.js'
  * requirement calls for: it owns the one decision +page.svelte would
  * otherwise have to inline — "only a FINALIZED result becomes a
  * transcript_line, labeled with the current speaker name" — so that
- * decision has its own unit tests (mirroring how $lib/exit-guard.js and
- * $lib/server-copy-status.js keep decision logic out of the page
+ * decision has its own unit tests (mirroring how $lib/recording/exit-guard.js and
+ * $lib/server-copy/server-copy-status.js keep decision logic out of the page
  * component) independent of Svelte and the room WebSocket.
  *
  * start()/stop() are meant to be called 1:1 with the page's own

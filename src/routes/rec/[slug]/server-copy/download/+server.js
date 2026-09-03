@@ -29,7 +29,7 @@ import {
   getServerCopyWavPath,
   isServerCopyFinalized
 } from '$lib/server/server-copy-storage.js'
-import { buildWavHeader } from '$lib/audio-utils.js'
+import { buildWavHeader } from '$lib/recording/audio-utils.js'
 
 export async function GET({ params, url, cookies }) {
   const { slug } = params

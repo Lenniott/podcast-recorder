@@ -14,8 +14,8 @@ import {
   isSkimVisibleEntry,
   describeResearchError,
   makeResearchEntryId
-} from '../../src/lib/research-panel.js'
-import { TRANSCRIPT_TAB_ID } from '../../src/lib/transcript-sync.js'
+} from '../../src/lib/research/research-panel.js'
+import { TRANSCRIPT_TAB_ID } from '../../src/lib/room/transcript-sync.js'
 
 describe('makeResearchEntryId', () => {
   it('returns a unique-looking, non-empty string each time', () => {

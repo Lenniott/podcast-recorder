@@ -6,7 +6,7 @@ import { env } from '$env/dynamic/private'
 import { verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 import { getActiveRoomBySlug } from '$lib/server/db.js'
 import { askResearchAssistant, ResearchAssistantError } from '$lib/server/research-assistant.js'
-import { TURN_ACTION_IDS } from '$lib/research-card.js'
+import { TURN_ACTION_IDS } from '$lib/research/research-card.js'
 
 const AUTH_COOKIE = (slug) => `pr_auth_${slug}`
 

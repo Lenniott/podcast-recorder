@@ -1,8 +1,8 @@
 <script>
-  import RoomSidebar from "$lib/RoomSidebar.svelte";
-  import RoomTabs from "$lib/RoomTabs.svelte";
-  import ResearchPanel from "$lib/ResearchPanel.svelte";
-  import RoomPresenceTable from "$lib/RoomPresenceTable.svelte";
+  import RoomSidebar from "$lib/room/RoomSidebar.svelte";
+  import RoomTabs from "$lib/room/RoomTabs.svelte";
+  import ResearchPanel from "$lib/research/ResearchPanel.svelte";
+  import RoomPresenceTable from "$lib/room/RoomPresenceTable.svelte";
   import ThemeToggle from "$lib/ThemeToggle.svelte";
 
   export let sidebarCollapsed = false;

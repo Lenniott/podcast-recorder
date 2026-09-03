@@ -2,9 +2,9 @@
   import {
     formatServerCopyLine,
     canShowServerCopyDownload,
-  } from "./server-copy-status.js";
+  } from "../server-copy/server-copy-status.js";
   import { participantPresence } from "./participant-display.js";
-  import { ChevronDown, ChevronUp, Download02, Microphone02 } from "./icons";
+  import { ChevronDown, ChevronUp, Download02, Microphone02 } from "../icons";
 
   export let peers = [];
   export let clientId = null;

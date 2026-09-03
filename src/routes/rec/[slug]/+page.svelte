@@ -3,30 +3,30 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
-  import { createCaptureWriter } from '$lib/capture-writer.js'
-  import { createServerCopyUpload } from '$lib/server-copy-upload.js'
+  import { buildWavHeader, float32ToInt16 } from '$lib/recording/audio-utils.js'
+  import { createCaptureWriter } from '$lib/recording/capture-writer.js'
+  import { createServerCopyUpload } from '$lib/server-copy/server-copy-upload.js'
   import {
     deriveServerCopyDisplay,
     deriveServerCopyUploadState,
     shouldAnnounceServerCopyFailure
-  } from '$lib/server-copy-status.js'
-  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/exit-guard.js'
-  import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
-  import { METER_MIN, dbToMeterPct } from '$lib/meter.js'
-  import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  } from '$lib/server-copy/server-copy-status.js'
+  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/recording/exit-guard.js'
+  import { createWrittenAudioRing } from '$lib/recording/written-audio-ring.js'
+  import { METER_MIN, dbToMeterPct } from '$lib/recording/meter.js'
+  import RecordingCheckModal from '$lib/recording/RecordingCheckModal.svelte'
   import PasswordGate from '$lib/PasswordGate.svelte'
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
   import DisplayNameGate from '$lib/DisplayNameGate.svelte'
-  import RecordingRoom from '$lib/RecordingRoom.svelte'
-  import ServerCopyWaitModal from '$lib/ServerCopyWaitModal.svelte'
-  import { createRoomConnection } from '$lib/room-connection.js'
-  import { createClockSync } from '$lib/clock-sync.js'
-  import { createRecordingCheck } from '$lib/recording-check.js'
-  import { createWaveformRenderer } from '$lib/waveform-renderer.js'
-  import { createAudioEngine } from '$lib/audio-engine.js'
-  import { createLevelMeter } from '$lib/level-meter.js'
-  import { createTranscriptCapture } from '$lib/transcript-capture.js'
+  import RecordingRoom from '$lib/recording/RecordingRoom.svelte'
+  import ServerCopyWaitModal from '$lib/server-copy/ServerCopyWaitModal.svelte'
+  import { createRoomConnection } from '$lib/room/room-connection.js'
+  import { createClockSync } from '$lib/recording/clock-sync.js'
+  import { createRecordingCheck } from '$lib/recording/recording-check.js'
+  import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
+  import { createAudioEngine } from '$lib/recording/audio-engine.js'
+  import { createLevelMeter } from '$lib/recording/level-meter.js'
+  import { createTranscriptCapture } from '$lib/room/transcript-capture.js'
 
   export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
@@ -61,8 +61,8 @@
   let recordingTimer = null
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
-  let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
-  // Convenience mirror of the local recording — see $lib/server-copy-upload.js.
+  let captureWriter = null     // owns the WAV byte stream — see $lib/recording/capture-writer.js
+  // Convenience mirror of the local recording — see $lib/server-copy/server-copy-upload.js.
   // Fed from captureWriter's own onWritten seam (via handleWritten below), so
   // it can never race ahead of, or substitute for, local write confirmation.
   // A failed/slow/rejected upload must never block or delay anything above.
@@ -96,7 +96,7 @@
   // written to disk (fed via captureWriter's onWritten). The mic signal can
   // look perfectly healthy while the file silently diverges from it; a
   // display sourced from the mic can never catch that. See
-  // $lib/written-audio-ring.js.
+  // $lib/recording/written-audio-ring.js.
   let writtenRing = null
   const waveformRenderer = createWaveformRenderer({
     getCanvas: () => canvas,
@@ -255,7 +255,7 @@
     )
   }
   // Single source of truth for both severity tiers of the exit guard — see
-  // $lib/exit-guard.js for why active-recording always wins when both are
+  // $lib/recording/exit-guard.js for why active-recording always wins when both are
   // true, so the two warnings can never collide or double-fire.
   $: exitGuard = deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload })
   $: hasBlockingExitWork = exitGuard.blocking
@@ -446,7 +446,7 @@
   // RECORDING
   // ───────────────────────────────────────────────────────────────────
 
-  // Voice Trigger capture (ticket 03; see $lib/transcript-capture.js and
+  // Voice Trigger capture (ticket 03; see $lib/room/transcript-capture.js and
   // ADR-0003) — starts/stops exactly with our own local recording, no
   // separate button, no separate consent step. `send` closes over `room`,
   // defined further below (safe: never invoked before the component's
@@ -485,7 +485,7 @@
 
   /**
    * The server-copy upload's onProgress callback. Derives the small
-   * display-ready {state, percent} shape (see $lib/server-copy-status.js)
+   * display-ready {state, percent} shape (see $lib/server-copy/server-copy-status.js)
    * once, and, only when it actually changed, tells the room about it —
    * the same threshold-based, percentage-only broadcast recording_state
    * uses for local recording. Both peers then read the identical value
@@ -493,7 +493,7 @@
    * ws-rooms.js).
    */
   function handleServerCopyProgress(status) {
-    // Shared vocabulary from $lib/server-copy-status.js — distinguishes
+    // Shared vocabulary from $lib/server-copy/server-copy-status.js — distinguishes
     // "still uploading while we're still recording" from "recording
     // stopped locally, upload still catching up" so both the exit-guard
     // warning text and the post-stop blocking modal (ticket 07) stay
@@ -512,7 +512,7 @@
   }
 
   // Takes the already-derived {state, percent} display shape (see
-  // $lib/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
+  // $lib/server-copy/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
   // upload status, so every caller derives it exactly once — callers that
   // don't already have a display value in hand (the reset below, the
   // resync below) derive it themselves at the call site.
@@ -637,7 +637,7 @@
     wsNotifyState('stopped')
     // Fire-and-forget, never awaited: stopping recognition must never delay
     // the local WAV finalize below (AGENTS.md's one hard rule). Never
-    // throws — see $lib/transcript-capture.js's doc comment.
+    // throws — see $lib/room/transcript-capture.js's doc comment.
     transcriptCapture.stop()
 
     // Stopping via the regular Stop button while the listen-back check is
@@ -659,7 +659,7 @@
     captureWriter = null
 
     // The explicit "final length is now known" signal — see
-    // $lib/server-copy-upload.js's finish() doc. Must come after local
+    // $lib/server-copy/server-copy-upload.js's finish() doc. Must come after local
     // write confirmation (captureWriter.stop() above), never before. Not
     // awaited: a slow/failing/rejected server copy must never delay or
     // gate the local WAV finalize below (that's ticket 07's blocking-modal

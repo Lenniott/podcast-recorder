@@ -1,14 +1,14 @@
 <script>
   import { onMount, tick } from "svelte";
   import { Plus } from "$lib/icons";
-  import TabVideoPlayer from "./TabVideoPlayer.svelte";
+  import TabVideoPlayer from "../TabVideoPlayer.svelte";
   import TranscriptTab from "./TranscriptTab.svelte";
   import { TRANSCRIPT_TAB_ID } from "./transcript-sync.js";
   import {
     getNotesTextSize,
     setNotesTextSize,
     SIZES as NOTES_TEXT_SIZES,
-  } from "./notes-text-size.js";
+  } from "../notes-text-size.js";
 
   // (payload) => void — JSON-sends over the room WS. The room's single
   // WebSocket connection is owned by the page, not this component.
@@ -17,7 +17,7 @@
 
   // This participant's own speech-recognition status — 'stopped' |
   // 'unsupported' | 'starting' | 'running' | 'retrying' (see
-  // $lib/speech-recognition.js). Deliberately per-browser, never
+  // $lib/research/speech-recognition.js). Deliberately per-browser, never
   // room-shared: whether *you* are being transcribed is your own local
   // fact, same as your own mic selection. Shown as a small dot on the
   // Transcript pill so it's visible without switching to that tab — the

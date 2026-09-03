@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { participantPresence, clampMicLabel, recordingElapsedSeconds } from '../../src/lib/participant-display.js'
+import { participantPresence, clampMicLabel, recordingElapsedSeconds } from '../../src/lib/room/participant-display.js'
 
 describe('participantPresence', () => {
   it('is online only while the socket is connected', () => {

@@ -20,7 +20,7 @@
  *                                          not restart after a reconnect).
  *   { type: 'server_copy_progress', state, percent }
  *                                        — this peer's server-copy upload status, sent by
- *                                          $lib/server-copy-upload.js's caller (see the
+ *                                          $lib/server-copy/server-copy-upload.js's caller (see the
  *                                          room page) on every threshold-crossing progress
  *                                          change and again on every reconnect (state is
  *                                          not remembered across a dropped connection, same

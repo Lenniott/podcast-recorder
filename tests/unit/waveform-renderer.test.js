@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createWaveformRenderer } from '../../src/lib/waveform-renderer.js'
+import { createWaveformRenderer } from '../../src/lib/recording/waveform-renderer.js'
 
 function createContext() {
   return {

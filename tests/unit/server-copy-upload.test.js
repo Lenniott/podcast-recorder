@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createCaptureWriter } from '../../src/lib/capture-writer.js'
-import { createServerCopyUpload } from '../../src/lib/server-copy-upload.js'
+import { createCaptureWriter } from '../../src/lib/recording/capture-writer.js'
+import { createServerCopyUpload } from '../../src/lib/server-copy/server-copy-upload.js'
 
 const SLUG = 'roomslug01'
 const CLIENT_ID = 'client123'

@@ -1,6 +1,6 @@
 /**
  * Thin wrapper around the browser's SpeechRecognition /
- * webkitSpeechRecognition API, mirroring $lib/audio-engine.js's convention
+ * webkitSpeechRecognition API, mirroring $lib/recording/audio-engine.js's convention
  * of wrapping a browser media API behind injectable dependencies so it's
  * unit-testable without a real browser API (see
  * tests/unit/audio-engine.test.js).

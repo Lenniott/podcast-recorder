@@ -3,7 +3,7 @@
  *
  * Accepts (or rejects) a server-copy upload session for one participant of
  * an active room. This is the "a server-copy session has been accepted"
- * gate the client module (`$lib/server-copy-upload.js`) must see succeed
+ * gate the client module (`$lib/server-copy/server-copy-upload.js`) must see succeed
  * before it ever sends chunk bytes — see ticket 04.
  *
  * There is deliberately no in-memory session object created here: the

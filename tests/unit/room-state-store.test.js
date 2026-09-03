@@ -265,7 +265,7 @@ describe('createRoomStateStore — setTabText', () => {
   })
 
   it('truncates text to MAX_TAB_TEXT_LEN', async () => {
-    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/tab-sync.js')
+    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/room/tab-sync.js')
     const store = createRoomStateStore({ durable: fakeDurable() })
     const tabId = store.getRoom('room1').tabs.list[0].id
     const huge = 'x'.repeat(MAX_TAB_TEXT_LEN + 500)
@@ -333,7 +333,7 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
 
   it('truncates an over-long speaker/text rather than rejecting it', async () => {
     const store = createRoomStateStore({ durable: fakeDurable() })
-    const { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN } = await import('../../src/lib/transcript-sync.js')
+    const { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN } = await import('../../src/lib/room/transcript-sync.js')
     const result = store.appendTranscriptLine('room1', {
       speaker: 'x'.repeat(MAX_TRANSCRIPT_SPEAKER_LEN + 20),
       text: 'y'.repeat(MAX_TRANSCRIPT_LINE_LEN + 500)
@@ -343,7 +343,7 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
   })
 
   it('refuses to close or hand-edit the reserved Transcript tab id — it is not a real tab to begin with', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     const store = createRoomStateStore({ durable: fakeDurable() })
     store.getRoom('room1') // hydrate
 
@@ -354,7 +354,7 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
   })
 
   it('switchTab accepts the reserved Transcript id as a valid destination — "who the room is looking at" is genuinely shared', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/transcript-sync.js')
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     const store = createRoomStateStore({ durable: fakeDurable() })
     const firstTabId = store.getRoom('room1').tabs.list[0].id
 

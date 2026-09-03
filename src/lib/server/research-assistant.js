@@ -3,7 +3,7 @@
  * turns a lookup into `{ answer, citations }`. Callers never see prompt text.
  */
 import { env } from '$env/dynamic/private'
-import { matchesMode, MODE_RULES, MODES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research-card.js'
+import { matchesMode, MODE_RULES, MODES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
 import { INTERPRETATION_MODE_PROMPT } from './interpretation-mode-prompt.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 

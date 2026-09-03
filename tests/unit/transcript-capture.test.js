@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createTranscriptCapture } from '../../src/lib/transcript-capture.js'
+import { createTranscriptCapture } from '../../src/lib/room/transcript-capture.js'
 
 /**
- * Fake $lib/speech-recognition.js instance — this module's only
+ * Fake $lib/research/speech-recognition.js instance — this module's only
  * collaborator — injected via `createRecognition` so these tests never
  * touch a real (or even fake) browser SpeechRecognition constructor. The
  * fake captures whatever onResult callback createTranscriptCapture wired

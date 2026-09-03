@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createClockSync } from '../../src/lib/clock-sync.js'
+import { createClockSync } from '../../src/lib/recording/clock-sync.js'
 
 describe('createClockSync', () => {
   afterEach(() => {

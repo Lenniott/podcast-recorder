@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { CHECK_SENTENCES, createRecordingCheck } from '../../src/lib/recording-check.js'
+import { CHECK_SENTENCES, createRecordingCheck } from '../../src/lib/recording/recording-check.js'
 
 describe('createRecordingCheck', () => {
   afterEach(() => {

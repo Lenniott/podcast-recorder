@@ -13,7 +13,7 @@ import {
 import { dirname, resolve, sep } from 'path'
 import { once } from 'events'
 import { pipeline } from 'stream/promises'
-import { buildWavHeader } from '../audio-utils.js'
+import { buildWavHeader } from '../recording/audio-utils.js'
 
 function serverCopyRoot() {
   return resolve(process.env.SERVER_COPY_DIR || './data/server-copies')

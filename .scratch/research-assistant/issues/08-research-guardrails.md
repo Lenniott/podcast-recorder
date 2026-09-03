@@ -64,7 +64,7 @@ Two buttons pressed on this same window: **Key facts** and **Fact-check**.
 4. **PROVEN_IN_TRANSCRIPT guard did not catch #1.** The Jack/White claim
    was about as resolved-in-transcript as a claim can be — restated,
    corrected, and explicitly acknowledged by the speaker one line before
-   the ask. `shouldSuppress` (`src/lib/research-card.js`) exists
+   the ask. `shouldSuppress` (`src/lib/research/research-card.js`) exists
    specifically to catch this via the model's own `PROVEN IN TRANSCRIPT`
    score, but the model didn't score it high enough for the threshold
    (80) to fire — or scored it accurately but selected the wrong claim in

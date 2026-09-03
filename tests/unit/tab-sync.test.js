@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../../src/lib/tab-sync.js'
+import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../../src/lib/room/tab-sync.js'
 
 describe('constants', () => {
   it('caps tab count and text length at sane, positive values', () => {

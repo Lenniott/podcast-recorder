@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createLevelMeter } from '../../src/lib/level-meter.js'
-import { METER_MIN } from '../../src/lib/meter.js'
+import { createLevelMeter } from '../../src/lib/recording/level-meter.js'
+import { METER_MIN } from '../../src/lib/recording/meter.js'
 
 describe('createLevelMeter', () => {
   afterEach(() => {

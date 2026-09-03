@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createWrittenAudioRing } from '../../src/lib/written-audio-ring.js'
+import { createWrittenAudioRing } from '../../src/lib/recording/written-audio-ring.js'
 
 describe('createWrittenAudioRing', () => {
   it('reads back zeros before anything has been pushed', () => {
