@@ -20,6 +20,7 @@ export { default as AnnotationX } from "./AnnotationX.svelte";
 export { default as Annotation } from "./Annotation.svelte";
 export { default as BellRinging04 } from "./BellRinging04.svelte";
 export { default as BookmarkAdd } from "./BookmarkAdd.svelte";
+export { default as BookClosed } from "./BookClosed.svelte";
 export { default as Check } from "./Check.svelte";
 export { default as ChevronDownDouble } from "./ChevronDownDouble.svelte";
 export { default as ChevronDown } from "./ChevronDown.svelte";

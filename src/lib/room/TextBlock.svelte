@@ -1,5 +1,5 @@
 <script>
-  import { Annotation, AnnotationPlus, ClipboardCheck } from "$lib/icons";
+  import { AnnotationPlus, BookClosed, ClipboardCheck } from "$lib/icons";
   import Tooltip from "$lib/Tooltip.svelte";
 
   /**
@@ -18,7 +18,7 @@
   } = $props();
 
   const TURN_ACTIONS = [
-    { id: "definition", label: "Definition", Icon: Annotation },
+    { id: "definition", label: "Definition", Icon: BookClosed },
     { id: "facts", label: "Facts", Icon: ClipboardCheck },
     { id: "answer", label: "Answer", Icon: AnnotationPlus },
   ];
