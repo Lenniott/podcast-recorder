@@ -7,6 +7,20 @@
   let loading = false;
   let promptSaving = false;
 
+  function formatCost(cost) {
+    return `$${Number(cost || 0).toFixed(4)}`;
+  }
+
+  function formatDuration(totalSeconds) {
+    const seconds = Math.max(0, Math.round(totalSeconds || 0));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`;
+  }
+
   // bind:value (not a one-way value={...} expression) so a component
   // re-render — e.g. from dev-server HMR after editing an unrelated file —
   // can't silently wipe out whatever the user already typed. Still
@@ -168,8 +182,65 @@
       Audio is recorded locally and uploaded for download afterwards.
     </p>
 
-    <div class="card form-card prompt-card">
-      <h2>Research Prompt</h2>
+    <!-- ── Usage Dashboard (see CONTEXT.md) ─────────────────────────── -->
+    <div class="card dashboard-card">
+      <h2>Usage Dashboard</h2>
+
+      <div class="totals-row">
+        <div class="total-tile">
+          <span class="total-value">{data.usageDashboard.totals.calls}</span>
+          <span class="total-label">Calls</span>
+        </div>
+        <div class="total-tile">
+          <span class="total-value"
+            >{data.usageDashboard.totals.tokens.toLocaleString()}</span
+          >
+          <span class="total-label">Tokens</span>
+        </div>
+        <div class="total-tile">
+          <span class="total-value"
+            >{formatCost(data.usageDashboard.totals.cost)}</span
+          >
+          <span class="total-label">Cost</span>
+        </div>
+      </div>
+
+      {#if data.usageDashboard.rooms.length}
+        <div class="dashboard-table-wrap">
+          <table class="dashboard-table">
+            <thead>
+              <tr>
+                <th>Room</th>
+                <th>Calls</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+                <th>Recording</th>
+                <th>Transcript</th>
+                <th>Tabs</th>
+                <th>Cards</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each data.usageDashboard.rooms as room (room.slug)}
+                <tr>
+                  <td>{room.name}</td>
+                  <td>{room.calls}</td>
+                  <td>{room.tokens.toLocaleString()}</td>
+                  <td>{formatCost(room.cost)}</td>
+                  <td>{formatDuration(room.recordingSeconds)}</td>
+                  <td>{room.transcriptWords.toLocaleString()} words</td>
+                  <td>{room.tabCount}</td>
+                  <td>{room.researchCardCount}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <p class="sub">No rooms yet.</p>
+      {/if}
+
+      <h3>Research Prompt</h3>
       <p class="sub">
         The instruction Custom/Interpret sends, written using {"{current_tab}"}
         and {"{transcript}"} for whatever live content it wants. Empty disables
@@ -312,8 +383,71 @@
     font-weight: 500;
   }
 
-  .prompt-card {
+  .dashboard-card {
+    width: 100%;
+    max-width: 720px;
     margin-top: 24px;
+  }
+
+  .dashboard-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 24px 0 6px;
+  }
+
+  .totals-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .total-tile {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 16px;
+    border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+    border-radius: var(--radius);
+  }
+
+  .total-value {
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .total-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .dashboard-table-wrap {
+    overflow-x: auto;
+    margin-bottom: 12px;
+  }
+
+  .dashboard-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .dashboard-table th,
+  .dashboard-table td {
+    text-align: left;
+    padding: 6px 10px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border, rgba(148, 163, 184, 0.15));
+  }
+
+  .dashboard-table th {
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
   }
 
   .research-prompt-input {

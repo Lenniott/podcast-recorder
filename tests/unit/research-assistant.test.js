@@ -2,9 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { askResearchAssistant, applyPlaceholders, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
 import { serializeResearchCard } from '../../src/lib/research/research-card.js'
 import { appendResearchEvalLog } from '../../src/lib/server/research-eval-log.js'
+import { recordResearchUsage } from '../../src/lib/server/db.js'
 
 vi.mock('../../src/lib/server/research-eval-log.js', () => ({
   appendResearchEvalLog: vi.fn()
+}))
+
+// Usage recording (see ADR-0007) is a db.js side effect research-assistant.js
+// triggers on every call — mocked here so these tests never touch a real
+// SQLite file, the same way the Eval Log is mocked above.
+vi.mock('../../src/lib/server/db.js', () => ({
+  recordResearchUsage: vi.fn()
 }))
 
 beforeEach(() => {

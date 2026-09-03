@@ -284,7 +284,13 @@ const rooms = new Map()
 // reconnect — keep running hot exactly as before. No handler below reaches
 // into a raw Map or DB row for this content directly. See
 // room-state-store.js for the full contract.
-const roomStateStore = createRoomStateStore({
+//
+// Exported (read-only in practice — every write goes through a WS message
+// handler below) so the Usage Dashboard (usage-dashboard.js) can read a
+// live room's tab/Transcript/research-entry counts the same way a
+// reconnecting participant would, without waiting for the grace-period
+// flush to `room_content`.
+export const roomStateStore = createRoomStateStore({
   durable: {
     save: (slug, content) => saveRoomContent(slug, content),
     load: (slug) => loadRoomContent(slug)

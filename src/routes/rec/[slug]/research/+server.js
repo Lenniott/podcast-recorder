@@ -89,7 +89,7 @@ export async function POST({ params, request, cookies, fetch }) {
   }
 
   try {
-    const { answer, citations } = await askResearchAssistant(validated, { fetchImpl: fetch })
+    const { answer, citations } = await askResearchAssistant(validated, { fetchImpl: fetch, roomSlug: slug })
     return json({ answer, citations })
   } catch (e) {
     return json({ error: mapErrorReason(e) }, { status: mapErrorStatus(e) })

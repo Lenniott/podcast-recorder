@@ -80,6 +80,21 @@ function getDb() {
     )
   `)
 
+  // Always-on usage log backing the Usage Dashboard — one row per
+  // askResearchAssistant call, every call, regardless of whether the debug
+  // Research Eval Log is enabled (see ADR-0007). Never read/written outside
+  // db.js's own accessors below.
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS research_usage (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_slug  TEXT NOT NULL,
+      mode       TEXT NOT NULL,
+      tokens     INTEGER,
+      cost       REAL,
+      created_at INTEGER NOT NULL
+    )
+  `)
+
   return _db
 }
 
@@ -106,6 +121,11 @@ export function getActiveRoomBySlug(slug, { now = Date.now(), cleanupExpired = t
   if (!isRoomExpired(room, now)) return room
   if (cleanupExpired) deleteRoom(slug)
   return null
+}
+
+/** Every non-expired room, newest first — Usage Dashboard's own room list. */
+export function listRooms() {
+  return getDb().prepare('SELECT * FROM rooms ORDER BY created_at DESC').all()
 }
 
 export function roomExists(slug) {
@@ -148,6 +168,39 @@ export function setResearchPrompt(value) {
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(RESEARCH_PROMPT_KEY, String(value ?? ''))
+}
+
+/** One row per askResearchAssistant call — see ADR-0007. Never throws into
+ *  the lookup path: a failed usage write shouldn't fail a lookup that
+ *  otherwise succeeded. */
+export function recordResearchUsage({ roomSlug, mode, tokens = null, cost = null }) {
+  try {
+    getDb().prepare(`
+      INSERT INTO research_usage (room_slug, mode, tokens, cost, created_at) VALUES (?, ?, ?, ?, ?)
+    `).run(roomSlug, mode, tokens, cost, Date.now())
+  } catch {
+    // logging must never fail a lookup — see research-eval-log.js's own doc comment
+  }
+}
+
+/** Usage Dashboard totals — every call, every room, all time. */
+export function getResearchUsageTotals() {
+  return getDb().prepare(`
+    SELECT COUNT(*) AS calls, COALESCE(SUM(tokens), 0) AS tokens, COALESCE(SUM(cost), 0) AS cost
+    FROM research_usage
+  `).get()
+}
+
+/** Usage Dashboard per-room breakdown — one row per room that has ever had
+ *  a call, including rooms since deleted (room_slug is not a foreign key,
+ *  deliberately — usage history outlives the room it was run in). */
+export function getResearchUsageByRoom() {
+  return getDb().prepare(`
+    SELECT room_slug AS slug, COUNT(*) AS calls, COALESCE(SUM(tokens), 0) AS tokens, COALESCE(SUM(cost), 0) AS cost
+    FROM research_usage
+    GROUP BY room_slug
+    ORDER BY MAX(created_at) DESC
+  `).all()
 }
 
 export function cleanupExpiredRooms({ now = Date.now() } = {}) {

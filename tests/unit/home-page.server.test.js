@@ -66,7 +66,8 @@ describe('+page.server', () => {
         siteProtected: false,
         notFound: false,
         expired: false,
-        researchPrompt: ''
+        researchPrompt: '',
+        usageDashboard: { totals: { calls: 0, tokens: 0, cost: 0 }, rooms: [] }
       })
     })
 

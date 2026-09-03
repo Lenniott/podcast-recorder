@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { createRoom, getRoomBySlug, getResearchPrompt, setResearchPrompt } from '$lib/server/db.js'
+import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
@@ -37,7 +38,12 @@ export async function load({ cookies, url }) {
     siteProtected: !!env.SITE_PASSWORD,
     notFound: url.searchParams.has('notfound'),
     expired: url.searchParams.has('expired'),
-    researchPrompt: siteAuthed ? getResearchPrompt() : ''
+    // Usage Dashboard (see CONTEXT.md) — same page, gated by the same
+    // siteAuthed check as the create form, not a separate admin secret.
+    // Only computed once past that gate: it's a handful of DB/filesystem
+    // reads per room and has no reason to run for an unauthenticated hit.
+    researchPrompt: siteAuthed ? getResearchPrompt() : '',
+    usageDashboard: siteAuthed ? getUsageDashboard(env) : null
   }
 }
 

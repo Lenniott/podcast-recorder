@@ -5,6 +5,7 @@
 import { env } from '$env/dynamic/private'
 import { matchesMode, MODE_RULES, MODES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
+import { recordResearchUsage } from './db.js'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const DEFAULT_MODEL = 'openai/gpt-4o-mini'
@@ -165,6 +166,10 @@ function buildRequestBody(request, pressTime) {
       model: env.OPENROUTER_MODEL || DEFAULT_MODEL,
       messages,
       plugins: [{ id: 'web' }],
+      // Asks OpenRouter to report actual cost on `usage.cost` — see
+      // ADR-0007 — so the Usage Dashboard doesn't need to price each model
+      // itself from a maintained table.
+      usage: { include: true },
       ...(mode === 'custom' ? {} : { response_format: researchCardSchema(mode) })
     }
   }
@@ -181,7 +186,7 @@ function suppressReason(card, mode) {
   return null
 }
 
-export async function askResearchAssistant(request, { fetchImpl = fetch, pressTime = new Date() } = {}) {
+export async function askResearchAssistant(request, { fetchImpl = fetch, pressTime = new Date(), roomSlug = null } = {}) {
   const apiKey = env.OPENROUTER_API_KEY
   if (!apiKey) {
     throw new ResearchAssistantError('NOT_CONFIGURED', 'OPENROUTER_API_KEY is not configured')
@@ -234,6 +239,13 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
   const citations = (message.annotations ?? [])
     .filter((a) => a.type === 'url_citation')
     .map((a) => ({ url: a.url_citation.url, title: a.url_citation.title }))
+
+  recordResearchUsage({
+    roomSlug,
+    mode,
+    tokens: usageMeta.usage?.total_tokens ?? null,
+    cost: usageMeta.usage?.cost ?? null
+  })
 
   if (mode === 'custom') {
     const card = {

@@ -104,8 +104,8 @@ elsewhere in this codebase), token, variable
 The one instruction text the **Custom** action sends as its whole request,
 written using **Placeholders** for whatever live content it wants. Global
 to the deployment, not per-room, and not written by a room's Host — it's
-set on the create-room page by whoever holds the site password, before any
-room exists, then simply available for
+set on the create-room page by whoever holds the site password (see
+**Usage Dashboard**), before any room exists, then simply available for
 Custom to use inside every room afterward. Custom is disabled (button off)
 whenever the Research Prompt is empty.
 _Avoid_: Custom prompt, Interpretation Mode, custom instruction, host-set
@@ -129,6 +129,14 @@ use every Research Assistant action — Ask, Turn Actions, and Custom alike
 Set once, at room creation, on the create-room form — not editable
 afterward from inside the room.
 _Avoid_: RESEARCH_GUEST_CAN_ASK (the retired deployment-wide env var this replaced)
+
+**Usage Dashboard**:
+The section of the create-room page (visible once past the site password,
+same as the create form) showing Research Assistant cost/usage across every
+room — running totals plus a per-room breakdown — and the Research Prompt
+editor. Not a separate page or route.
+_Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
+usage page
 
 **Research Eval Log**:
 An append-only, gitignored record of live Research Assistant calls
