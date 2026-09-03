@@ -122,6 +122,33 @@ export function buildTurnActionRequest(transcriptLines, focusTurnId, actionId) {
   return { kind: 'turnAction', actionId, focus: focusText, grounding }
 }
 
+/** Collapses a card's citations to one per source site, shown as its bare
+ *  host (e.g. "en.wikipedia.org") rather than the page title — a research
+ *  card can cite the same domain twice (two different Wikipedia pages, a
+ *  search result and its AMP mirror) and the skim list only needs to know
+ *  which *sites* backed the claim, not every individual URL. First
+ *  occurrence wins so citation order (most-relevant-first, from the
+ *  web-search plugin) still decides which link a repeated host points at. */
+export function dedupeCitationsByHost(citations) {
+  const seen = new Set()
+  const result = []
+  for (const citation of citations || []) {
+    const host = hostOf(citation?.url)
+    if (!host || seen.has(host)) continue
+    seen.add(host)
+    result.push({ url: citation.url, host })
+  }
+  return result
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+}
+
 /** Which Turn Action icons should stay disabled because they've already
  *  been run — room-shared (derived from `entriesByTab`, the same
  *  research_entry state every peer replays on join) rather than a local

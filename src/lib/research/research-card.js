@@ -1,8 +1,10 @@
 /**
  * Research Card — the field-based shape the model returns (see
  * `.scratch/research-assistant/findings.md`'s system prompt: PROVEN IN
- * TRANSCRIPT, UBIQUITOUS KNOWLEDGE, OUTPUT TYPE, CONTEXT SUMMARY, MAIN
- * TAKEAWAY). There is deliberately no SOURCES field on the card — the
+ * TRANSCRIPT, UBIQUITOUS KNOWLEDGE, OUTPUT TYPE, MAIN TAKEAWAY — CONTEXT
+ * SUMMARY was dropped as a redundant field that just restated part of MAIN
+ * TAKEAWAY for an extra output-token cost every call). There is
+ * deliberately no SOURCES field on the card — the
  * model's own self-reported sources duplicated (and often contradicted)
  * `citations`, the ground-truth list of pages OpenRouter's web-search
  * plugin actually fetched (see research-assistant.js's `citations`,
@@ -51,14 +53,12 @@ export const MODE_RULES = {
 export const MODES = Object.keys(MODE_RULES)
 export const TURN_ACTION_IDS = ['definition', 'facts', 'answer']
 
-const MAX_SUMMARY_WORDS = 12
 const MAX_TAKEAWAY_WORDS = 35
 
 const FIELD_LABELS = [
   ['provenInTranscript', 'PROVEN IN TRANSCRIPT'],
   ['ubiquitousKnowledge', 'UBIQUITOUS KNOWLEDGE'],
   ['outputType', 'OUTPUT TYPE'],
-  ['contextSummary', 'CONTEXT SUMMARY'],
   ['mainTakeaway', 'MAIN TAKEAWAY']
 ]
 
@@ -135,7 +135,7 @@ export function parseResearchCard(raw) {
   if (parsedJson) return normalizeEmptyCard(sanitizeResearchCard(parsedJson))
 
   const fields = splitFields(text)
-  if (!fields.mainTakeaway && !fields.contextSummary) {
+  if (!fields.mainTakeaway) {
     return sanitizeResearchCard({ mainTakeaway: text })
   }
   return sanitizeResearchCard(fields)
@@ -143,10 +143,10 @@ export function parseResearchCard(raw) {
 
 // A forced-JSON reply can't literally be empty the way old plain-text
 // "output nothing" could — the schema always returns a full object. The
-// model signals "nothing survives the mode rule" by leaving contextSummary
-// and mainTakeaway both blank; treat that the same as no card at all.
+// model signals "nothing survives the mode rule" by leaving mainTakeaway
+// blank; treat that the same as no card at all.
 function normalizeEmptyCard(card) {
-  if (!card.mainTakeaway && !card.contextSummary) return null
+  if (!card.mainTakeaway) return null
   return card
 }
 
@@ -168,7 +168,6 @@ export function sanitizeResearchCard(raw) {
     provenInTranscript: toScore(raw?.provenInTranscript),
     ubiquitousKnowledge: toScore(raw?.ubiquitousKnowledge),
     outputType: MODES.includes(raw?.outputType) ? raw.outputType : null,
-    contextSummary: clipWords(stripInlineCitations(raw?.contextSummary), MAX_SUMMARY_WORDS),
     mainTakeaway:
       raw?.outputType === 'custom'
         ? stripInlineCitations(raw?.mainTakeaway)

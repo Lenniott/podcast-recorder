@@ -33,13 +33,12 @@ Reply with the structured fields the response schema asks for:
 provenInTranscript: 0-100. How directly this has already been confirmed, corrected, or settled in Grounding. 0 = never touched on, 100 = already fully resolved on the record.
 ubiquitousKnowledge: 0-100. How well a reasonably informed adult would already know this. 0 = genuinely obscure, 100 = common knowledge.
 outputType: always "${mode}" — the mode you were given above.
-contextSummary: max 12 words. The specific claim selected, not the whole sentence.
 mainTakeaway: max 35 words. One paragraph. Stated as fact. No hedging.
 
 Hard rules:
 - No preamble, no restating the question, no closing remarks.
 - Never cite a source inline — no URLs, no markdown links, no "according to X". Sources you used are reported separately and automatically; naming or linking one yourself is redundant and against the word limit.
-- If nothing survives the mode rule, leave contextSummary and mainTakeaway both empty strings and the scores 0 — that combination means "nothing to report".`
+- If nothing survives the mode rule, leave mainTakeaway an empty string and the scores 0 — that combination means "nothing to report".`
 }
 
 function buildMessages(request, pressTime = new Date()) {
@@ -137,10 +136,9 @@ function researchCardSchema(mode) {
           provenInTranscript: { type: 'integer', minimum: 0, maximum: 100 },
           ubiquitousKnowledge: { type: 'integer', minimum: 0, maximum: 100 },
           outputType: { type: 'string', enum: [mode] },
-          contextSummary: { type: 'string' },
           mainTakeaway: { type: 'string' }
         },
-        required: ['provenInTranscript', 'ubiquitousKnowledge', 'outputType', 'contextSummary', 'mainTakeaway'],
+        required: ['provenInTranscript', 'ubiquitousKnowledge', 'outputType', 'mainTakeaway'],
         additionalProperties: false
       }
     }
@@ -231,7 +229,6 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
       outputType: 'custom',
-      contextSummary: 'Interpretation',
       mainTakeaway: raw
     }
     await appendResearchEvalLog({

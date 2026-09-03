@@ -40,7 +40,6 @@ function fieldAnswer(mode, overrides = {}) {
     provenInTranscript: 0,
     ubiquitousKnowledge: 0,
     outputType: mode,
-    contextSummary: 'the claim in question',
     mainTakeaway: 'The actual answer, stated as fact.',
     ...overrides
   }
@@ -48,7 +47,6 @@ function fieldAnswer(mode, overrides = {}) {
     `PROVEN IN TRANSCRIPT: ${fields.provenInTranscript}`,
     `UBIQUITOUS KNOWLEDGE: ${fields.ubiquitousKnowledge}`,
     `OUTPUT TYPE: ${fields.outputType}`,
-    `CONTEXT SUMMARY: ${fields.contextSummary}`,
     `MAIN TAKEAWAY: ${fields.mainTakeaway}`
   ]
     .filter((line) => line != null)
@@ -261,7 +259,6 @@ describe('askResearchAssistant — response shaping', () => {
       okResponse(
         successBody({
           answer: fieldAnswer('ask', {
-            contextSummary: 'when the Monroe Doctrine was issued',
             mainTakeaway: 'The Monroe Doctrine was a US policy stance from 1823.'
           }),
           citations: [

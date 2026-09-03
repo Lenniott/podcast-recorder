@@ -14,7 +14,8 @@ import {
   isSkimVisibleEntry,
   describeResearchError,
   makeResearchEntryId,
-  deriveDoneActionsByTurn
+  deriveDoneActionsByTurn,
+  dedupeCitationsByHost
 } from '../../src/lib/research/research-panel.js'
 import { TRANSCRIPT_TAB_ID } from '../../src/lib/room/transcript-sync.js'
 
@@ -235,6 +236,36 @@ describe('describeResearchError', () => {
   })
 })
 
+describe('dedupeCitationsByHost', () => {
+  it('collapses citations to one per bare host, dropping the www. prefix', () => {
+    const result = dedupeCitationsByHost([
+      { url: 'https://en.wikipedia.org/wiki/The_White_Stripes', title: 'The White Stripes — Wikipedia' },
+      { url: 'https://www.rollingstone.com/music/x', title: 'Rolling Stone' }
+    ])
+    expect(result).toEqual([
+      { url: 'https://en.wikipedia.org/wiki/The_White_Stripes', host: 'en.wikipedia.org' },
+      { url: 'https://www.rollingstone.com/music/x', host: 'rollingstone.com' }
+    ])
+  })
+
+  it('keeps only the first citation for a repeated host', () => {
+    const result = dedupeCitationsByHost([
+      { url: 'https://en.wikipedia.org/wiki/Jack_White', title: 'Jack White' },
+      { url: 'https://en.wikipedia.org/wiki/Meg_White', title: 'Meg White' }
+    ])
+    expect(result).toEqual([{ url: 'https://en.wikipedia.org/wiki/Jack_White', host: 'en.wikipedia.org' }])
+  })
+
+  it('skips a citation with an unparseable/missing url rather than throwing', () => {
+    expect(dedupeCitationsByHost([{ url: 'not-a-url' }, { url: null }])).toEqual([])
+  })
+
+  it('handles a missing/empty citations list', () => {
+    expect(dedupeCitationsByHost(undefined)).toEqual([])
+    expect(dedupeCitationsByHost([])).toEqual([])
+  })
+})
+
 describe('deriveDoneActionsByTurn', () => {
   it('groups turn-action entries by turnId, ignoring manual/custom asks with no turnId', () => {
     const entriesByTab = {
@@ -255,4 +286,3 @@ describe('deriveDoneActionsByTurn', () => {
     expect(deriveDoneActionsByTurn({})).toEqual({})
   })
 })
-

@@ -1,12 +1,20 @@
 <script>
   import { tick } from "svelte";
-  import { ChevronLeft, ChevronRight, FileSearch02, XClose } from "$lib/icons";
+  import {
+    ChevronLeft,
+    ChevronRight,
+    ChevronUp,
+    ChevronDown,
+    FileSearch02,
+    XClose,
+  } from "$lib/icons";
   import {
     applyResearchEntry as reduceResearchEntry,
     applyResearchState as reduceResearchState,
     applyResearchRemove as reduceResearchRemove,
     visibleEntries,
     deriveDoneActionsByTurn,
+    dedupeCitationsByHost,
     buildManualAskRequest,
     buildTurnActionRequest,
     buildCustomRequest,
@@ -83,6 +91,20 @@
 
   let questionInput = "";
   let entriesEl;
+
+  // entry.id -> boolean. One `showCitations` shared across every research
+  // card would toggle citations on ALL of them at once when clicked on any
+  // one card — keyed per-entry so each card's disclosure is independent.
+  let expandedCitations = {};
+
+  function toggleCitations(entryId) {
+    // Reassign (not mutate) so Svelte 4's `$:`/markup reactivity notices —
+    // `expandedCitations[entryId] = ...` in place wouldn't trigger a rerender.
+    expandedCitations = {
+      ...expandedCitations,
+      [entryId]: !expandedCitations[entryId],
+    };
+  }
 
   function revealPanel() {
     collapsed = false;
@@ -169,7 +191,11 @@
     revealPanel();
     const posted = await postResearch(request);
     if (!posted.ok) {
-      send({ type: "research_error", entryId, message: describeResearchError(posted.body) });
+      send({
+        type: "research_error",
+        entryId,
+        message: describeResearchError(posted.body),
+      });
       return;
     }
     send({
@@ -204,7 +230,11 @@
   async function publishResearchResult(entryId, requestBody) {
     const { ok, body } = await postResearch(requestBody);
     if (!ok) {
-      send({ type: "research_error", entryId, message: describeResearchError(body) });
+      send({
+        type: "research_error",
+        entryId,
+        message: describeResearchError(body),
+      });
       return;
     }
     send({
@@ -216,7 +246,7 @@
   }
 </script>
 
-<aside class="research-panel" class:collapsed data-testid="research-panel">
+<aside class="research-panel" class:collapsed={collapsed} class:research-panel-collapsed={collapsed} data-testid="research-panel">
   <div class="research-panel-header">
     {#if !collapsed}
       <span class="research-panel-title">
@@ -226,13 +256,17 @@
     {/if}
     <button
       type="button"
-      class="btn-ghost btn-icon btn-sm collapse-toggle"
+      class="btn-ghost btn-icon collapse-toggle"
       on:click={() => (collapsed = !collapsed)}
-      aria-label={collapsed ? "Expand Research Assistant" : "Collapse Research Assistant"}
-      title={collapsed ? "Expand Research Assistant" : "Collapse Research Assistant"}
+      aria-label={collapsed
+        ? "Expand Research Assistant"
+        : "Collapse Research Assistant"}
+      title={collapsed
+        ? "Expand Research Assistant"
+        : "Collapse Research Assistant"}
     >
       {#if collapsed}
-        <ChevronLeft />
+        <FileSearch02 />
       {:else}
         <ChevronRight />
       {/if}
@@ -249,7 +283,11 @@
           placeholder="Ask a question…"
           bind:value={questionInput}
         />
-        <button type="submit" class="btn-secondary btn-sm" disabled={!questionInput.trim()}>
+        <button
+          type="submit"
+          class="btn-secondary btn-sm"
+          disabled={!questionInput.trim()}
+        >
           Ask
         </button>
       </form>
@@ -289,29 +327,51 @@
               {/if}
             </div>
             {#if entry.status === "pending"}
-              <p class="research-pending" aria-live="polite">Looking this up…</p>
+              <p class="research-pending" aria-live="polite">
+                Looking this up…
+              </p>
             {:else if entry.status === "answered"}
               {@const card = parseResearchCard(entry.answer)}
               {#if card}
                 {#if card.outputType === "custom"}
                   <div class="research-interpretation">{card.mainTakeaway}</div>
                 {:else}
-                <div class="research-card">
-                  <p class="research-context-summary">{card.contextSummary}</p>
-                  <p class="research-answer">{card.mainTakeaway}</p>
-                </div>
+                  <div class="research-card">
+                    <p class="research-answer">{card.mainTakeaway}</p>
+                  </div>
                 {/if}
               {/if}
               {#if entry.citations?.length}
-                <ul class="research-citations">
-                  {#each entry.citations as citation (citation.url)}
-                    <li>
-                      <a href={citation.url} target="_blank" rel="noopener noreferrer">
-                        {citation.title || citation.url}
-                      </a>
-                    </li>
-                  {/each}
-                </ul>
+                <div class="research-citations-container">
+                  <button
+                    class="research-citations-toggle"
+                    aria-label="Show citations"
+                    title="Show citations"
+                    on:click={() => toggleCitations(entry.id)}
+                  >
+                    <span class="research-citations-title">Citations</span>
+                    {#if expandedCitations[entry.id]}
+                      <ChevronUp />
+                    {:else}
+                      <ChevronDown />
+                    {/if}
+                  </button>
+                  {#if expandedCitations[entry.id]}
+                    <ul class="research-citations">
+                      {#each dedupeCitationsByHost(entry.citations) as citation (citation.host)}
+                        <li>
+                          <a
+                            href={citation.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {citation.host}
+                          </a>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
               {/if}
             {:else if entry.status === "errored"}
               <p class="research-error-text">{entry.error}</p>
@@ -327,33 +387,41 @@
   .research-panel {
     display: flex;
     flex-direction: column;
+    justify-content: start;
+    align-items: start;
     gap: 12px;
     min-height: 0;
     height: 100%;
     overflow-y: auto;
-    padding: 16px;
+    padding: 20px 16px;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
   }
 
-  .research-panel-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
+  .research-panel-collapsed {
+    border: none;
+    background: none;
+    padding: 20px 0;
+    margin: 0;
   }
 
-  .research-panel.collapsed .research-panel-header {
-    justify-content: center;
+  .research-panel-header {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: start;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   .research-panel-title {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 400;
     margin-right: auto;
+    width: 100%;
   }
 
   .research-panel-title-icon {
@@ -401,20 +469,22 @@
     background: var(--bg);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 16px;
   }
 
   .research-entry-header {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: space-between;
     gap: 6px;
   }
 
   .research-question {
     margin: 0;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 12px;
     margin-right: auto;
+    color: var(--muted);
   }
 
   .research-remove {
@@ -424,8 +494,8 @@
 
   .research-answer {
     margin: 0;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 400;
     line-height: 1.35;
     display: flex;
     flex-wrap: wrap;
@@ -433,18 +503,9 @@
     gap: 8px;
   }
 
-  .research-context-summary {
-    margin: 0;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
   .research-interpretation {
     margin: 0;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.45;
     white-space: pre-wrap;
   }
@@ -501,18 +562,51 @@
     color: var(--danger, #d33);
   }
 
+  .research-citations-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
   .research-citations {
     margin: 0;
     padding: 0;
     list-style: none;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px 10px;
+    flex-direction: column;
+    gap: 4px;
     font-size: 11px;
     color: var(--muted);
+    padding: 4px 6px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
   }
 
   .research-citations a {
-    color: var(--accent);
+    color: var(--text);
+  }
+
+  .research-citations-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--muted);
+    cursor: pointer;
+    width: 100%;
+    border: none;
+    background: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    cursor: pointer;
+    padding: 4px 6px;
+  }
+
+  .research-citations-toggle:hover {
+    background: var(--bg-elevated);
+    border-radius: 2px;
   }
 </style>

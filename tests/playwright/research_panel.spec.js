@@ -49,7 +49,11 @@ test('manual ask: goes pending then answered with citations, shared with the oth
   await expect(host.locator('.research-entry[data-status="pending"]')).toBeVisible()
   await expect(host.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
   await expect(host.locator('.research-answer')).toHaveText('A haiku is a three-line Japanese poem.')
-  await expect(host.locator('.research-citations a')).toHaveText('Haiku basics')
+  // Citations are collapsed behind a disclosure toggle by default.
+  await host.locator('.research-citations-toggle').click()
+  // Rendered as the deduped hostname, not the citation's title — see
+  // dedupeCitationsByHost in research-panel.js.
+  await expect(host.locator('.research-citations a')).toHaveText('example.com')
   await expect(host.locator('.research-citations a')).toHaveAttribute('href', 'https://example.com/haiku')
 
   // The same answer appears in the other peer's panel — neither browser
@@ -57,7 +61,8 @@ test('manual ask: goes pending then answered with citations, shared with the oth
   await expect(guest.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 15_000 })
   await expect(guest.locator('.research-question')).toHaveText('What is a haiku?')
   await expect(guest.locator('.research-answer')).toHaveText('A haiku is a three-line Japanese poem.')
-  await expect(guest.locator('.research-citations a')).toHaveText('Haiku basics')
+  await guest.locator('.research-citations-toggle').click()
+  await expect(guest.locator('.research-citations a')).toHaveText('example.com')
 
   await guest.close()
   await host.close()
@@ -137,14 +142,19 @@ test("the panel's own collapsed/expanded state is local, not synced between peer
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
+  // The ask input is host-only by default (RESEARCH_GUEST_CAN_ASK opt-in
+  // gates it for guests — see ResearchPanel.svelte's canAskResearch), so
+  // expanded/collapsed is asserted here via the panel title instead, which
+  // both host and guest always see when expanded.
+  const panelTitle = (page) => page.locator('.research-panel-title')
   await expect(askInput(host)).toBeVisible()
-  await expect(askInput(guest)).toBeVisible()
+  await expect(panelTitle(guest)).toBeVisible()
 
   await host.getByRole('button', { name: 'Collapse Research Assistant' }).click()
   await expect(askInput(host)).toBeHidden()
 
   // The guest's own panel is untouched by the host's local UI preference.
-  await expect(askInput(guest)).toBeVisible()
+  await expect(panelTitle(guest)).toBeVisible()
   await expect(guest.getByRole('button', { name: 'Collapse Research Assistant' })).toBeVisible()
 
   await guest.close()

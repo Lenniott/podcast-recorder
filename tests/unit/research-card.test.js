@@ -14,7 +14,6 @@ function fieldText(fields) {
     fields.provenInTranscript != null ? `PROVEN IN TRANSCRIPT: ${fields.provenInTranscript}` : null,
     fields.ubiquitousKnowledge != null ? `UBIQUITOUS KNOWLEDGE: ${fields.ubiquitousKnowledge}` : null,
     fields.outputType != null ? `OUTPUT TYPE: ${fields.outputType}` : null,
-    fields.contextSummary != null ? `CONTEXT SUMMARY: ${fields.contextSummary}` : null,
     fields.mainTakeaway != null ? `MAIN TAKEAWAY: ${fields.mainTakeaway}` : null
   ]
     .filter((line) => line != null)
@@ -28,7 +27,6 @@ describe('parseResearchCard', () => {
         provenInTranscript: 10,
         ubiquitousKnowledge: 20,
         outputType: 'ask',
-        contextSummary: 'when the wall came down',
         mainTakeaway: 'The Berlin Wall fell in 1989.'
       })
     )
@@ -36,20 +34,17 @@ describe('parseResearchCard', () => {
       provenInTranscript: 10,
       ubiquitousKnowledge: 20,
       outputType: 'ask',
-      contextSummary: 'when the wall came down',
       mainTakeaway: 'The Berlin Wall fell in 1989.'
     })
   })
 
-  it('clips context summary and main takeaway to their word caps', () => {
+  it('clips main takeaway to its word cap', () => {
     const card = parseResearchCard(
       fieldText({
         outputType: 'ask',
-        contextSummary: Array.from({ length: 20 }, (_, i) => `w${i}`).join(' '),
         mainTakeaway: Array.from({ length: 50 }, (_, i) => `w${i}`).join(' ')
       })
     )
-    expect(card.contextSummary.split(/\s+/)).toHaveLength(12)
     expect(card.mainTakeaway.split(/\s+/)).toHaveLength(35)
   })
 
@@ -65,12 +60,12 @@ describe('parseResearchCard', () => {
   })
 
   it('an unknown OUTPUT TYPE value parses as null, never a placeholder echo', () => {
-    const card = parseResearchCard(fieldText({ outputType: '{mode}', contextSummary: 'x', mainTakeaway: 'y' }))
+    const card = parseResearchCard(fieldText({ outputType: '{mode}', mainTakeaway: 'y' }))
     expect(card.outputType).toBeNull()
   })
 
-  it('treats a JSON reply with blank contextSummary and mainTakeaway as no card — the forced-JSON "nothing to report" signal', () => {
-    const card = parseResearchCard(JSON.stringify({ outputType: 'definition', contextSummary: '', mainTakeaway: '' }))
+  it('treats a JSON reply with a blank mainTakeaway as no card — the forced-JSON "nothing to report" signal', () => {
+    const card = parseResearchCard(JSON.stringify({ outputType: 'definition', mainTakeaway: '' }))
     expect(card).toBeNull()
   })
 
@@ -78,7 +73,6 @@ describe('parseResearchCard', () => {
     const card = parseResearchCard(
       JSON.stringify({
         outputType: 'definition',
-        contextSummary: 'x',
         mainTakeaway: 'Dulcet means pleasant-sounding [collinsdictionary.com](https://www.collinsdictionary.com/dulcet).'
       })
     )
@@ -89,7 +83,6 @@ describe('parseResearchCard', () => {
     const card = parseResearchCard(
       JSON.stringify({
         outputType: 'definition',
-        contextSummary: 'x',
         mainTakeaway: 'Source: https://www.collinsdictionary.com/dulcet says so.'
       })
     )
@@ -98,7 +91,7 @@ describe('parseResearchCard', () => {
 
   it('a takeaway that is only a citation strips down to empty and the card becomes no card', () => {
     const card = parseResearchCard(
-      JSON.stringify({ outputType: 'definition', contextSummary: '', mainTakeaway: '[collinsdictionary.com](https://www.collinsdictionary.com/dulcet)' })
+      JSON.stringify({ outputType: 'definition', mainTakeaway: '[collinsdictionary.com](https://www.collinsdictionary.com/dulcet)' })
     )
     expect(card).toBeNull()
   })
@@ -110,7 +103,6 @@ describe('serializeResearchCard', () => {
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
       outputType: 'facts',
-      contextSummary: 'a claim',
       mainTakeaway: 'The claim is false.'
     }
     expect(JSON.parse(serializeResearchCard(card))).toEqual(card)
@@ -135,7 +127,6 @@ describe('parseResearchCard(serializeResearchCard(...)) — the actual server-to
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
       outputType: 'facts',
-      contextSummary: 'Jack White married Meg White; they presented as siblings.',
       mainTakeaway: 'Jack White and Meg White were married, not siblings, and kept it private for years.'
     }
     const wire = serializeResearchCard(card)
