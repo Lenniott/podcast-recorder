@@ -182,8 +182,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 400;
   }
   .room-sidebar-header-icon {
     display: inline-flex;

@@ -208,6 +208,7 @@ label {
   border-radius: 50%;
   font-size: 14px;
   line-height: 1;
+  flex-shrink: 0;
 }
 .btn-icon.btn-sm { width: 24px; height: 24px; }
 
