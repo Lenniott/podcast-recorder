@@ -12,16 +12,15 @@
  * copying or re-deriving another component's local variable, the same
  * discipline RoomTabs.svelte's `viewingTranscript` now follows.
  */
+import { parseResearchCard, TURN_ACTION_IDS } from './research-card.js'
 import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
 import { MAX_TAB_TEXT_LEN } from './tab-sync.js'
 import { TRANSCRIPT_TAB_ID } from './transcript-sync.js'
 
-export { makeResearchEntryId }
+export { makeResearchEntryId, TURN_ACTION_IDS }
 
-// The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
-// entry) — must match research-card.js's own MODES keys exactly, since
-// actionId is forwarded verbatim as MODE to the shared system prompt.
-const QUICK_ACTION_IDS = new Set(['define', 'keyFacts', 'factCheck', 'findExamples', 'analyze'])
+const TURN_ACTION_ID_SET = new Set(TURN_ACTION_IDS)
+const RESEARCH_TRANSCRIPT_BUDGET = MAX_TAB_TEXT_LEN
 
 /** Applies a `research_entry` (create/update) broadcast into entriesByTab. */
 export function applyResearchEntry(entriesByTab, msg) {
@@ -33,10 +32,36 @@ export function applyResearchState(entriesByTab, msg) {
   return { ...entriesByTab, [msg.tabId]: msg.entries }
 }
 
+/** Applies a `research_removed` broadcast — drops one entry from its tab's
+ *  list outright (unlike applyResearchEntry, which always upserts). */
+export function applyResearchRemove(entriesByTab, msg) {
+  const list = entriesByTab[msg.tabId]
+  if (!list) return entriesByTab
+  return { ...entriesByTab, [msg.tabId]: list.filter((e) => e.id !== msg.entryId) }
+}
+
 /** Entries to show for whichever tab is currently active — never another
- *  tab's (see ADR-0002: "filed strictly per-tab"). */
+ *  tab's (see ADR-0002: "filed strictly per-tab"). Newest first so the
+ *  lookup you just ran is at the top of the skim list. */
 export function visibleEntries(entriesByTab, activeTabId) {
-  return entriesByTab[activeTabId] || []
+  return newestFirst((entriesByTab[activeTabId] || []).filter(isSkimVisibleEntry))
+}
+
+export function newestFirst(entries) {
+  return (entries || [])
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => (b.entry.at || 0) - (a.entry.at || 0) || a.index - b.index)
+    .map(({ entry }) => entry)
+}
+
+/** A Research Card the panel may show while people are talking — pending
+ *  Ask/Custom, errors, or an answered entry with a real parsed card.
+ *  Empty/"nothing to add" answers stay in the eval log, not the skim list. */
+export function isSkimVisibleEntry(entry) {
+  if (!entry) return false
+  if (entry.status === 'pending' || entry.status === 'errored') return true
+  if (entry.status === 'answered') return !!parseResearchCard(entry.answer)
+  return false
 }
 
 /**
@@ -69,23 +94,6 @@ export function applyTranscriptLine(transcriptLines, msg) {
   return [...transcriptLines, { id: msg.id, speaker: msg.speaker, text: msg.text, at: msg.at }]
 }
 
-/** The Transcript's lines-so-far as one block of text, "Speaker: text" per
- *  line — the same shape TranscriptTab.svelte renders each line as. */
-function transcriptLinesToText(lines) {
-  return joinTranscriptLines(lines)
-}
-
-// Manual, button-triggered validation step for what was going to be Research
-// Mode's fully autonomous Gate/Deep Check pipeline (deferred — see
-// docs/adr/0004-research-mode-replaces-voice-trigger.md and ticket 06's
-// current status) — same idea (hand a recent window of conversation to the
-// Research Assistant and let it find something worth surfacing), but a
-// person decides when to press the button instead of a timer deciding for
-// them. Once this is validated as actually useful, the passive version can
-// reuse the exact same window/request shape.
-const RECENT_TRANSCRIPT_WINDOW_MS = 10 * 60 * 1000 // 10 minutes
-const RESEARCH_TRANSCRIPT_BUDGET = MAX_TAB_TEXT_LEN // same 20_000 as the research route's per-field cap
-
 function formatTranscriptLine(line) {
   return `${line.speaker}: ${line.text}`
 }
@@ -94,102 +102,48 @@ function joinTranscriptLines(lines) {
   return (lines || []).map(formatTranscriptLine).join('\n')
 }
 
-/** Keep the end of `text` (closest to Focus) when a single field is over budget. */
-function newestEnd(text, budget) {
-  if (text.length <= budget) return text
-  return text.slice(-budget)
+/** Two Turns before the Focus Turn, plus one after if it already exists. */
+export function groundingLinesForFocus(transcriptLines, focusTurnId) {
+  const lines = transcriptLines || []
+  const index = lines.findIndex((line) => line.id === focusTurnId)
+  if (index < 0) return []
+  const before = lines.slice(Math.max(0, index - 2), index)
+  const after = lines.slice(index + 1, index + 2)
+  return [...before, ...after]
 }
 
-/** Drop oldest whole lines until `lines` fit in `budget`; if one line still overflows, keep its suffix. */
-function trimOldestToFit(lines, budget) {
-  if (budget <= 0) return ''
-  let start = 0
-  let text = joinTranscriptLines(lines)
-  while (start < lines.length && text.length > budget) {
-    start += 1
-    text = joinTranscriptLines(lines.slice(start))
-  }
-  return newestEnd(text, budget)
-}
-
-/** The Transcript's last `windowMs` of lines, as one block of text — empty
- *  string if nothing was said in that window (or there's no Transcript
- *  yet). `now` is injectable so this is testable without real timers. */
-export function recentTranscriptText(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
-  const cutoff = now - windowMs
-  return joinTranscriptLines((transcriptLines || []).filter((line) => line.at >= cutoff))
-}
-
-/** Same "is there anything to act on" question as hasQuickActionText, named
- *  separately since the two buttons are disabled for different reasons
- *  (no active-tab text vs. no recent conversation) even though the check
- *  itself is identical. */
-export function hasRecentTranscript(text) {
-  return hasQuickActionText(text)
+export function buildTurnActionRequest(transcriptLines, focusTurnId, actionId) {
+  if (!TURN_ACTION_ID_SET.has(actionId)) return null
+  const lines = transcriptLines || []
+  const focus = lines.find((line) => line.id === focusTurnId)
+  if (!focus || !String(focus.text || '').trim()) return null
+  const grounding = joinTranscriptLines(groundingLinesForFocus(lines, focusTurnId)).slice(0, RESEARCH_TRANSCRIPT_BUDGET)
+  const focusText = formatTranscriptLine(focus).slice(0, RESEARCH_TRANSCRIPT_BUDGET)
+  return { kind: 'turnAction', actionId, focus: focusText, grounding }
 }
 
 /**
- * Turns the Transcript into a Research Mode request: Focus (last 10 minutes
- * of wall-clock `at`) in `context`, Grounding (everything older) in `notes`.
- * Jump-in attaches to Focus only; Grounding resolves "they" / "that cover"
- * after a recording pause. Returns null when Focus is empty — never a
- * request of earlier-only history. Combined payload stays within
- * RESEARCH_TRANSCRIPT_BUDGET: keep all of Focus, trim oldest Grounding.
+ * The currently active notes tab's whole text (never the Transcript Tab —
+ * Custom does not run on Turns).
  */
-export function buildRecentTranscriptRequest(transcriptLines, windowMs = RECENT_TRANSCRIPT_WINDOW_MS, now = Date.now()) {
-  const cutoff = now - windowMs
-  const recentLines = (transcriptLines || []).filter((line) => line.at >= cutoff)
-  const earlierLines = (transcriptLines || []).filter((line) => line.at < cutoff)
-  const recent = joinTranscriptLines(recentLines)
-  if (!recent.trim()) return null
-
-  if (recent.length >= RESEARCH_TRANSCRIPT_BUDGET) {
-    return { kind: 'voice', query: null, context: newestEnd(recent, RESEARCH_TRANSCRIPT_BUDGET), notes: '' }
-  }
-
-  const notes = trimOldestToFit(earlierLines, RESEARCH_TRANSCRIPT_BUDGET - recent.length)
-  return { kind: 'voice', query: null, context: recent, notes }
-}
-
-/**
- * The currently active tab's whole text to act on (ticket 05) — an ordinary
- * tab's own text (`tabTexts`, RoomTabs.svelte's own true, complete, current
- * copy of every tab — deliberately NOT re-derived from the tab_text
- * broadcast here, which excludes the sender and so would be blind to a
- * solo participant's own just-typed notes), or, for the reserved Transcript
- * tab id, its lines-so-far joined into one block of text. Never a
- * selection, never another tab's text (see CONTEXT.md's Quick Action entry).
- */
-export function activeTabText(tabTexts, transcriptLines, activeTabId) {
-  if (activeTabId === TRANSCRIPT_TAB_ID) return transcriptLinesToText(transcriptLines)
+export function activeNotesTabText(tabTexts, activeTabId) {
+  if (!activeTabId || activeTabId === TRANSCRIPT_TAB_ID) return ''
   return tabTexts[activeTabId] || ''
 }
 
-/** Whether there's anything for a Quick Action button to act on — the
- *  ResearchPanel.svelte button-disabled check is built on this exact
- *  function, so "disabled" and "would refuse to send" can never disagree. */
-export function hasQuickActionText(text) {
+export function hasCustomText(text) {
   return !!String(text || '').trim()
 }
 
-/**
- * Turns a Quick Action id + the active tab's whole text into a request body
- * for POST /rec/[slug]/research (ticket 02's endpoint) — the `quickAction`
- * shape ticket 02 already defined server-side: `{ kind: 'quickAction',
- * actionId, text }`. The client never builds instruction text itself —
- * research-assistant.js's QUICK_ACTION_INSTRUCTIONS owns that wording.
- *
- * Returns null for an unknown actionId, or for empty/whitespace-only text —
- * "nothing to act on" is a request that's never sent at all, never a request
- * sent with empty text (this is also what ResearchPanel.svelte's button-
- * disabled check is built on, so "disabled" and "would refuse to send" can
- * never disagree).
- */
-export function buildQuickActionRequest(actionId, text) {
-  if (!QUICK_ACTION_IDS.has(actionId)) return null
+export function buildCustomRequest(text, transcriptLines) {
   const trimmed = String(text || '').trim().slice(0, MAX_TAB_TEXT_LEN)
   if (!trimmed) return null
-  return { kind: 'quickAction', actionId, text: trimmed }
+  const transcript = joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
+  return { kind: 'custom', text: trimmed, transcript }
+}
+
+export function hasUsableResearchAnswer(answer) {
+  return !!parseResearchCard(answer)
 }
 
 // Maps the research endpoint's error codes (see
@@ -198,7 +152,7 @@ export function buildQuickActionRequest(actionId, text) {
 // message, never a stuck, unexplained pending card.
 const ERROR_MESSAGES = {
   unauthorized: 'You need to rejoin the room to ask a question.',
-  'invalid-request': 'That question could not be sent.',
+  forbidden: 'Only the host can run Custom right now.',
   'room-unavailable': 'This room is no longer available.',
   NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
   TIMEOUT: 'The Research Assistant took too long to respond. Try again.',

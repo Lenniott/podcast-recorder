@@ -64,7 +64,7 @@ describe('POST /rec/[slug]/research — auth gating', () => {
       params: { slug: SLUG },
       cookies: makeCookies(),
       fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'quickAction', actionId: 'define', text: 'hello' }) }
+      request: { json: async () => ({ kind: 'voice', query: 'hello', context: '', notes: '' }) }
     })
 
     expect(res.status).toBe(401)
@@ -80,7 +80,7 @@ describe('POST /rec/[slug]/research — auth gating', () => {
       params: { slug: SLUG },
       cookies: makeCookies(),
       fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'quickAction', actionId: 'define', text: 'hello' }) }
+      request: { json: async () => ({ kind: 'voice', query: 'hello', context: '', notes: '' }) }
     })
 
     expect(res.status).toBe(410)
@@ -94,7 +94,7 @@ describe('POST /rec/[slug]/research — success', () => {
     const { POST } = await loadRoute()
     askResearchAssistant.mockResolvedValue({ answer: 'The answer.', citations: [{ url: 'https://x.test', title: 'X' }] })
 
-    const body = { kind: 'quickAction', actionId: 'define', text: 'some tab text' }
+    const body = { kind: 'turnAction', actionId: 'definition', focus: 'Host: hello', grounding: '' }
     const res = await POST({
       params: { slug: SLUG },
       cookies,
@@ -111,13 +111,31 @@ describe('POST /rec/[slug]/research — success', () => {
   })
 })
 
+describe('POST /rec/[slug]/research — Custom is host-only', () => {
+  it('rejects (403) Custom from a participant who is not the host', async () => {
+    process.env.RESEARCH_CUSTOM_PROMPT = 'Summarise the notes.'
+    const cookies = await authedCookies()
+    const { POST } = await loadRoute()
+
+    const res = await POST({
+      params: { slug: SLUG },
+      cookies,
+      fetch: fakeFetch,
+      request: { json: async () => ({ kind: 'custom', text: 'some notes' }) }
+    })
+
+    expect(res.status).toBe(403)
+    expect(askResearchAssistant).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /rec/[slug]/research — request validation', () => {
   it.each([
     ['missing kind', {}],
     ['unknown kind', { kind: 'bogus' }],
-    ['quickAction with an unknown actionId', { kind: 'quickAction', actionId: 'bogus', text: 'hi' }],
-    ['quickAction with empty text', { kind: 'quickAction', actionId: 'define', text: '' }],
-    ['quickAction with oversized text', { kind: 'quickAction', actionId: 'define', text: 'x'.repeat(20_001) }],
+    ['turnAction with an unknown actionId', { kind: 'turnAction', actionId: 'bogus', focus: 'Host: hi', grounding: '' }],
+    ['turnAction with empty focus', { kind: 'turnAction', actionId: 'facts', focus: '', grounding: '' }],
+    ['turnAction with oversized focus', { kind: 'turnAction', actionId: 'facts', focus: 'x'.repeat(20_001), grounding: '' }],
     ['voice with an oversized query', { kind: 'voice', query: 'x'.repeat(501), context: '', notes: '' }],
     ['voice with a non-string context', { kind: 'voice', query: 'x', context: 42, notes: '' }],
     ['voice with an oversized notes field', { kind: 'voice', query: 'x', context: '', notes: 'x'.repeat(20_001) }]
@@ -177,7 +195,7 @@ describe('POST /rec/[slug]/research — error mapping', () => {
       params: { slug: SLUG },
       cookies,
       fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'quickAction', actionId: 'define', text: 'hi' }) }
+      request: { json: async () => ({ kind: 'voice', query: 'hi', context: '', notes: '' }) }
     })
 
     expect(res.status).toBe(status)
@@ -194,7 +212,7 @@ describe('POST /rec/[slug]/research — error mapping', () => {
       params: { slug: SLUG },
       cookies,
       fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'quickAction', actionId: 'define', text: 'hi' }) }
+      request: { json: async () => ({ kind: 'voice', query: 'hi', context: '', notes: '' }) }
     })
 
     expect(res.status).toBe(500)
@@ -210,7 +228,7 @@ describe('POST /rec/[slug]/research — error mapping', () => {
       params: { slug: SLUG },
       cookies,
       fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'quickAction', actionId: 'define', text: 'hi' }) }
+      request: { json: async () => ({ kind: 'voice', query: 'hi', context: '', notes: '' }) }
     })
 
     expect(res.status).toBe(500)

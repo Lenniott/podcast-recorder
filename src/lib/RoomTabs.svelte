@@ -25,6 +25,24 @@
   // AGENTS.md already states for recording health.
   export let transcriptionStatus = "stopped";
 
+  // Turn Action click → Research Assistant. Local pending lives here so
+  // the Block can spin without a room-shared pending card.
+  export let onTurnAction = async () => {};
+
+  let pendingTurnId = null;
+  let pendingActionId = null;
+
+  async function handleTurnAction(actionId, turnId) {
+    pendingTurnId = turnId;
+    pendingActionId = actionId;
+    try {
+      await onTurnAction(actionId, turnId);
+    } finally {
+      pendingTurnId = null;
+      pendingActionId = null;
+    }
+  }
+
   const TRANSCRIPTION_STATUS_LABEL = {
     stopped: "Not transcribing",
     unsupported: "Transcription isn't supported in this browser",
@@ -301,7 +319,12 @@
 
   <div class="tab-content">
     {#if viewingTranscript}
-      <TranscriptTab lines={transcriptLines} />
+      <TranscriptTab
+        lines={transcriptLines}
+        {pendingTurnId}
+        {pendingActionId}
+        onTurnAction={handleTurnAction}
+      />
     {:else if activeTabId}
       <div class="shared-textarea">
         

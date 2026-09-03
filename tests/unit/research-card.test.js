@@ -15,8 +15,7 @@ function fieldText(fields) {
     fields.ubiquitousKnowledge != null ? `UBIQUITOUS KNOWLEDGE: ${fields.ubiquitousKnowledge}` : null,
     fields.outputType != null ? `OUTPUT TYPE: ${fields.outputType}` : null,
     fields.contextSummary != null ? `CONTEXT SUMMARY: ${fields.contextSummary}` : null,
-    fields.mainTakeaway != null ? `MAIN TAKEAWAY: ${fields.mainTakeaway}` : null,
-    fields.sources != null ? `SOURCES: ${fields.sources}` : null
+    fields.mainTakeaway != null ? `MAIN TAKEAWAY: ${fields.mainTakeaway}` : null
   ]
     .filter((line) => line != null)
     .join('\n')
@@ -28,52 +27,24 @@ describe('parseResearchCard', () => {
       fieldText({
         provenInTranscript: 10,
         ubiquitousKnowledge: 20,
-        outputType: 'research',
+        outputType: 'ask',
         contextSummary: 'when the wall came down',
-        mainTakeaway: 'The Berlin Wall fell in 1989.',
-        sources: 'Wikipedia'
+        mainTakeaway: 'The Berlin Wall fell in 1989.'
       })
     )
     expect(card).toEqual({
       provenInTranscript: 10,
       ubiquitousKnowledge: 20,
-      outputType: 'research',
+      outputType: 'ask',
       contextSummary: 'when the wall came down',
-      mainTakeaway: 'The Berlin Wall fell in 1989.',
-      sources: ['Wikipedia']
+      mainTakeaway: 'The Berlin Wall fell in 1989.'
     })
-  })
-
-  it('drops an unknown source and caps at two known sources', () => {
-    const card = parseResearchCard(
-      fieldText({
-        outputType: 'define',
-        contextSummary: 'x',
-        mainTakeaway: 'y',
-        sources: 'Wikipedia, Reddit, SomeBlog'
-      })
-    )
-    expect(card.sources).toEqual(['Wikipedia', 'Reddit'])
-  })
-
-  it('sources are limited to Wikipedia and Reddit only, from labeled text', () => {
-    const card = parseResearchCard(
-      fieldText({ outputType: 'research', contextSummary: 'x', mainTakeaway: 'y', sources: 'Twitter, YouTube' })
-    )
-    expect(card.sources).toEqual([])
-  })
-
-  it('sources are limited to Wikipedia and Reddit only, from a JSON (wire) source array', () => {
-    const card = parseResearchCard(
-      JSON.stringify({ outputType: 'research', mainTakeaway: 'y', sources: ['Twitter', 'Wikipedia', 'Reddit', 'Blog'] })
-    )
-    expect(card.sources).toEqual(['Wikipedia', 'Reddit'])
   })
 
   it('clips context summary and main takeaway to their word caps', () => {
     const card = parseResearchCard(
       fieldText({
-        outputType: 'research',
+        outputType: 'ask',
         contextSummary: Array.from({ length: 20 }, (_, i) => `w${i}`).join(' '),
         mainTakeaway: Array.from({ length: 50 }, (_, i) => `w${i}`).join(' ')
       })
@@ -97,6 +68,40 @@ describe('parseResearchCard', () => {
     const card = parseResearchCard(fieldText({ outputType: '{mode}', contextSummary: 'x', mainTakeaway: 'y' }))
     expect(card.outputType).toBeNull()
   })
+
+  it('treats a JSON reply with blank contextSummary and mainTakeaway as no card — the forced-JSON "nothing to report" signal', () => {
+    const card = parseResearchCard(JSON.stringify({ outputType: 'definition', contextSummary: '', mainTakeaway: '' }))
+    expect(card).toBeNull()
+  })
+
+  it('strips a markdown citation the model wrote inline instead of using the separate citations mechanism', () => {
+    const card = parseResearchCard(
+      JSON.stringify({
+        outputType: 'definition',
+        contextSummary: 'x',
+        mainTakeaway: 'Dulcet means pleasant-sounding [collinsdictionary.com](https://www.collinsdictionary.com/dulcet).'
+      })
+    )
+    expect(card.mainTakeaway).toBe('Dulcet means pleasant-sounding.')
+  })
+
+  it('strips a bare URL the model wrote inline', () => {
+    const card = parseResearchCard(
+      JSON.stringify({
+        outputType: 'definition',
+        contextSummary: 'x',
+        mainTakeaway: 'Source: https://www.collinsdictionary.com/dulcet says so.'
+      })
+    )
+    expect(card.mainTakeaway).not.toContain('http')
+  })
+
+  it('a takeaway that is only a citation strips down to empty and the card becomes no card', () => {
+    const card = parseResearchCard(
+      JSON.stringify({ outputType: 'definition', contextSummary: '', mainTakeaway: '[collinsdictionary.com](https://www.collinsdictionary.com/dulcet)' })
+    )
+    expect(card).toBeNull()
+  })
 })
 
 describe('serializeResearchCard', () => {
@@ -104,10 +109,9 @@ describe('serializeResearchCard', () => {
     const card = {
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
-      outputType: 'factCheck',
+      outputType: 'facts',
       contextSummary: 'a claim',
-      mainTakeaway: 'The claim is false.',
-      sources: []
+      mainTakeaway: 'The claim is false.'
     }
     expect(JSON.parse(serializeResearchCard(card))).toEqual(card)
   })
@@ -130,10 +134,9 @@ describe('parseResearchCard(serializeResearchCard(...)) — the actual server-to
     const card = {
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
-      outputType: 'factCheck',
+      outputType: 'facts',
       contextSummary: 'Jack White married Meg White; they presented as siblings.',
-      mainTakeaway: 'Jack White and Meg White were married, not siblings, and kept it private for years.',
-      sources: ['Wikipedia']
+      mainTakeaway: 'Jack White and Meg White were married, not siblings, and kept it private for years.'
     }
     const wire = serializeResearchCard(card)
     expect(wire.startsWith('{')).toBe(true) // sanity: this really is the JSON path, not label text
@@ -141,7 +144,7 @@ describe('parseResearchCard(serializeResearchCard(...)) — the actual server-to
   })
 
   it('never renders the raw JSON blob as the main takeaway', () => {
-    const wire = serializeResearchCard({ outputType: 'research', mainTakeaway: 'x' })
+    const wire = serializeResearchCard({ outputType: 'ask', mainTakeaway: 'x' })
     const card = parseResearchCard(wire)
     expect(card.mainTakeaway).not.toContain('{')
     expect(card.mainTakeaway).not.toContain('provenInTranscript')
@@ -149,6 +152,12 @@ describe('parseResearchCard(serializeResearchCard(...)) — the actual server-to
 
   it('round-trips a suppressed/off-mode null card back to null, not a rendered blob', () => {
     expect(parseResearchCard(serializeResearchCard(null))).toBeNull()
+  })
+
+  it('does not clip Interpretation Mode takeaways to the skim word cap', () => {
+    const long = Array.from({ length: 80 }, (_, i) => `word${i}`).join(' ')
+    const card = parseResearchCard(serializeResearchCard({ outputType: 'custom', mainTakeaway: long }))
+    expect(card.mainTakeaway).toBe(long)
   })
 })
 
@@ -161,8 +170,10 @@ describe('shouldSuppress — score-threshold guard', () => {
     expect(shouldSuppress({ provenInTranscript: 95, ubiquitousKnowledge: 0 })).toBe(true)
   })
 
-  it('suppresses when ubiquitous knowledge is above the threshold', () => {
-    expect(shouldSuppress({ provenInTranscript: 0, ubiquitousKnowledge: 81 })).toBe(true)
+  it('suppresses when ubiquitous knowledge is above the threshold in definition mode only', () => {
+    expect(shouldSuppress({ provenInTranscript: 0, ubiquitousKnowledge: 81 }, 'definition')).toBe(true)
+    expect(shouldSuppress({ provenInTranscript: 0, ubiquitousKnowledge: 81 }, 'facts')).toBe(false)
+    expect(shouldSuppress({ provenInTranscript: 0, ubiquitousKnowledge: 81 }, 'ask')).toBe(false)
   })
 
   it('does not suppress right at the threshold', () => {
@@ -176,15 +187,15 @@ describe('shouldSuppress — score-threshold guard', () => {
 
 describe('matchesMode — mode-match guard', () => {
   it('matches when OUTPUT TYPE equals the requested mode', () => {
-    expect(matchesMode({ outputType: 'define' }, 'define')).toBe(true)
+    expect(matchesMode({ outputType: 'definition' }, 'definition')).toBe(true)
   })
 
   it('does not match a silently substituted mode (Bug 1)', () => {
-    expect(matchesMode({ outputType: 'factCheck' }, 'research')).toBe(false)
+    expect(matchesMode({ outputType: 'facts' }, 'ask')).toBe(false)
   })
 
   it('does not match a null card', () => {
-    expect(matchesMode(null, 'research')).toBe(false)
+    expect(matchesMode(null, 'ask')).toBe(false)
   })
 })
 

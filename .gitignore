@@ -21,6 +21,7 @@ Thumbs.db
 .playwright-mcp/
 # scripts/research-eval.js output — ephemeral; cases live in the script.
 .eval-runs/
+.research-eval-logs/
 # Playwright
 test-results/
 playwright-report/

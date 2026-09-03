@@ -16,7 +16,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
-import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
+import { setupWss, _resetRooms, researchGuestCanAsk } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
 function latest(ws, type) {
@@ -26,6 +26,20 @@ function latest(ws, type) {
 function ask(ws, { entryId, question }) {
   ws.emit('message', JSON.stringify({ type: 'research_ask', entryId, question }))
 }
+
+describe('researchGuestCanAsk', () => {
+  it('is off (host-only) by default and for any unrecognized value', () => {
+    expect(researchGuestCanAsk({})).toBe(false)
+    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: '0' })).toBe(false)
+    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'nope' })).toBe(false)
+  })
+
+  it('is on for 1/true/yes, case-insensitively', () => {
+    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: '1' })).toBe(true)
+    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'true' })).toBe(true)
+    expect(researchGuestCanAsk({ RESEARCH_GUEST_CAN_ASK: 'YES' })).toBe(true)
+  })
+})
 
 describe('setupWss — research assistant entries (per-tab, shared — see ADR-0002 and ticket 04)', () => {
   let wss, host, guest
@@ -61,6 +75,38 @@ describe('setupWss — research assistant entries (per-tab, shared — see ADR-0
         answer: null,
         citations: []
       })
+    }
+  })
+
+  it('a guest (non-host) cannot ask — refused with an error, no entry created or broadcast', () => {
+    host.sent.length = 0
+    guest.sent.length = 0
+    ask(guest, { entryId: 'e1', question: 'Can a guest ask this?' })
+    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
+    expect(guest.sent.some((m) => m.type === 'research_entry')).toBe(false)
+    expect(host.sent.some((m) => m.type === 'research_entry')).toBe(false)
+  })
+
+  it('RESEARCH_GUEST_CAN_ASK=true lets a guest ask and remove too', () => {
+    process.env.RESEARCH_GUEST_CAN_ASK = 'true'
+    try {
+      const tabId = activeTabId(guest)
+      host.sent.length = 0
+      guest.sent.length = 0
+      ask(guest, { entryId: 'e1', question: 'Can a guest ask now?' })
+
+      for (const ws of [host, guest]) {
+        expect(latest(ws, 'research_entry')).toMatchObject({ tabId, entry: { id: 'e1', status: 'pending' } })
+      }
+
+      host.sent.length = 0
+      guest.sent.length = 0
+      guest.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'e1' }))
+      for (const ws of [host, guest]) {
+        expect(latest(ws, 'research_removed')).toEqual({ type: 'research_removed', tabId, entryId: 'e1' })
+      }
+    } finally {
+      delete process.env.RESEARCH_GUEST_CAN_ASK
     }
   })
 
@@ -155,6 +201,44 @@ describe('setupWss — research assistant entries (per-tab, shared — see ADR-0
 
     ask(host, { entryId: 'e2', question: 'New live question?' })
     expect(latest(late, 'research_entry').entry.id).toBe('e2')
+  })
+
+  it('a client can remove an entry outright — every peer including the sender is told', () => {
+    const tabId = activeTabId(host)
+    ask(host, { entryId: 'e1', question: 'Define photosynthesis.' })
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    host.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'e1' }))
+
+    for (const ws of [host, guest]) {
+      expect(latest(ws, 'research_removed')).toEqual({ type: 'research_removed', tabId, entryId: 'e1' })
+    }
+
+    // A resync no longer replays the removed entry.
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tabs_sync' }))
+    expect(host.sent.some((m) => m.type === 'research_state')).toBe(false)
+  })
+
+  it('a guest (non-host) cannot remove an entry — refused with an error, nothing removed or broadcast', () => {
+    ask(host, { entryId: 'e1', question: 'Define photosynthesis.' })
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    guest.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'e1' }))
+
+    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
+    expect(guest.sent.some((m) => m.type === 'research_removed')).toBe(false)
+    expect(host.sent.some((m) => m.type === 'research_removed')).toBe(false)
+  })
+
+  it('removing an unknown entry id is refused to the sender only, without broadcasting anything', () => {
+    host.sent.length = 0
+    guest.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'research_remove', entryId: 'nope' }))
+    expect(host.sent.some((m) => m.type === 'error')).toBe(true)
+    expect(guest.sent.some((m) => m.type === 'research_removed')).toBe(false)
   })
 
   it('research history survives the last peer disconnecting and rejoining, replayed in full on rejoin', () => {

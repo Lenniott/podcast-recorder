@@ -25,6 +25,7 @@
   export let roomName = "";
   export let slug = "";
   export let isHostClaim = false;
+  export let guestCanAskResearch = false;
   export let roomPassword = "";
   export let wsStatus = "disconnected";
   export let peers = [];
@@ -128,10 +129,25 @@
       </RoomPresenceTable>
     </div>
 
-    <RoomTabs {send} {clockOffset} {transcriptionStatus} bind:this={roomTabs} bind:tabTexts />
+    <RoomTabs
+      {send}
+      {clockOffset}
+      {transcriptionStatus}
+      bind:this={roomTabs}
+      bind:tabTexts
+      onTurnAction={(actionId, turnId) => researchPanel?.runTurnAction?.(actionId, turnId)}
+    />
   </main>
 
-  <ResearchPanel {send} {slug} {tabTexts} bind:collapsed={researchCollapsed} bind:this={researchPanel} />
+  <ResearchPanel
+    {send}
+    {slug}
+    {tabTexts}
+    {isHostClaim}
+    {guestCanAskResearch}
+    bind:collapsed={researchCollapsed}
+    bind:this={researchPanel}
+  />
 </div>
 
 <style>

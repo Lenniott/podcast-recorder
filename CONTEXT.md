@@ -7,10 +7,9 @@ actually being said.
 ## Language
 
 **Research Assistant**:
-The right-side panel that answers lookups during a recording — either
-spoken ("let's look that up") or clicked (a quick action run on a tab's
-text). Its results are room-shared and scoped per Tab, same as the Tab's
-other content.
+The live lookup help during a recording: **Turn Actions** on the Transcript
+Tab, plus **Ask** and **Custom** in the right-side panel. Results are
+room-shared and scoped per Tab.
 _Avoid_: AI panel, sidebar bot
 
 **Voice Trigger** _(superseded by Research Mode — see ADR-0004; kept here
@@ -21,8 +20,8 @@ something up, detected from that participant's own local speech
 recognition.
 _Avoid_: wake word, hotword
 
-**Research Mode**:
-The passive, always-on way the Research Assistant now surfaces things
+**Research Mode** _(designed in ADR-0004; not in the button-only MVP)_:
+The passive, always-on way the Research Assistant would surface things
 during a recording, replacing Voice Trigger — nobody has to say anything
 special. It runs a **Gate Check** every 2 seconds against the last 10
 seconds of the Transcript (a cheap, fast, no-search yes/no model call:
@@ -46,12 +45,79 @@ _Avoid_: pre-check, filter pass (for Gate Check); the research call (for
 Deep Check — ambiguous with Quick Action/manual-ask calls, which are also
 "the research call" but never gated)
 
-**Quick Action**:
-A one-click prompt (Define, Key facts, Fact-check, Find examples, Analyze)
-run by the Research Assistant against the *whole* text of the currently
-active Tab. Never a text selection — there's no selection-tracking in this
-app to hook into (v1 scope; may grow selection support later).
+**Quick Action** _(superseded by Turn Action for transcript jobs; panel
+chips against whole-tab text are being replaced)_:
+A one-click prompt run against the *whole* text of the currently active
+Tab. Never a text selection.
 _Avoid_: prompt button, canned prompt
+
+**Turn Action**:
+A one-click lookup on a **Focus Turn** — hover that Turn, then press
+Definition, Facts, or Answer (icons on the Turn, not in the panel). The
+clicked Turn is the subject; **Grounding** is a fixed neighbor window.
+_Avoid_: quick action (for transcript jobs), highlight button, chunk action
+
+**Focus Turn**:
+The one Turn a participant invoked a Turn Action on. It is the subject of
+that lookup, never Grounding.
+_Avoid_: highlight, selected chunk, section, the time in the text
+
+**Grounding**:
+The two Turns immediately before the Focus Turn, plus the one Turn after
+it if that Turn already exists. Included so the model can resolve
+references. Grounding is never what the answer is *about*.
+_Avoid_: context (alone — overloaded with tab text and prompt "context")
+
+**Definition**:
+A Turn Action that explains an obscure word, name, or reference in the
+Focus Turn (including a plausible mishear when the transcript likely
+garbled it).
+_Avoid_: define (the old whole-tab Quick Action)
+
+**Facts**:
+A Turn Action that surfaces general background about what the Focus Turn
+is talking about. Not a verdict on whether a speaker was right.
+_Avoid_: fact-check, key facts, Fact-check (those meant verify-or-extract
+against a whole tab)
+
+**Answer**:
+A Turn Action that replies to a question asked in the Focus Turn itself.
+If that Turn is not a question, there is nothing to Answer.
+_Avoid_: research (the old mode name), Research recent conversation
+
+**Ask**:
+A one-off typed question in the Research Assistant panel. It carries no
+Transcript and no tab text — the question is the whole request.
+_Avoid_: custom (that's a saved instruction, not a one-off question)
+
+**Custom**:
+Interpretation Mode on a notes Tab: Stage 1 is a blind read of that Tab's
+text (the lyrics); Stage 2 scores it against the room Transcript. Host-only
+for now. The prompt lives with the Research Assistant, not in the browser.
+_Avoid_: Ask, Quick Action, Interpret (the button label — the lookup is Custom)
+
+**Research Eval Log**:
+An append-only, gitignored record of live Research Assistant calls
+(prompt, Focus Turn, Grounding, raw reply, parsed card, suppress,
+latency), written only when enabled. Rooms still expire; the log is what
+survives for prompt work after a show.
+_Avoid_: keeping rooms, immortal rooms, eval-runs as the only corpus (that's canned)
+
+**Research Card**:
+The glanceable result of a lookup: a short takeaway meant to be skimmed
+during conversation, not read in a focus state. Newest cards sit at the
+top of the panel. Only a successful lookup stays as a visible card; a
+job miss or suppressed lookup is written to the Research Eval Log and
+does not leave a "nothing to add" row. While a lookup is in flight, a
+processing block occupies that same top slot so it is obvious something
+is happening.
+_Avoid_: Nothing new to add (as a standing history item)
+
+**Block**:
+One unit of text in a tab surface: optional label, the text, hover actions.
+On the Transcript Tab each Block is a **Turn** and is read-only. Notes tabs
+stay a single shared textarea until they are rebuilt as editable Blocks.
+_Avoid_: chunk, section, transcript line (say Turn), textarea row
 
 **Transcript Tab**:
 The one permanent, uncloseable Tab every room has (alongside its normal
@@ -65,7 +131,7 @@ _Avoid_: live captions tab, notes tab
 
 **Turn**:
 One transcript line: a single participant's finalized utterance, labeled
-with who said it. The unit the Transcript Tab is built out of.
+with who said it. On the Transcript Tab, a Turn is one read-only **Block**.
 
 **Transcript Activity**:
 A room-shared "something's coming" pulse on the Transcript Tab pill, true

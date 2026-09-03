@@ -100,6 +100,13 @@
  *                                        — manual "ask a question" (ticket 04;
  *                                          Quick Actions/Voice Trigger, tickets
  *                                          05/06, will reuse this same message).
+ *                                          Host-only by default — same gate
+ *                                          as Custom on the HTTP endpoint
+ *                                          (getHostClaim); a guest peer is
+ *                                          refused with `error` and no entry
+ *                                          is created — unless
+ *                                          RESEARCH_GUEST_CAN_ASK opts every
+ *                                          guest in (researchGuestCanAsk).
  *                                          entryId is client-generated (like
  *                                          tab_create's tabId) so the asking
  *                                          browser can correlate its own later
@@ -124,6 +131,16 @@
  *                                          errored with a visible `message` —
  *                                          a pending entry must never be left
  *                                          stuck with no explanation.
+ *   { type: 'research_remove', entryId }
+ *                                        — host-only by default (same gate
+ *                                          and RESEARCH_GUEST_CAN_ASK opt-in
+ *                                          as research_ask) discards one
+ *                                          research card outright (unlike
+ *                                          resolve/error, which change
+ *                                          status but keep the entry).
+ *                                          Removes it from the tab's stored
+ *                                          history so a late joiner never
+ *                                          sees it again.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
@@ -223,6 +240,13 @@
  *                                          tab_text's own per-tab replay),
  *                                          always BEFORE any live
  *                                          research_entry for that connection.
+ *   { type: 'research_removed', tabId, entryId }
+ *                                        — one research entry deleted
+ *                                          outright, broadcast to EVERY peer
+ *                                          including the sender (same
+ *                                          reasoning as research_entry — the
+ *                                          server is the single source of
+ *                                          truth for the tab's history).
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -230,6 +254,18 @@
 import { getActiveRoomBySlug, saveRoomContent, loadRoomContent } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
+
+/**
+ * Reads `RESEARCH_GUEST_CAN_ASK` — same injectable-`env`/truthy-string shape
+ * as research-eval-log.js's isResearchEvalLogEnabled. Off by default: a
+ * guest can view the Research Assistant panel but not create or remove
+ * entries (research_ask/research_remove below) unless a room operator
+ * opts in.
+ */
+export function researchGuestCanAsk(env = process.env) {
+  const raw = String(env.RESEARCH_GUEST_CAN_ASK || '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes'
+}
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -669,6 +705,16 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'research_ask' && clientId) {
+        // Host-only by default, like Custom/Interpret on the HTTP endpoint
+        // — a guest can view the panel but not create an entry (see
+        // ResearchPanel.svelte, which hides the ask form/Quick Actions from
+        // a non-host the same way it already hides Interpret). A room
+        // operator can opt every guest into asking too via
+        // RESEARCH_GUEST_CAN_ASK (researchGuestCanAsk above).
+        if (peer.role !== 'host' && !researchGuestCanAsk()) {
+          send(ws, { type: 'error', message: 'Only the host can ask the Research Assistant.' })
+          return
+        }
         // Filed under the room's CURRENT active tab — server-determined,
         // never trusting a client-supplied tabId — so "creating an entry
         // while Tab A is active only ever appears under Tab A" holds even
@@ -703,6 +749,24 @@ export function setupWss(wss) {
         }
         for (const p of room.values()) {
           send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
+        }
+      }
+
+      if (msg.type === 'research_remove' && clientId) {
+        // Same gate (and same RESEARCH_GUEST_CAN_ASK opt-in) as research_ask
+        // above — a guest can view the list but not create or delete an
+        // entry unless a room operator has opted every guest in.
+        if (peer.role !== 'host' && !researchGuestCanAsk()) {
+          send(ws, { type: 'error', message: 'Only the host can remove a research card.' })
+          return
+        }
+        const result = roomStateStore.removeResearchEntry(slug, msg.entryId)
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'research_removed', tabId: result.tabId, entryId: result.entryId })
         }
       }
 

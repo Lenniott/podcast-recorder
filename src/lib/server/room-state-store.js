@@ -364,6 +364,20 @@ export function createRoomStateStore({
     })
   }
 
+  /** Removes one research entry outright (not a status change — the entry
+   *  disappears from the tab's history for everyone, unlike resolve/error
+   *  above which always leave the entry in place). Lets a participant clear
+   *  a card they no longer want cluttering the skim list. */
+  function removeResearchEntry(slug, entryId) {
+    return withRoom(slug, (content) => {
+      const found = findResearchEntry(content, String(entryId || ''))
+      if (!found) return { ok: false, error: 'Unknown research entry' }
+
+      content.research[found.tabId].splice(found.idx, 1)
+      return { ok: true, room: content, tabId: found.tabId, entryId: String(entryId) }
+    })
+  }
+
   /** For tests only — clears hot content and cancels every pending grace
    *  timer, so each test starts clean (mirrors ws-rooms.js's own
    *  _resetRooms, since this Store now owns what that used to hold). */
@@ -386,6 +400,7 @@ export function createRoomStateStore({
     addResearchEntry,
     resolveResearchEntry,
     errorResearchEntry,
+    removeResearchEntry,
     _resetForTests
   }
 }

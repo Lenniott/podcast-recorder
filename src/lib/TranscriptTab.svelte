@@ -1,15 +1,13 @@
 <script>
+  import TextBlock from "./TextBlock.svelte";
+
   // The one permanent, uncloseable Transcript Tab's content — read-only,
-  // speaker-labeled lines, in the order the server appended them (see
-  // ADR-0002: append-only, never last-write-wins). This ticket does not
-  // include real speech capture (ticket 03) — lines arrive over the room
-  // WS from whatever produces a `transcript_line` message.
-  //
-  // Deliberately has no `send` prop and no editable control of any kind:
-  // there is no UI path from this component back onto the wire, so a
-  // hand-edit can never originate here even before room-state-store.js's
-  // own refusal is reached.
+  // speaker-labeled Turns (each Turn is a TextBlock). There is no path
+  // from this component onto tab_text; a hand-edit cannot originate here.
   export let lines = []; // [{id, speaker, text, at}], in server (append) order
+  export let pendingTurnId = null;
+  export let pendingActionId = null;
+  export let onTurnAction = (_actionId, _turnId) => {};
 </script>
 
 <div class="transcript-tab" aria-label="Transcript — read-only">
@@ -21,8 +19,12 @@
     <ol class="transcript-lines">
       {#each lines as line (line.id)}
         <li class="transcript-line">
-          <span class="transcript-speaker">{line.speaker}</span>
-          <span class="transcript-text">{line.text}</span>
+          <TextBlock
+            label={line.speaker}
+            text={line.text}
+            pendingActionId={pendingTurnId === line.id ? pendingActionId : null}
+            onAction={(actionId) => onTurnAction(actionId, line.id)}
+          />
         </li>
       {/each}
     </ol>
@@ -54,19 +56,7 @@
   }
 
   .transcript-line {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    line-height: 1.5;
-  }
-
-  .transcript-speaker {
-    flex-shrink: 0;
-    font-weight: 600;
-    color: var(--accent);
-  }
-
-  .transcript-text {
-    white-space: pre-wrap;
+    margin: 0;
+    padding: 0;
   }
 </style>

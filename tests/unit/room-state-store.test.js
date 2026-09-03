@@ -482,6 +482,22 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
     expect(store.errorResearchEntry('room1', 'nope', { message: 'x' })).toEqual({ ok: false, error: 'Unknown research entry' })
   })
 
+  it('removes an entry outright, leaving the rest of that tab\'s history intact', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'first' })
+    store.addResearchEntry('room1', 'tabA', { id: 'e2', question: 'second' })
+
+    const result = store.removeResearchEntry('room1', 'e1')
+
+    expect(result).toMatchObject({ ok: true, tabId: 'tabA', entryId: 'e1' })
+    expect(store.getRoom('room1').research.tabA.map((e) => e.id)).toEqual(['e2'])
+  })
+
+  it('rejects removing an unknown entry id', () => {
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    expect(store.removeResearchEntry('room1', 'nope')).toEqual({ ok: false, error: 'Unknown research entry' })
+  })
+
   it('backfills an empty research map for content hydrated from durable storage saved before Research Assistant entries existed', () => {
     const legacyDurable = {
       save: vi.fn(),

@@ -1,41 +1,28 @@
 <script>
-  import { ChevronLeft, ChevronRight, FileSearch02 } from "$lib/icons";
+  import { tick } from "svelte";
+  import { ChevronLeft, ChevronRight, FileSearch02, XClose } from "$lib/icons";
   import {
     applyResearchEntry as reduceResearchEntry,
     applyResearchState as reduceResearchState,
+    applyResearchRemove as reduceResearchRemove,
     visibleEntries,
     buildManualAskRequest,
-    buildQuickActionRequest,
-    buildRecentTranscriptRequest,
+    buildTurnActionRequest,
+    buildCustomRequest,
     applyTranscriptState as reduceTranscriptState,
     applyTranscriptLine as reduceTranscriptLine,
-    activeTabText,
-    hasQuickActionText,
-    recentTranscriptText,
-    hasRecentTranscript,
+    activeNotesTabText,
+    hasCustomText,
     describeResearchError,
     makeResearchEntryId,
   } from "./research-panel.js";
   import { parseResearchCard } from "./research-card.js";
 
-  // Shown as the entry's `question` — same field a typed manual ask or a
-  // Quick Action's label fills. See research-panel.js's doc comment on
-  // buildRecentTranscriptRequest for why this exists as a manual button
-  // rather than the originally-planned autonomous timer.
-  const RESEARCH_RECENT_LABEL = "Research recent conversation";
-
-  // The five Quick Action buttons (ticket 05; CONTEXT.md's Quick Action
-  // entry) — actionId must match research-card.js's own MODES keys
-  // exactly, since actionId is forwarded verbatim as MODE to the shared
-  // system prompt. `label` doubles as the entry's `question` shown in the
-  // history, same field a manual ask's typed question fills.
-  const QUICK_ACTIONS = [
-    { id: "define", label: "Define" },
-    { id: "keyFacts", label: "Key facts" },
-    { id: "factCheck", label: "Fact-check" },
-    { id: "findExamples", label: "Find examples" },
-    { id: "analyze", label: "Analyze" },
-  ];
+  const TURN_ACTION_LABEL = {
+    definition: "Definition",
+    facts: "Facts",
+    answer: "Answer",
+  };
 
   // (payload) => void — JSON-sends over the room's single WebSocket
   // connection, owned by the page (same contract as RoomTabs.svelte's send).
@@ -64,41 +51,37 @@
   // would stay disabled/stale forever. Reading RoomTabs' own state
   // directly avoids the asymmetry entirely.
   export let tabTexts = {};
+  export let isHostClaim = false;
 
-  // Which tab the room is currently looking at — fed purely from the same
-  // room-shared `tabs_state` broadcast RoomTabs.svelte already derives its
-  // own view from (see applyTabsState below). Never tracked as a second,
-  // independently-computed copy of "the active tab" that could drift from
-  // RoomTabs' own activeTabId — both are fed by the identical wire message.
+  // Server-side opt-in (RESEARCH_GUEST_CAN_ASK — see ws-rooms.js's
+  // researchGuestCanAsk) letting every guest ask/remove too, not just the
+  // host. Off by default. Does NOT extend to Custom/Interpret, which stays
+  // strictly host-only regardless (see canCustom below) — this only widens
+  // research_ask/research_remove, the same two the server actually gates
+  // on this flag.
+  export let guestCanAskResearch = false;
+
+  $: canAskResearch = isHostClaim || guestCanAskResearch;
+
   let activeTabId = null;
-
-  // tabId -> [{id, tabId, question, status, answer, citations, error, at}],
-  // fed exclusively by research_entry/research_state broadcasts (see
-  // $lib/research-panel.js) — never locally invented before the server has
-  // recorded anything, so a pending card is always real, shared state.
   let entriesByTab = {};
 
   $: entries = visibleEntries(entriesByTab, activeTabId);
 
-  // The Transcript's lines-so-far (ticket 01/05), fed exclusively by
-  // transcript_state/transcript_line broadcasts — same discipline, its own
-  // copy of what RoomTabs.svelte separately tracks for display.
   let transcriptLines = [];
 
-  // The currently active tab's whole text to act on — an ordinary tab's own
-  // tab_text, or (on the reserved Transcript tab) its lines-so-far joined
-  // into one block of text. Never a selection, never another tab's text.
-  $: quickActionText = activeTabText(tabTexts, transcriptLines, activeTabId);
-  $: canQuickAction = hasQuickActionText(quickActionText);
-
-  // Recomputed whenever transcriptLines changes (a new line arriving) —
-  // not on a wall-clock tick, so the disabled state can lag by up to the
-  // window length after conversation goes quiet. Harmless: the button's
-  // own click handler always recomputes fresh at click time regardless of
-  // what the disabled attribute last showed.
-  $: canResearchRecent = hasRecentTranscript(recentTranscriptText(transcriptLines));
+  $: customText = activeNotesTabText(tabTexts, activeTabId);
+  $: canCustom = isHostClaim && hasCustomText(customText);
 
   let questionInput = "";
+  let entriesEl;
+
+  function revealPanel() {
+    collapsed = false;
+    tick().then(() => {
+      if (entriesEl) entriesEl.scrollTop = 0;
+    });
+  }
 
   // ─── Inbound — called by the page's ws.onmessage ────────────────────────
 
@@ -116,10 +99,22 @@
 
   export function applyResearchEntry(msg) {
     entriesByTab = reduceResearchEntry(entriesByTab, msg);
+    tick().then(() => {
+      if (entriesEl) entriesEl.scrollTop = 0;
+    });
   }
 
   export function applyResearchState(msg) {
     entriesByTab = reduceResearchState(entriesByTab, msg);
+  }
+
+  export function applyResearchRemove(msg) {
+    entriesByTab = reduceResearchRemove(entriesByTab, msg);
+  }
+
+  function removeEntry(entryId) {
+    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_remove
+    send({ type: "research_remove", entryId });
   }
 
   // ─── Outbound — manual ask (ticket 04; Quick Actions/Voice Trigger,
@@ -127,60 +122,48 @@
   //     mechanism) ────────────────────────────────────────────────────────
 
   function submitQuestion() {
+    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_ask
     const question = questionInput.trim();
     if (!question) return;
     questionInput = "";
 
     const entryId = makeResearchEntryId();
-    // Creates the pending entry as real, server-broadcast state immediately
-    // — every peer (including this browser) learns about it only once the
-    // server has actually recorded it, via the research_entry broadcast.
     send({ type: "research_ask", entryId, question });
-    askResearchAssistant(entryId, buildManualAskRequest(question));
+    revealPanel();
+    publishResearchResult(entryId, buildManualAskRequest(question));
   }
 
-  // ─── Outbound — Quick Actions (ticket 05) ───────────────────────────────
-  // Reuses the exact same research_ask/resolve/error mechanism as the
-  // manual ask box above — the only difference is the request body sent to
-  // ticket 02's endpoint (a quickAction, not a voice ask) and the label
-  // used as the entry's `question`.
-
-  function runQuickAction(actionId, label) {
-    const request = buildQuickActionRequest(actionId, quickActionText);
-    // The button is already disabled whenever this would be null (see
-    // canQuickAction above) — this is the same guard, not a second,
-    // possibly-diverging one, so "disabled" and "would refuse to send" can
-    // never disagree.
+  function runCustom() {
+    if (!isHostClaim) return; // strictly host-only — Custom has no RESEARCH_GUEST_CAN_ASK opt-in
+    const request = buildCustomRequest(customText, transcriptLines);
     if (!request) return;
-
     const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question: label });
-    askResearchAssistant(entryId, request);
+    send({ type: "research_ask", entryId, question: "Interpret" });
+    revealPanel();
+    publishResearchResult(entryId, request);
   }
 
-  // ─── Outbound — Research recent conversation (manual validation step for
-  //     the deferred Research Mode pipeline) ─────────────────────────────
-  // Reuses the exact same research_ask/resolve/error mechanism as manual
-  // ask and Quick Actions — only the request body differs (Focus = last 10
-  // minutes as `context`, Grounding = older transcript as `notes`).
-
-  function runResearchRecent() {
-    const request = buildRecentTranscriptRequest(transcriptLines);
-    if (!request) return; // same guard canResearchRecent is built on
-
+  export async function runTurnAction(actionId, turnId) {
+    if (!canAskResearch) return; // same gate (+ RESEARCH_GUEST_CAN_ASK opt-in) as ws-rooms.js's research_ask
+    const request = buildTurnActionRequest(transcriptLines, turnId, actionId);
+    if (!request) return;
     const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question: RESEARCH_RECENT_LABEL });
-    askResearchAssistant(entryId, request);
+    send({ type: "research_ask", entryId, question: TURN_ACTION_LABEL[actionId] || actionId });
+    revealPanel();
+    const posted = await postResearch(request);
+    if (!posted.ok) {
+      send({ type: "research_error", entryId, message: describeResearchError(posted.body) });
+      return;
+    }
+    send({
+      type: "research_resolve",
+      entryId,
+      answer: posted.body?.answer ?? "",
+      citations: posted.body?.citations ?? [],
+    });
   }
 
-  // The browser itself calls ticket 02's endpoint (not the WS server) — see
-  // tests/playwright/helpers.js's mockResearchEndpoint, which fakes exactly
-  // this fetch. Whatever happens — success, a non-2xx response, or a thrown
-  // network error — this always ends by sending research_resolve or
-  // research_error, so a request can never leave its entry stuck pending
-  // with no explanation. Shared by the manual ask box and every Quick
-  // Action button — only the request body they pass in differs.
-  async function askResearchAssistant(entryId, requestBody) {
+  async function postResearch(requestBody) {
     let res;
     try {
       res = await fetch(`/rec/${slug}/research`, {
@@ -189,8 +172,7 @@
         body: JSON.stringify(requestBody),
       });
     } catch {
-      send({ type: "research_error", entryId, message: describeResearchError(null) });
-      return;
+      return { ok: false, body: null };
     }
 
     let body = null;
@@ -199,12 +181,15 @@
     } catch {
       body = null;
     }
+    return { ok: res.ok, body };
+  }
 
-    if (!res.ok) {
+  async function publishResearchResult(entryId, requestBody) {
+    const { ok, body } = await postResearch(requestBody);
+    if (!ok) {
       send({ type: "research_error", entryId, message: describeResearchError(body) });
       return;
     }
-
     send({
       type: "research_resolve",
       entryId,
@@ -238,70 +223,71 @@
   </div>
 
   {#if !collapsed}
-    <form class="research-ask-form" on:submit|preventDefault={submitQuestion}>
-      <input
-        type="text"
-        class="research-ask-input"
-        aria-label="Ask the Research Assistant"
-        placeholder="Ask a question…"
-        bind:value={questionInput}
-      />
-      <button type="submit" class="btn-secondary btn-sm" disabled={!questionInput.trim()}>
-        Ask
-      </button>
-    </form>
-
-    <div class="quick-actions" role="group" aria-label="Quick Actions">
-      {#each QUICK_ACTIONS as action (action.id)}
-        <button
-          type="button"
-          class="btn-secondary btn-sm"
-          disabled={!canQuickAction}
-          title={canQuickAction ? "" : "Nothing to act on — this tab has no text yet"}
-          on:click={() => runQuickAction(action.id, action.label)}
-        >
-          {action.label}
+    {#if canAskResearch}
+      <form class="research-ask-form" on:submit|preventDefault={submitQuestion}>
+        <input
+          type="text"
+          class="research-ask-input"
+          aria-label="Ask the Research Assistant"
+          placeholder="Ask a question…"
+          bind:value={questionInput}
+        />
+        <button type="submit" class="btn-secondary btn-sm" disabled={!questionInput.trim()}>
+          Ask
         </button>
-      {/each}
-    </div>
+      </form>
+    {/if}
 
-    <button
-      type="button"
-      class="btn-secondary btn-sm research-recent-btn"
-      disabled={!canResearchRecent}
-      title={canResearchRecent
-        ? ""
-        : "Nothing to research yet — no conversation captured recently"}
-      on:click={runResearchRecent}
-    >
-      {RESEARCH_RECENT_LABEL}
-    </button>
-
-    <div class="research-entries">
+    {#if isHostClaim}
+      <button
+        type="button"
+        class="btn-secondary btn-sm"
+        disabled={!canCustom}
+        title={canCustom
+          ? "Run Interpretation Mode on this tab's lyrics, then score against the transcript"
+          : "Interpret runs on notes-tab lyrics (not the Transcript tab)"}
+        on:click={runCustom}
+      >
+        Interpret
+      </button>
+    {/if}
+    <div class="research-entries" bind:this={entriesEl}>
       {#if entries.length === 0}
         <p class="research-empty">No research yet for this tab.</p>
       {:else}
         {#each entries as entry (entry.id)}
           <div class="research-entry" data-status={entry.status}>
-            <p class="research-question">{entry.question}</p>
+            <div class="research-entry-header">
+              <p class="research-question">{entry.question}</p>
+              {#if canAskResearch}
+                <button
+                  type="button"
+                  class="btn-ghost btn-icon btn-sm research-remove"
+                  aria-label="Remove this research card"
+                  title="Remove this research card"
+                  on:click={() => removeEntry(entry.id)}
+                >
+                  <XClose />
+                </button>
+              {/if}
+            </div>
             {#if entry.status === "pending"}
-              <p class="research-pending">Thinking…</p>
+              <p class="research-pending" aria-live="polite">Looking this up…</p>
             {:else if entry.status === "answered"}
               {@const card = parseResearchCard(entry.answer)}
               {#if card}
+                {#if card.outputType === "custom"}
+                  <div class="research-interpretation">{card.mainTakeaway}</div>
+                {:else}
                 <div class="research-card">
                   <p class="research-context-summary">{card.contextSummary}</p>
                   <p class="research-answer">{card.mainTakeaway}</p>
-                  {#if card.sources.length}
-                    <p class="research-detail-inline">{card.sources.join(", ")}</p>
-                  {/if}
                 </div>
-              {:else}
-                <p class="research-pending">Nothing new to add.</p>
+                {/if}
               {/if}
               {#if entry.citations?.length}
                 <ul class="research-citations">
-                  {#each entry.citations as citation}
+                  {#each entry.citations as citation (citation.url)}
                     <li>
                       <a href={citation.url} target="_blank" rel="noopener noreferrer">
                         {citation.title || citation.url}
@@ -379,18 +365,6 @@
     border-color: var(--accent);
   }
 
-  .quick-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .research-recent-btn {
-    flex-shrink: 0;
-    align-self: flex-start;
-  }
-
   .research-entries {
     display: flex;
     flex-direction: column;
@@ -413,10 +387,22 @@
     gap: 6px;
   }
 
+  .research-entry-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
   .research-question {
     margin: 0;
     font-weight: 600;
     font-size: 13px;
+    margin-right: auto;
+  }
+
+  .research-remove {
+    flex-shrink: 0;
+    color: var(--muted);
   }
 
   .research-answer {
@@ -439,11 +425,11 @@
     color: var(--muted);
   }
 
-  .research-detail-inline {
-    display: block;
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--muted);
+  .research-interpretation {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: pre-wrap;
   }
 
   .research-card {
@@ -457,11 +443,39 @@
     font-weight: 400;
   }
 
+  .research-entry[data-status="pending"] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  }
+
   .research-pending {
     margin: 0;
     font-size: 13px;
     color: var(--muted);
-    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .research-pending::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+    animation: research-pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes research-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: scale(0.85);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .research-error-text {

@@ -2,7 +2,13 @@
  * Research Card — the field-based shape the model returns (see
  * `.scratch/research-assistant/findings.md`'s system prompt: PROVEN IN
  * TRANSCRIPT, UBIQUITOUS KNOWLEDGE, OUTPUT TYPE, CONTEXT SUMMARY, MAIN
- * TAKEAWAY, SOURCES).
+ * TAKEAWAY). There is deliberately no SOURCES field on the card — the
+ * model's own self-reported sources duplicated (and often contradicted)
+ * `citations`, the ground-truth list of pages OpenRouter's web-search
+ * plugin actually fetched (see research-assistant.js's `citations`,
+ * carried separately on the wire and rendered by ResearchPanel.svelte
+ * under the card, not baked into it). One list, backed by the tool call
+ * that actually happened, beats two.
  *
  * Two different serializations flow through `parseResearchCard`, and it has
  * to handle both: (1) the model's own raw response is plain labeled text,
@@ -32,29 +38,28 @@ export const SUPPRESS_THRESHOLD = 80 // tunable client-side constant, not baked 
 // Action is meant to mean "add one entry here", not "invent a second
 // schema" — same one-schema-many-modes idea the findings doc set out.
 export const MODE_RULES = {
-  factCheck: 'select a claim that was actually asserted as fact by a speaker.',
-  define: 'select a term, concept, or reference named but not explained.',
-  research:
-    "the question asked IS the claim to resolve. Look up and state the actual answer. Never substitute a meta-claim about what a speaker said, knows, or doesn't know — that is transcription, not research. If you cannot determine the real answer, output nothing rather than answering a different, easier question.",
-  keyFacts: 'select the single most checkable, still-open fact worth surfacing.',
-  findExamples: 'select the concrete example the speakers are still looking for, not one they already named.',
-  analyze: 'select the claim or topic most worth a one-line analytical take.'
+  definition:
+    'Explain an obscure word, name, or reference in the FOCUS TURN, including a plausible mishear if the transcript likely garbled it. If nothing needs defining, output nothing.',
+  facts:
+    'Surface general background about what the FOCUS TURN is talking about. Do not say whether the speaker was right. Grounding is only for references — never the subject.',
+  answer:
+    'Reply to a question asked in the FOCUS TURN itself. If that Turn is not a question, output nothing rather than answering a different, easier question.',
+  ask: "The question asked IS the claim to resolve. Look up and state the actual answer. Never substitute a meta-claim about what a speaker said, knows, or doesn't know. If you cannot determine the real answer, output nothing.",
+  custom: 'Follow Interpretation Mode. Tab text is lyrics (Stage 1). Transcript is the human reading (Stage 2 only).'
 }
 
 export const MODES = Object.keys(MODE_RULES)
+export const TURN_ACTION_IDS = ['definition', 'facts', 'answer']
 
 const MAX_SUMMARY_WORDS = 12
 const MAX_TAKEAWAY_WORDS = 35
-const MAX_SOURCES = 2
-const KNOWN_SOURCES = new Set(['Wikipedia', 'Reddit'])
 
 const FIELD_LABELS = [
   ['provenInTranscript', 'PROVEN IN TRANSCRIPT'],
   ['ubiquitousKnowledge', 'UBIQUITOUS KNOWLEDGE'],
   ['outputType', 'OUTPUT TYPE'],
   ['contextSummary', 'CONTEXT SUMMARY'],
-  ['mainTakeaway', 'MAIN TAKEAWAY'],
-  ['sources', 'SOURCES']
+  ['mainTakeaway', 'MAIN TAKEAWAY']
 ]
 
 function clipWords(value, maxWords) {
@@ -62,18 +67,25 @@ function clipWords(value, maxWords) {
   return words.slice(0, maxWords).join(' ')
 }
 
+// The prompt tells the model never to cite inline (citations are reported
+// separately, from the web-search plugin's own annotations — see
+// research-assistant.js), but that's a request, not a guarantee: models
+// keep dropping a markdown link or bare URL into mainTakeaway anyway. Strip
+// it app-side rather than trust compliance, same reasoning as
+// shouldSuppress/matchesMode below.
+function stripInlineCitations(value) {
+  return String(value || '')
+    .replace(/\[[^\]]*\]\((?:https?:\/\/|www\.)[^)]+\)/gi, '') // [label](url) citation, whole thing
+    .replace(/\(?\bhttps?:\/\/\S+\)?/gi, '') // bare URL, with an optional wrapping paren
+    .replace(/\s+([.,;:!?])/g, '$1') // dangling space left before punctuation
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
 function toScore(value) {
   const n = Number(String(value ?? '').trim())
   if (!Number.isFinite(n)) return null
   return Math.max(0, Math.min(100, Math.round(n)))
-}
-
-function toSources(value) {
-  return String(value || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => KNOWN_SOURCES.has(s))
-    .slice(0, MAX_SOURCES)
 }
 
 /**
@@ -114,19 +126,28 @@ function splitFields(text) {
  *  discipline the old skim-card parser used for unlabeled text. */
 export function parseResearchCard(raw) {
   if (raw == null) return null
-  if (typeof raw === 'object') return sanitizeResearchCard(raw)
+  if (typeof raw === 'object') return normalizeEmptyCard(sanitizeResearchCard(raw))
   const text = String(raw).trim()
   if (!text) return null
 
   const parsedJson = tryParseJson(text)
   if (parsedJson === null) return null // serializeResearchCard(null) round-trips to no card
-  if (parsedJson) return sanitizeResearchCard(parsedJson)
+  if (parsedJson) return normalizeEmptyCard(sanitizeResearchCard(parsedJson))
 
   const fields = splitFields(text)
   if (!fields.mainTakeaway && !fields.contextSummary) {
     return sanitizeResearchCard({ mainTakeaway: text })
   }
   return sanitizeResearchCard(fields)
+}
+
+// A forced-JSON reply can't literally be empty the way old plain-text
+// "output nothing" could — the schema always returns a full object. The
+// model signals "nothing survives the mode rule" by leaving contextSummary
+// and mainTakeaway both blank; treat that the same as no card at all.
+function normalizeEmptyCard(card) {
+  if (!card.mainTakeaway && !card.contextSummary) return null
+  return card
 }
 
 // Returns the parsed value for well-formed JSON (including the literal
@@ -147,9 +168,11 @@ export function sanitizeResearchCard(raw) {
     provenInTranscript: toScore(raw?.provenInTranscript),
     ubiquitousKnowledge: toScore(raw?.ubiquitousKnowledge),
     outputType: MODES.includes(raw?.outputType) ? raw.outputType : null,
-    contextSummary: clipWords(raw?.contextSummary, MAX_SUMMARY_WORDS),
-    mainTakeaway: clipWords(raw?.mainTakeaway, MAX_TAKEAWAY_WORDS),
-    sources: Array.isArray(raw?.sources) ? raw.sources.filter((s) => KNOWN_SOURCES.has(s)).slice(0, MAX_SOURCES) : toSources(raw?.sources)
+    contextSummary: clipWords(stripInlineCitations(raw?.contextSummary), MAX_SUMMARY_WORDS),
+    mainTakeaway:
+      raw?.outputType === 'custom'
+        ? stripInlineCitations(raw?.mainTakeaway)
+        : clipWords(stripInlineCitations(raw?.mainTakeaway), MAX_TAKEAWAY_WORDS)
   }
 }
 
@@ -161,9 +184,13 @@ export function serializeResearchCard(card) {
  *  — the model always returns full output; the app decides whether to
  *  render it. Kept as a plain function of a tunable threshold, not baked
  *  into the prompt, so it can be adjusted without a prompt change. */
-export function shouldSuppress(card, threshold = SUPPRESS_THRESHOLD) {
+export function shouldSuppress(card, mode, threshold = SUPPRESS_THRESHOLD) {
   if (!card) return true
-  return (card.provenInTranscript ?? 0) > threshold || (card.ubiquitousKnowledge ?? 0) > threshold
+  if ((card.provenInTranscript ?? 0) > threshold) return true
+  // Ubiquitous knowledge is only a hide-rule for Definition — Facts is
+  // often common background, and Ask/Answer/Custom are explicit requests.
+  if (mode === 'definition' && (card.ubiquitousKnowledge ?? 0) > threshold) return true
+  return false
 }
 
 /** Mode-match verification (findings doc, "App-side logic required" #2) —

@@ -26,7 +26,7 @@ import { createRoom, stubYouTubeApi } from './helpers.js'
 
 test('rejects an unauthenticated request with 410 for an unknown room', async ({ request }) => {
   const res = await request.post('/rec/no-such-room-slug/research', {
-    data: { kind: 'quickAction', actionId: 'define', text: 'hello' }
+    data: { kind: 'voice', query: 'hello', context: '', notes: '' }
   })
   expect(res.status()).toBe(410)
 })
@@ -41,7 +41,7 @@ test('rejects a request with no session cookie with 401 for a real room', async 
   // The bare `request` fixture has its own cookie jar, isolated from any
   // page/context — exactly "no session" for this room.
   const res = await request.post(`/rec/${slug}/research`, {
-    data: { kind: 'quickAction', actionId: 'define', text: 'hello' }
+    data: { kind: 'voice', query: 'hello', context: '', notes: '' }
   })
   expect(res.status()).toBe(401)
 })
@@ -69,7 +69,7 @@ test('returns 500 "not configured" for a valid request when no API key is set', 
   const slug = new URL(roomUrl).pathname.split('/').pop()
 
   const res = await page.request.post(`/rec/${slug}/research`, {
-    data: { kind: 'quickAction', actionId: 'define', text: 'a valid request with nowhere to actually go' }
+    data: { kind: 'voice', query: 'a valid request with nowhere to actually go', context: '', notes: '' }
   })
   expect(res.status()).toBe(500)
   const body = await res.json()
