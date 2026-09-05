@@ -139,6 +139,7 @@ test('Interpret bundles a loaded video title ahead of notes into {current_tab}',
     const requests = await captureResearchRequests(page)
     await page.getByLabel('Shared notes — visible to everyone in the room…').fill('the lyrics')
     await loadVideo(page)
+    await expect.poll(() => page.evaluate(() => window.__ytTitle || '')).toBe('Stub YouTube Title')
     await expect(page.getByRole('button', { name: 'Interpret' })).toBeEnabled()
     await page.getByRole('button', { name: 'Interpret' }).click()
     await expect.poll(() => requests.at(0)?.text).toBe('Video: Stub YouTube Title\n\nthe lyrics')

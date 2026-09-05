@@ -129,10 +129,11 @@ export async function stubYouTubeApi(page) {
         return this._duration
       }
       getVideoData() {
-        return {
-          video_id: this._videoId,
-          title: this._videoId ? 'Stub YouTube Title' : ''
-        }
+        const title = this._videoId ? 'Stub YouTube Title' : ''
+        // Specs that bundle {current_tab} wait on this — Play/Pause is
+        // visible from shared tab_video *before* onReady reports a title.
+        window.__ytTitle = title
+        return { video_id: this._videoId, title }
       }
       getPlayerState() {
         return this._state
@@ -231,12 +232,17 @@ export async function passRecordingCheck(page) {
 export async function saveResearchPrompt(page, text, title = 'Interpret') {
   await page.goto('/')
   await unlockIfNeeded(page)
-  const promptTab = page.getByRole('button', { name: 'Prompt' })
-  await promptTab.waitFor()
-  await promptTab.click()
+  const promptTab = page.getByRole('button', { name: 'Prompt', exact: true })
   const textarea = page.locator('textarea[name="research-prompt"]')
   const titleInput = page.locator('input[name="research-prompt-title"]')
-  await textarea.waitFor()
+  // Same hydration race as openCreateRoom: Prompt is in the SSR HTML
+  // before on:click is attached. A single click can no-op and then
+  // textarea.waitFor() burns the full test timeout.
+  await expect(async () => {
+    if (await textarea.isVisible()) return
+    await promptTab.click()
+    await expect(textarea).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
   const previous = {
     prompt: await textarea.inputValue(),
     title: await titleInput.inputValue()
@@ -244,7 +250,9 @@ export async function saveResearchPrompt(page, text, title = 'Interpret') {
   await titleInput.fill(title)
   await textarea.fill(text)
   await page.getByRole('button', { name: 'Save Research Prompt' }).click()
-  await expect(page.getByRole('button', { name: 'Prompt' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save Research Prompt' })).toBeEnabled()
+  await expect(titleInput).toHaveValue(title)
+  await expect(textarea).toHaveValue(text)
   return previous
 }
 
