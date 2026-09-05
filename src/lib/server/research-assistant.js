@@ -156,6 +156,14 @@ function researchCardSchema(mode) {
   }
 }
 
+// The unsubstituted Research Prompt (see CONTEXT.md) — logged even when
+// this call did not send it (Turn Actions / Ask), so the Eval Log is a
+// snapshot of what was configured, not only what went to the model.
+function researchPromptForLog(request) {
+  if (request.kind === 'custom') return String(request.instruction || '')
+  return String(request.researchPrompt ?? '')
+}
+
 function buildRequestBody(request, pressTime) {
   const { mode, messages } = buildMessages(request, pressTime)
   return {
@@ -257,6 +265,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
       kind: request.kind,
       mode,
       ...usageMeta,
+      researchPrompt: researchPromptForLog(request),
       messages,
       raw,
       card,
@@ -274,6 +283,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     kind: request.kind,
     mode,
     ...usageMeta,
+    researchPrompt: researchPromptForLog(request),
     messages,
     raw,
     card,

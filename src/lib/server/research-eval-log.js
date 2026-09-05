@@ -21,8 +21,13 @@ export async function appendResearchEvalLog(entry, { env = process.env, appendFi
   const path = researchEvalLogPath(env)
   try {
     await mkdirImpl(dirname(path), { recursive: true })
-    await appendFileImpl(path, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, 'utf8')
-  } catch {
-    // Logging must never fail a lookup.
+    const line = JSON.stringify({ at: new Date().toISOString(), ...entry }, (_key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    )
+    await appendFileImpl(path, `${line}\n`, 'utf8')
+  } catch (err) {
+    // Logging must never fail a lookup — but a silent drop is how Custom
+    // (large prompt + lyrics) would vanish from the file with no trace.
+    console.error('[research-eval-log] failed to append', path, err)
   }
 }

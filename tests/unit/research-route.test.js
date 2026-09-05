@@ -106,8 +106,26 @@ describe('POST /rec/[slug]/research — success', () => {
     expect(await res.json()).toEqual({ answer: 'The answer.', citations: [{ url: 'https://x.test', title: 'X' }] })
     expect(askResearchAssistant).toHaveBeenCalledTimes(1)
     const [passedRequest, options] = askResearchAssistant.mock.calls[0]
-    expect(passedRequest).toEqual(body)
+    expect(passedRequest).toEqual({ ...body, researchPrompt: '' })
     expect(options.fetchImpl).toBe(fakeFetch)
+  })
+
+  it('stamps the stored Research Prompt onto every lookup so the eval log can record it', async () => {
+    setResearchPrompt('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
+    const cookies = await authedCookies()
+    const { POST } = await loadRoute()
+    askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
+
+    await POST({
+      params: { slug: SLUG },
+      cookies,
+      fetch: fakeFetch,
+      request: { json: async () => ({ kind: 'turnAction', actionId: 'facts', focus: 'Host: hello', grounding: '' }) }
+    })
+
+    const [passedRequest] = askResearchAssistant.mock.calls[0]
+    expect(passedRequest.researchPrompt).toBe('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
+    expect(passedRequest.kind).toBe('turnAction')
   })
 })
 

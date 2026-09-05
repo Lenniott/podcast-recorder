@@ -369,6 +369,51 @@ describe('askResearchAssistant — response shaping', () => {
     expect(entry.durationMs).toBeGreaterThanOrEqual(0)
   })
 
+  it('logs the unsubstituted Research Prompt even when the call itself is Ask or a Turn Action', async () => {
+    appendResearchEvalLog.mockClear()
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant(
+      {
+        kind: 'voice',
+        query: 'the Monroe Doctrine',
+        context: '',
+        notes: '',
+        researchPrompt: 'Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.'
+      },
+      { fetchImpl }
+    )
+
+    const [entry] = appendResearchEvalLog.mock.calls[0]
+    expect(entry.researchPrompt).toBe('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
+    // The prompt was not sent on this Ask — messages stay the built-in system + question.
+    expect(entry.messages.some((m) => String(m.content).includes('AI TSIA'))).toBe(false)
+  })
+
+  it('logs the Research Prompt template for Custom, not the placeholder-substituted message', async () => {
+    appendResearchEvalLog.mockClear()
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse({
+        choices: [{ message: { content: 'This song is about grief.', annotations: [] } }]
+      })
+    )
+
+    await askResearchAssistant(
+      {
+        kind: 'custom',
+        instruction: 'Read {current_tab} against {transcript} and give a TSIA.',
+        text: 'verse one about the river',
+        transcript: 'Host: I think it is about grief'
+      },
+      { fetchImpl }
+    )
+
+    const [entry] = appendResearchEvalLog.mock.calls[0]
+    expect(entry.researchPrompt).toBe('Read {current_tab} against {transcript} and give a TSIA.')
+    expect(entry.messages[0].content).toContain('verse one about the river')
+    expect(entry.messages[0].content).not.toContain('{current_tab}')
+  })
+
   it('discards the answer and citations when the model returns nothing (no claim survived selection)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: 'nothing useful here, no fields at all' })))
 

@@ -77,6 +77,11 @@ export async function POST({ params, request, cookies, fetch }) {
   const validated = validateRequestBody(body)
   if (!validated) return json({ error: 'invalid-request' }, { status: 400 })
 
+  // Stamped onto every lookup so the Research Eval Log can record the
+  // configured Research Prompt even when this call did not send it
+  // (Turn Actions / Ask). Custom still uses it as the whole request.
+  validated.researchPrompt = getResearchPrompt()
+
   if (validated.kind === 'custom') {
     // Same gate as ws-rooms.js's research_ask/research_remove — Guest
     // Research Access covers Custom exactly like Ask and Turn Actions, no
@@ -85,7 +90,7 @@ export async function POST({ params, request, cookies, fetch }) {
     if (!isHost && !room.guest_ai_allowed) {
       return json({ error: 'forbidden' }, { status: 403 })
     }
-    validated.instruction = getResearchPrompt()
+    validated.instruction = validated.researchPrompt
   }
 
   try {

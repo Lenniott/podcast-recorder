@@ -22,6 +22,7 @@ Thumbs.db
 # scripts/research-eval.js output — ephemeral; cases live in the script.
 .eval-runs/
 .research-eval-logs/
+.analyrical/
 # Playwright
 test-results/
 playwright-report/
