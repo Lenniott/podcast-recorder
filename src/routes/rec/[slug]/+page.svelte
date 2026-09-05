@@ -983,6 +983,7 @@
     isHostClaim={data.isHostClaim}
     guestCanAskResearch={data.guestCanAskResearch}
     customEnabled={data.customEnabled}
+    customTitle={data.customTitle}
     roomPassword={data.roomPassword}
     {wsStatus}
     {peers}

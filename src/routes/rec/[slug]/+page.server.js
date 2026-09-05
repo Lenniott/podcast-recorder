@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { deleteRoom, getRoomBySlug, getResearchPrompt } from '$lib/server/db.js'
+import { deleteRoom, getRoomBySlug, getResearchPrompt, getResearchPromptTitle } from '$lib/server/db.js'
+import { isCustomEnabled } from '$lib/home/research-prompt.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
@@ -47,7 +48,8 @@ export async function load({ params, cookies }) {
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
     isHostClaim,
     guestCanAskResearch: !!room.guest_ai_allowed,
-    customEnabled: !!getResearchPrompt().trim(),
+    customEnabled: isCustomEnabled(getResearchPrompt(), getResearchPromptTitle()),
+    customTitle: getResearchPromptTitle(),
     createdAt: room.created_at,
     roomPassword: isHostClaim ? (room.password_plain || null) : null
   }

@@ -32,6 +32,7 @@
   export let isHostClaim = false;
   export let guestCanAskResearch = false;
   export let customEnabled = false;
+  export let customTitle = "";
   export let roomPassword = "";
   export let wsStatus = "disconnected";
   export let peers = [];
@@ -153,6 +154,7 @@
     {isHostClaim}
     {guestCanAskResearch}
     {customEnabled}
+    {customTitle}
     bind:collapsed={researchCollapsed}
     bind:this={researchPanel}
     bind:doneActionsByTurn

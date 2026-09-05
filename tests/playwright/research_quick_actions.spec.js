@@ -94,10 +94,10 @@ test('empty Turn Action lookups do not leave a skim card in the panel', async ({
   await page.close()
 })
 
-test('Interpret follows Guest Research Access; empty Research Prompt hides it', async ({ browser }) => {
+test('Interpret follows Guest Research Access; empty Research Prompt or Title hides it', async ({ browser }) => {
   const host = await browser.newPage()
   await stubYouTubeApi(host)
-  const previousPrompt = await saveResearchPrompt(host, '')
+  const previous = await saveResearchPrompt(host, '')
 
   try {
     const password = 'custom-host'
@@ -110,7 +110,12 @@ test('Interpret follows Guest Research Access; empty Research Prompt hides it', 
     await expect(host.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
     await expect(guest.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
 
-    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}')
+    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}', '')
+    await host.goto(roomUrl)
+    await roomTabsReady(host)
+    await expect(host.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
+
+    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}', 'Interpret')
     await host.goto(roomUrl)
     await roomTabsReady(host)
     await guest.reload()
@@ -121,7 +126,7 @@ test('Interpret follows Guest Research Access; empty Research Prompt hides it', 
 
     await guest.close()
   } finally {
-    await saveResearchPrompt(host, previousPrompt)
+    await saveResearchPrompt(host, previous.prompt, previous.title)
     await host.close()
   }
 })

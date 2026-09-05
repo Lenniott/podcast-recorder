@@ -159,21 +159,32 @@ export async function fillField(locator, value) {
  */
 export async function unlockIfNeeded(page) {
   const site = page.getByRole('textbox', { name: 'Site Password' })
-  const episode = page.locator('#room-episode-name')
-  await expect(site.or(episode)).toBeVisible({ timeout: 15_000 })
+  const newRoom = page.getByRole('button', { name: 'New room' })
+  await expect(site.or(newRoom)).toBeVisible({ timeout: 15_000 })
   if (await site.isVisible()) {
     const pw = process.env.SITE_PASSWORD
     if (!pw) throw new Error('SITE_PASSWORD is not set but the site gate is showing')
     await site.fill(pw)
     await page.getByRole('button', { name: 'Unlock' }).click()
     const blocked = page.getByText(/Too many requests/i)
-    await expect(episode.or(blocked)).toBeVisible({ timeout: 15_000 })
+    await expect(newRoom.or(blocked)).toBeVisible({ timeout: 15_000 })
     if (await blocked.isVisible()) {
       throw new Error(
         'Site unlock hit the rate limiter. Stop `npm run dev` so Playwright can start its own server, or wait a minute and re-run.'
       )
     }
   }
+}
+
+export async function openCreateRoom(page) {
+  const newRoom = page.getByRole('button', { name: 'New room' })
+  await expect(newRoom).toBeVisible()
+  // First click after a cold home compile can land before the button's
+  // on:click is hydrated; retry until the overlay is actually in the DOM.
+  await expect(async () => {
+    await newRoom.click()
+    await expect(page.locator('#room-episode-name')).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
 }
 
 /**
@@ -208,21 +219,30 @@ export async function passRecordingCheck(page) {
   await expect(overlay).toBeHidden()
 }
 
-export async function saveResearchPrompt(page, text) {
+export async function saveResearchPrompt(page, text, title = 'Interpret') {
   await page.goto('/')
   await unlockIfNeeded(page)
+  const promptTab = page.getByRole('button', { name: 'Prompt' })
+  await promptTab.waitFor()
+  await promptTab.click()
   const textarea = page.locator('textarea[name="research-prompt"]')
+  const titleInput = page.locator('input[name="research-prompt-title"]')
   await textarea.waitFor()
-  const previous = await textarea.inputValue()
+  const previous = {
+    prompt: await textarea.inputValue(),
+    title: await titleInput.inputValue()
+  }
+  await titleInput.fill(title)
   await textarea.fill(text)
   await page.getByRole('button', { name: 'Save Research Prompt' }).click()
-  await expect(page.getByRole('button', { name: 'Save Research Prompt' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Prompt' })).toBeVisible()
   return previous
 }
 
 export async function createRoom(page, { name, password, hostDisplayName = 'Host', guestAiAllowed = false }) {
   await page.goto('/')
   await unlockIfNeeded(page)
+  await openCreateRoom(page)
   await fillField(page.locator('#room-episode-name'), name)
   await fillField(page.locator('#room-episode-code'), password)
   if (guestAiAllowed) {

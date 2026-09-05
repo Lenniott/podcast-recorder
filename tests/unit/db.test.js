@@ -8,10 +8,14 @@ import db, {
   deleteRoom,
   deleteRoomContent,
   getActiveRoomBySlug,
+  getResearchPrompt,
+  getResearchPromptTitle,
   getRoomBySlug,
   loadRoomContent,
   roomExists,
   saveRoomContent,
+  setResearchPrompt,
+  setResearchPromptTitle,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -199,5 +203,25 @@ describe('room content durable store (Room State Store\'s durable adapter)', () 
     expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
 
     expect(loadRoomContent(ROOM.slug)).toBeNull()
+  })
+})
+
+describe('Research Prompt settings', () => {
+  it('returns empty strings when unset', () => {
+    expect(getResearchPrompt()).toBe('')
+    expect(getResearchPromptTitle()).toBe('')
+  })
+
+  it('stores and reads back the Research Prompt and its Title', () => {
+    setResearchPrompt('Read {current_tab}.')
+    setResearchPromptTitle('  Interpret  ')
+    expect(getResearchPrompt()).toBe('Read {current_tab}.')
+    expect(getResearchPromptTitle()).toBe('Interpret')
+  })
+
+  it('overwrites rather than duplicating', () => {
+    setResearchPromptTitle('Interpret')
+    setResearchPromptTitle('TSIA')
+    expect(getResearchPromptTitle()).toBe('TSIA')
   })
 })

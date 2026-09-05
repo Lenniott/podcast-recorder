@@ -67,6 +67,7 @@ describe('+page.server', () => {
         notFound: false,
         expired: false,
         researchPrompt: '',
+        researchPromptTitle: '',
         usageDashboard: { totals: { calls: 0, tokens: 0, cost: 0 }, rooms: [] }
       })
     })
@@ -276,6 +277,65 @@ describe('+page.server', () => {
       expect(host.options).toMatchObject({
         httpOnly: true,
         secure: true
+      })
+    })
+  })
+
+  describe('actions.save_research_prompt', () => {
+    it('persists the Research Prompt and Title then redirects home', async () => {
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () => actions.save_research_prompt({
+          request: formRequest({
+            'research-prompt': 'Read {current_tab}.',
+            'research-prompt-title': '  Interpret  '
+          }),
+          cookies: makeCookies()
+        }),
+        303,
+        '/'
+      )
+      expect(roomsDb.getResearchPrompt()).toBe('Read {current_tab}.')
+      expect(roomsDb.getResearchPromptTitle()).toBe('Interpret')
+    })
+
+    it('rejects a title over 40 characters without writing', async () => {
+      roomsDb.setResearchPrompt('kept')
+      roomsDb.setResearchPromptTitle('Interpret')
+      const { actions } = await loadPage()
+      const title = 't'.repeat(41)
+      const result = await actions.save_research_prompt({
+        request: formRequest({
+          'research-prompt': 'new prompt',
+          'research-prompt-title': title
+        }),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 400,
+        data: {
+          promptError: 'Title too long (max 40 chars)',
+          researchPrompt: 'new prompt',
+          researchPromptTitle: title
+        }
+      })
+      expect(roomsDb.getResearchPrompt()).toBe('kept')
+      expect(roomsDb.getResearchPromptTitle()).toBe('Interpret')
+    })
+
+    it('rejects save when the site is locked and there is no site cookie', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      const { actions } = await loadPage()
+      const result = await actions.save_research_prompt({
+        request: formRequest({
+          'research-prompt': 'nope',
+          'research-prompt-title': 'Nope'
+        }),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 403,
+        data: { promptError: 'Not authorised.' }
       })
     })
   })

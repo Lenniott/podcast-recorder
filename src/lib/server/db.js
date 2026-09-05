@@ -67,12 +67,11 @@ function getDb() {
     )
   `)
 
-  // Deployment-wide settings — one row per key. Currently holds only the
-  // Research Prompt (see CONTEXT.md), replacing the retired
+  // Deployment-wide settings — one row per key. Holds the Research Prompt
+  // and Research Prompt Title (see CONTEXT.md), replacing the retired
   // RESEARCH_CUSTOM_PROMPT env var and the hardcoded INTERPRETATION_MODE_PROMPT
   // constant. A key/value shape (rather than a dedicated column-per-setting
-  // table) because this is expected to be the only deployment-wide setting
-  // for a while, and doesn't want a migration every time a new one appears.
+  // table) so a new setting is another row, not a migration.
   _db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
@@ -156,8 +155,9 @@ export function deleteRoomContent(slug) {
 }
 
 const RESEARCH_PROMPT_KEY = 'research_prompt'
+const RESEARCH_PROMPT_TITLE_KEY = 'research_prompt_title'
 
-/** The Research Prompt (see CONTEXT.md) — '' when unset, meaning Custom is disabled. */
+/** The Research Prompt (see CONTEXT.md) — '' when unset. Custom also needs a Title. */
 export function getResearchPrompt() {
   const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(RESEARCH_PROMPT_KEY)
   return row ? row.value : ''
@@ -168,6 +168,19 @@ export function setResearchPrompt(value) {
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(RESEARCH_PROMPT_KEY, String(value ?? ''))
+}
+
+/** The Research Prompt Title — Custom's button label. '' when unset. */
+export function getResearchPromptTitle() {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(RESEARCH_PROMPT_TITLE_KEY)
+  return row ? row.value : ''
+}
+
+export function setResearchPromptTitle(value) {
+  getDb().prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(RESEARCH_PROMPT_TITLE_KEY, String(value ?? '').trim())
 }
 
 /** One row per askResearchAssistant call — see ADR-0007. Never throws into

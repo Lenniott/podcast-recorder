@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import db, {
   createRoom,
   getRoomBySlug,
+  setResearchPrompt,
+  setResearchPromptTitle,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -178,6 +180,23 @@ describe('rec/[slug]/+page.server', () => {
       const data = await load({ params: { slug: SLUG }, cookies })
       expect(data.isHostClaim).toBe(false)
       expect(data.roomPassword).toBeNull()
+    })
+
+    it('keeps Custom off until both Research Prompt and Title are set', async () => {
+      await seedRoom()
+      const { load } = await loadPage()
+      const empty = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(empty.customEnabled).toBe(false)
+      expect(empty.customTitle).toBe('')
+
+      setResearchPrompt('Read {current_tab}.')
+      const promptOnly = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(promptOnly.customEnabled).toBe(false)
+
+      setResearchPromptTitle('Interpret')
+      const both = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(both.customEnabled).toBe(true)
+      expect(both.customTitle).toBe('Interpret')
     })
   })
 

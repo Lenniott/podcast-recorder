@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { createRoom, getRoomBySlug, getResearchPrompt, setResearchPrompt } from '$lib/server/db.js'
+import { createRoom, getRoomBySlug, getResearchPrompt, getResearchPromptTitle, setResearchPrompt, setResearchPromptTitle } from '$lib/server/db.js'
+import { RESEARCH_PROMPT_TITLE_MAX_LENGTH } from '$lib/home/research-prompt.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
@@ -43,6 +44,7 @@ export async function load({ cookies, url }) {
     // Only computed once past that gate: it's a handful of DB/filesystem
     // reads per room and has no reason to run for an unauthenticated hit.
     researchPrompt: siteAuthed ? getResearchPrompt() : '',
+    researchPromptTitle: siteAuthed ? getResearchPromptTitle() : '',
     usageDashboard: siteAuthed ? getUsageDashboard(env) : null
   }
 }
@@ -80,7 +82,17 @@ export const actions = {
       return fail(403, { promptError: 'Not authorised.' })
     }
     const data = await request.formData()
-    setResearchPrompt(String(data.get('research-prompt') || ''))
+    const researchPrompt = String(data.get('research-prompt') || '')
+    const researchPromptTitle = String(data.get('research-prompt-title') || '').trim()
+    if (researchPromptTitle.length > RESEARCH_PROMPT_TITLE_MAX_LENGTH) {
+      return fail(400, {
+        promptError: `Title too long (max ${RESEARCH_PROMPT_TITLE_MAX_LENGTH} chars)`,
+        researchPrompt,
+        researchPromptTitle
+      })
+    }
+    setResearchPrompt(researchPrompt)
+    setResearchPromptTitle(researchPromptTitle)
     throw redirect(303, '/')
   },
 

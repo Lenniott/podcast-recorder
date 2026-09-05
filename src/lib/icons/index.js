@@ -3,6 +3,7 @@ export { default as Ban } from "./SlashCircle01.svelte";
 export { default as Clap } from "./BookmarkAdd.svelte";
 export { default as Clipboard } from "./ClipboardPlus.svelte";
 export { default as Headphones } from "./Headphones02.svelte";
+export { default as HomeRecorLogo } from "./HomeRecorLogo.svelte";
 export { default as Lock } from "./Lock01.svelte";
 export { default as Mic } from "./Microphone02.svelte";
 export { default as Monitor } from "./Monitor02.svelte";

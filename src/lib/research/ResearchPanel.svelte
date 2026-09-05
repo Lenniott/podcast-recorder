@@ -71,10 +71,11 @@
 
   $: canAskResearch = isHostClaim || guestCanAskResearch;
 
-  // Whether the Research Prompt (see CONTEXT.md) is configured at all —
-  // set on the create-room page, not per-room. Custom stays disabled
-  // (regardless of canAskResearch) until it is.
+  // Whether Custom is configured at all (Research Prompt + Title — see
+  // CONTEXT.md). Set on the create-room page, not per-room. Custom stays
+  // disabled (regardless of canAskResearch) until both are set.
   export let customEnabled = false;
+  export let customTitle = "";
 
   let activeTabId = null;
   let entriesByTab = {};
@@ -178,7 +179,7 @@
     const request = buildCustomRequest(customText, transcriptLines);
     if (!request) return;
     const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question: "Interpret" });
+    send({ type: "research_ask", entryId, question: customTitle });
     revealPanel();
     publishResearchResult(entryId, request);
   }
@@ -310,10 +311,10 @@
         disabled={!canCustom}
         title={canCustom
           ? "Run the Research Prompt against this tab's text and the transcript"
-          : "Interpret runs on notes-tab text (not the Transcript tab)"}
+          : "Custom runs on notes-tab text (not the Transcript tab)"}
         on:click={runCustom}
       >
-        Interpret
+        {customTitle}
       </button>
     {/if}
     <div class="research-entries" bind:this={entriesEl}>
