@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets, saveResearchPrompt, roomTabsReady } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets, saveResearchPrompt, roomTabsReady, loadVideo } from './helpers.js'
 
 function cardAnswer(takeaway, mode = 'facts') {
   return JSON.stringify({
@@ -128,5 +128,22 @@ test('Interpret follows Guest Research Access; empty Research Prompt or Title hi
   } finally {
     await saveResearchPrompt(host, previous.prompt, previous.title)
     await host.close()
+  }
+})
+
+test('Interpret bundles a loaded video title ahead of notes into {current_tab}', async ({ page }) => {
+  await stubYouTubeApi(page)
+  const previous = await saveResearchPrompt(page, 'E2E {current_tab}')
+  try {
+    await createRoom(page, { name: `E2E VideoTitle ${Date.now()}`, password: 'video-title' })
+    const requests = await captureResearchRequests(page)
+    await page.getByLabel('Shared notes — visible to everyone in the room…').fill('the lyrics')
+    await loadVideo(page)
+    await expect(page.getByRole('button', { name: 'Interpret' })).toBeEnabled()
+    await page.getByRole('button', { name: 'Interpret' }).click()
+    await expect.poll(() => requests.at(0)?.text).toBe('Video: Stub YouTube Title\n\nthe lyrics')
+    expect(requests[0].kind).toBe('custom')
+  } finally {
+    await saveResearchPrompt(page, previous.prompt, previous.title)
   }
 })

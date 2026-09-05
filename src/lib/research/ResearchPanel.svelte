@@ -21,6 +21,7 @@
     applyTranscriptState as reduceTranscriptState,
     applyTranscriptLine as reduceTranscriptLine,
     activeNotesTabText,
+    activeTabVideoTitle,
     hasCustomText,
     describeResearchError,
     makeResearchEntryId,
@@ -60,6 +61,8 @@
   // would stay disabled/stale forever. Reading RoomTabs' own state
   // directly avoids the asymmetry entirely.
   export let tabTexts = {};
+  // tabId -> YouTube title from RoomTabs' player (not room-shared).
+  export let tabVideoTitles = {};
   export let isHostClaim = false;
 
   // Guest Research Access (see CONTEXT.md) — a per-room flag set at room
@@ -91,8 +94,9 @@
 
   let transcriptLines = [];
 
-  $: customText = activeNotesTabText(tabTexts, activeTabId);
-  $: canCustom = canAskResearch && customEnabled && hasCustomText(customText);
+  $: notesText = activeNotesTabText(tabTexts, activeTabId);
+  $: videoTitle = activeTabVideoTitle(tabVideoTitles, activeTabId);
+  $: canCustom = canAskResearch && customEnabled && hasCustomText(notesText, videoTitle);
 
   let questionInput = "";
   let entriesEl;
@@ -165,18 +169,18 @@
     const entryId = makeResearchEntryId();
     send({ type: "research_ask", entryId, question });
     revealPanel();
-    // customText/transcriptLines ride along only as Placeholder ingredients
-    // ({current_tab}/{transcript} — see CONTEXT.md) — substitution itself
-    // happens server-side (research-assistant.js), never here.
+    // notes/video title/transcriptLines ride along only as Placeholder
+    // ingredients ({current_tab}/{transcript} — see CONTEXT.md) —
+    // substitution itself happens server-side (research-assistant.js).
     publishResearchResult(
       entryId,
-      buildManualAskRequest(question, customText, transcriptLines),
+      buildManualAskRequest(question, notesText, transcriptLines, videoTitle),
     );
   }
 
   function runCustom() {
     if (!canAskResearch || !customEnabled) return;
-    const request = buildCustomRequest(customText, transcriptLines);
+    const request = buildCustomRequest(notesText, transcriptLines, videoTitle);
     if (!request) return;
     const entryId = makeResearchEntryId();
     send({ type: "research_ask", entryId, question: customTitle });
@@ -310,8 +314,8 @@
         class="btn-secondary btn-sm"
         disabled={!canCustom}
         title={canCustom
-          ? "Run the Research Prompt against this tab's text and the transcript"
-          : "Custom runs on notes-tab text (not the Transcript tab)"}
+          ? "Run the Research Prompt against this tab and the transcript"
+          : "Custom runs on a notes tab (video title and/or notes — not the Transcript tab)"}
         on:click={runCustom}
       >
         {customTitle}

@@ -83,13 +83,13 @@ export function isSkimVisibleEntry(entry) {
  * server-side (research-assistant.js) if the asker wrote a `{current_tab}`/
  * `{transcript}` Placeholder into `query` themselves (see CONTEXT.md).
  */
-export function buildManualAskRequest(question, currentTabText = '', transcriptLines = []) {
+export function buildManualAskRequest(question, currentTabText = '', transcriptLines = [], videoTitle = '') {
   return {
     kind: 'voice',
     query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN),
     context: '',
     notes: '',
-    currentTab: String(currentTabText || '').slice(0, MAX_TAB_TEXT_LEN),
+    currentTab: formatCurrentTabContext(currentTabText, videoTitle).slice(0, MAX_TAB_TEXT_LEN),
     transcript: joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
   }
 }
@@ -190,12 +190,30 @@ export function activeNotesTabText(tabTexts, activeTabId) {
   return tabTexts[activeTabId] || ''
 }
 
-export function hasCustomText(text) {
-  return !!String(text || '').trim()
+/** YouTube title for the active notes tab, if the player has reported one. */
+export function activeTabVideoTitle(tabVideoTitles, activeTabId) {
+  if (!activeTabId || activeTabId === TRANSCRIPT_TAB_ID) return ''
+  return String(tabVideoTitles?.[activeTabId] || '').trim()
 }
 
-export function buildCustomRequest(text, transcriptLines) {
-  const trimmed = String(text || '').trim().slice(0, MAX_TAB_TEXT_LEN)
+/**
+ * `{current_tab}` body: video title first (when known), then notes.
+ * A missing title is omitted rather than leaving an empty "Video:" line.
+ */
+export function formatCurrentTabContext(notesText = '', videoTitle = '') {
+  const notes = String(notesText || '')
+  const title = String(videoTitle || '').trim()
+  const notesBody = notes.trim() ? notes : ''
+  if (!title) return notes
+  return notesBody ? `Video: ${title}\n\n${notesBody}` : `Video: ${title}`
+}
+
+export function hasCustomText(text, videoTitle = '') {
+  return !!formatCurrentTabContext(text, videoTitle).trim()
+}
+
+export function buildCustomRequest(text, transcriptLines, videoTitle = '') {
+  const trimmed = formatCurrentTabContext(text, videoTitle).trim().slice(0, MAX_TAB_TEXT_LEN)
   if (!trimmed) return null
   const transcript = joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
   return { kind: 'custom', text: trimmed, transcript }

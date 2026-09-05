@@ -16,6 +16,10 @@
   // two-way bound so it can be handed to ResearchPanel as a plain prop
   // (see RoomTabs.svelte's own comment on `export let tabTexts`).
   export let tabTexts = {};
+  // tabId -> YouTube title — RoomTabs owns the player-local copy, bound
+  // sideways into ResearchPanel so `{current_tab}` can bundle it. Nothing
+  // above RecordingRoom needs this (unlike tabTexts).
+  let tabVideoTitles = {};
   // turnId -> actionId[] — ResearchPanel's own derived, room-shared "which
   // Turn Actions already ran" (see its own doc comment on the prop of the
   // same name). Local to this component, unlike tabTexts: nothing above
@@ -142,6 +146,7 @@
       {transcriptionStatus}
       bind:this={roomTabs}
       bind:tabTexts
+      bind:tabVideoTitles
       {doneActionsByTurn}
       onTurnAction={(actionId, turnId) => researchPanel?.runTurnAction?.(actionId, turnId)}
     />
@@ -151,6 +156,7 @@
     {send}
     {slug}
     {tabTexts}
+    {tabVideoTitles}
     {isHostClaim}
     {guestCanAskResearch}
     {customEnabled}

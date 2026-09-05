@@ -61,6 +61,7 @@ export async function stubYouTubeApi(page) {
     class FakePlayer {
       constructor(_el, opts) {
         this._opts = opts
+        this._videoId = opts?.videoId || ''
         this._time = 0
         this._duration = 120
         this._volume = 100
@@ -85,6 +86,7 @@ export async function stubYouTubeApi(page) {
         this._muted = false
       }
       loadVideoById(id, start) {
+        this._videoId = id
         // Simulate a real YouTube iframe's buffering lag: getCurrentTime()
         // doesn't actually reach `start` until the seek settles a moment
         // later. Reading it synchronously right after load — which is
@@ -102,6 +104,7 @@ export async function stubYouTubeApi(page) {
         }, 2000)
       }
       cueVideoById(id, start) {
+        this._videoId = id
         this._time = start || 0
         this._state = 2
         window.__ytPosition = this._time
@@ -124,6 +127,12 @@ export async function stubYouTubeApi(page) {
       }
       getDuration() {
         return this._duration
+      }
+      getVideoData() {
+        return {
+          video_id: this._videoId,
+          title: this._videoId ? 'Stub YouTube Title' : ''
+        }
       }
       getPlayerState() {
         return this._state

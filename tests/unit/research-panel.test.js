@@ -10,6 +10,8 @@ import {
   applyTranscriptState,
   applyTranscriptLine,
   activeNotesTabText,
+  activeTabVideoTitle,
+  formatCurrentTabContext,
   hasCustomText,
   isSkimVisibleEntry,
   describeResearchError,
@@ -159,6 +161,11 @@ describe('buildManualAskRequest', () => {
     expect(result.currentTab).toBe('the active tab text')
     expect(result.transcript).toBe('Host: hello there')
   })
+
+  it('bundles a video title ahead of notes into currentTab when one is available', () => {
+    const result = buildManualAskRequest('Summarize {current_tab}', 'the lyrics', [], 'Never Gonna Give You Up')
+    expect(result.currentTab).toBe('Video: Never Gonna Give You Up\n\nthe lyrics')
+  })
 })
 
 describe('applyTranscriptState/applyTranscriptLine', () => {
@@ -231,6 +238,44 @@ describe('activeNotesTabText / Custom', () => {
   it('hasCustomText is true only for non-whitespace', () => {
     expect(hasCustomText('notes')).toBe(true)
     expect(hasCustomText('   ')).toBe(false)
+  })
+})
+
+describe('formatCurrentTabContext / video title', () => {
+  it('is notes-only when there is no video title', () => {
+    expect(formatCurrentTabContext('the lyrics', '')).toBe('the lyrics')
+    expect(formatCurrentTabContext('the lyrics')).toBe('the lyrics')
+  })
+
+  it('puts Video: title first, then notes, when a title is available', () => {
+    expect(formatCurrentTabContext('the lyrics', 'Never Gonna Give You Up')).toBe(
+      'Video: Never Gonna Give You Up\n\nthe lyrics'
+    )
+  })
+
+  it('is title-only when notes are empty', () => {
+    expect(formatCurrentTabContext('', 'Never Gonna Give You Up')).toBe('Video: Never Gonna Give You Up')
+    expect(formatCurrentTabContext('   ', 'Never Gonna Give You Up')).toBe('Video: Never Gonna Give You Up')
+  })
+
+  it('ignores a whitespace-only title', () => {
+    expect(formatCurrentTabContext('the lyrics', '   ')).toBe('the lyrics')
+  })
+
+  it('activeTabVideoTitle is the active notes tab\'s title, never the Transcript tab', () => {
+    const titles = { tabA: 'Song A', tabB: 'Song B', [TRANSCRIPT_TAB_ID]: 'nope' }
+    expect(activeTabVideoTitle(titles, 'tabA')).toBe('Song A')
+    expect(activeTabVideoTitle(titles, 'tabB')).toBe('Song B')
+    expect(activeTabVideoTitle(titles, TRANSCRIPT_TAB_ID)).toBe('')
+  })
+
+  it('Custom runs on a video-only tab (title, no notes)', () => {
+    expect(hasCustomText('', 'Never Gonna Give You Up')).toBe(true)
+    expect(buildCustomRequest('', [], 'Never Gonna Give You Up')).toEqual({
+      kind: 'custom',
+      text: 'Video: Never Gonna Give You Up',
+      transcript: ''
+    })
   })
 })
 

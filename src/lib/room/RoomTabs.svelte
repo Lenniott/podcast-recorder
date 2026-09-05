@@ -88,6 +88,11 @@
   // own keystrokes) — lossy for anyone who isn't RoomTabs itself.
   export let tabTexts = {}; // tabId -> string
 
+  // tabId -> YouTube title, filled from TabVideoPlayer's IFrame API once
+  // getVideoData() returns one. Local to this browser (titles aren't on
+  // tab_video). Bound up to ResearchPanel so `{current_tab}` can bundle it.
+  export let tabVideoTitles = {};
+
   // The Transcript is a sibling piece of room content, not an entry in
   // `tabs` (see room-state-store.js and ADR-0002) — but "which pill the
   // room is looking at" is still one room-shared value: activeTabId can
@@ -159,7 +164,19 @@
           }
         : null,
     };
+    if (!msg.videoId && tabVideoTitles[msg.tabId]) {
+      const next = { ...tabVideoTitles };
+      delete next[msg.tabId];
+      tabVideoTitles = next;
+    }
     if (msg.tabId === activeTabId) videoPlayerRef?.applyState?.(msg);
+  }
+
+  function rememberVideoTitle(title) {
+    if (!activeTabId || viewingTranscript) return;
+    const t = String(title || "").trim();
+    if (!t || tabVideoTitles[activeTabId] === t) return;
+    tabVideoTitles = { ...tabVideoTitles, [activeTabId]: t };
   }
 
   export function applyTabText(msg) {
@@ -345,6 +362,7 @@
               {clockOffset}
               {talking}
               {roomTalking}
+              reportVideoTitle={rememberVideoTitle}
               bind:this={videoPlayerRef}
             >
               <svelte:fragment slot="controls-left">
