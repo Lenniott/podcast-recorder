@@ -41,7 +41,7 @@ describe('parseResearchCard', () => {
   it('clips main takeaway to its word cap', () => {
     const card = parseResearchCard(
       fieldText({
-        outputType: 'ask',
+        outputType: 'facts',
         mainTakeaway: Array.from({ length: 50 }, (_, i) => `w${i}`).join(' ')
       })
     )
@@ -145,10 +145,25 @@ describe('parseResearchCard(serializeResearchCard(...)) — the actual server-to
     expect(parseResearchCard(serializeResearchCard(null))).toBeNull()
   })
 
-  it('does not clip Interpretation Mode takeaways to the skim word cap', () => {
+  it('does not clip Custom (Research Prompt) takeaways to the skim word cap', () => {
     const long = Array.from({ length: 80 }, (_, i) => `word${i}`).join(' ')
     const card = parseResearchCard(serializeResearchCard({ outputType: 'custom', mainTakeaway: long }))
     expect(card.mainTakeaway).toBe(long)
+  })
+
+  it('keeps line breaks in Custom and Ask takeaways', () => {
+    const prose = 'PROFESSIONAL:\nCritics say grief.\n\nFANDOM:\nFans say regret.'
+    for (const outputType of ['custom', 'ask']) {
+      const card = parseResearchCard(serializeResearchCard({ outputType, mainTakeaway: prose }))
+      expect(card.mainTakeaway).toBe(prose)
+    }
+  })
+
+  it('collapses line breaks in a Turn Action takeaway to a single skim paragraph', () => {
+    const card = parseResearchCard(
+      JSON.stringify({ outputType: 'facts', mainTakeaway: 'Line one.\n\nLine two.' })
+    )
+    expect(card.mainTakeaway).toBe('Line one. Line two.')
   })
 })
 
@@ -191,12 +206,15 @@ describe('matchesMode — mode-match guard', () => {
 })
 
 describe('MODE_RULES / MODES — the open-ended mode registry', () => {
-  it('MODES is exactly the MODE_RULES keys, so adding a mode means adding one entry', () => {
-    expect(MODES).toEqual(Object.keys(MODE_RULES))
+  it('MODE_RULES is only Turn Actions; Ask and Custom are card types, not prompts here', () => {
+    expect(Object.keys(MODE_RULES)).toEqual(['definition', 'facts', 'answer'])
+    expect(MODE_RULES.ask).toBeUndefined()
+    expect(MODE_RULES.custom).toBeUndefined()
+    expect(MODES).toEqual(['definition', 'facts', 'answer', 'custom', 'ask'])
   })
 
-  it('every mode has a non-empty selection rule', () => {
-    for (const mode of MODES) {
+  it('every shared-system-prompt mode has a non-empty selection rule', () => {
+    for (const mode of Object.keys(MODE_RULES)) {
       expect(typeof MODE_RULES[mode]).toBe('string')
       expect(MODE_RULES[mode].length).toBeGreaterThan(0)
     }

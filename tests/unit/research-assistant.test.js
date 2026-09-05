@@ -121,8 +121,10 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     expect(body.model.length).toBeGreaterThan(0)
   })
 
-  it('a voice ask always sends MODE: ask, and mentions the topic asked', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+  it('a typed Ask sends the question as the whole request, with no system prompt', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse({ choices: [{ message: { content: 'plain answer', annotations: [] } }] })
+    )
 
     await askResearchAssistant(
       { kind: 'voice', query: 'the Monroe Doctrine', context: 'earlier chat about foreign policy', notes: '' },
@@ -130,14 +132,20 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const system = body.messages.find((m) => m.role === 'system').content
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(system).toMatch(/MODE: ask/)
-    expect(userContent).toContain('the Monroe Doctrine')
+    expect(body.messages.some((m) => m.role === 'system')).toBe(false)
+    expect(body.response_format).toBeUndefined()
+    expect(body.messages).toEqual([
+      {
+        role: 'user',
+        content: 'the Monroe Doctrine\n\nFOCUS TURN:\nearlier chat about foreign policy'
+      }
+    ])
   })
 
-  it('a voice ask with no topic still runs in research mode over the transcript window', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+  it('a topic-less voice request still sends FOCUS TURN as the user message, with no system prompt', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse({ choices: [{ message: { content: 'plain answer', annotations: [] } }] })
+    )
 
     await askResearchAssistant(
       { kind: 'voice', query: null, context: 'Alice: so anyway that thing from the news', notes: '' },
@@ -145,9 +153,8 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const system = body.messages.find((m) => m.role === 'system').content
+    expect(body.messages.some((m) => m.role === 'system')).toBe(false)
     const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(system).toMatch(/MODE: ask/)
     expect(userContent).toContain('FOCUS TURN:')
     expect(userContent).toContain('Alice: so anyway that thing from the news')
     expect(userContent).not.toMatch(/GROUNDING:/)
@@ -307,19 +314,21 @@ describe('askResearchAssistant — response shaping', () => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
 
-  it('returns the parsed card and the web-search citations for a well-formed, on-mode answer', async () => {
+  it('returns the freeform reply and the web-search citations for a typed Ask', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(
-        successBody({
-          answer: fieldAnswer('ask', {
-            mainTakeaway: 'The Monroe Doctrine was a US policy stance from 1823.'
-          }),
-          citations: [
-            { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' },
-            { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' }
-          ]
-        })
-      )
+      okResponse({
+        choices: [
+          {
+            message: {
+              content: 'The Monroe Doctrine was a US policy stance from 1823.',
+              annotations: [
+                { type: 'url_citation', url_citation: { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' } },
+                { type: 'url_citation', url_citation: { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' } }
+              ]
+            }
+          }
+        ]
+      })
     )
 
     const result = await askResearchAssistant(
@@ -363,7 +372,10 @@ describe('askResearchAssistant — response shaping', () => {
   it('discards the answer and citations when the model returns nothing (no claim survived selection)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: 'nothing useful here, no fields at all' })))
 
-    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+    const result = await askResearchAssistant(
+      { kind: 'turnAction', actionId: 'facts', focus: 'Host: hi', grounding: '' },
+      { fetchImpl }
+    )
 
     expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
   })
@@ -372,23 +384,29 @@ describe('askResearchAssistant — response shaping', () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       okResponse(
         successBody({
-          answer: fieldAnswer('ask', { provenInTranscript: 95 }),
+          answer: fieldAnswer('facts', { provenInTranscript: 95 }),
           citations: [{ url: 'https://example.com/x', title: 'X' }]
         })
       )
     )
 
-    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+    const result = await askResearchAssistant(
+      { kind: 'turnAction', actionId: 'facts', focus: 'Host: x', grounding: '' },
+      { fetchImpl }
+    )
 
     expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
   })
 
-  it('does not suppress ubiquitous knowledge for ask (only definition uses that hide-rule)', async () => {
+  it('does not suppress ubiquitous knowledge for facts (only definition uses that hide-rule)', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(successBody({ answer: fieldAnswer('ask', { ubiquitousKnowledge: 90 }) }))
+      okResponse(successBody({ answer: fieldAnswer('facts', { ubiquitousKnowledge: 90 }) }))
     )
 
-    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+    const result = await askResearchAssistant(
+      { kind: 'turnAction', actionId: 'facts', focus: 'Host: x', grounding: '' },
+      { fetchImpl }
+    )
 
     expect(JSON.parse(result.answer).mainTakeaway).toBe('The actual answer, stated as fact.')
   })
@@ -408,10 +426,13 @@ describe('askResearchAssistant — response shaping', () => {
 
   it('discards (mode-match guard) an answer whose OUTPUT TYPE does not match the requested mode', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(successBody({ answer: fieldAnswer('facts') })) // requested mode is 'ask' below
+      okResponse(successBody({ answer: fieldAnswer('facts') }))
     )
 
-    const result = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+    const result = await askResearchAssistant(
+      { kind: 'turnAction', actionId: 'definition', focus: 'Host: x', grounding: '' },
+      { fetchImpl }
+    )
 
     expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
   })

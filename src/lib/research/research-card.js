@@ -31,26 +31,26 @@
  */
 export const SUPPRESS_THRESHOLD = 80 // tunable client-side constant, not baked into the prompt
 
-// The mode registry — one entry per Quick Action / research button, each a
-// one-sentence "how to select the claim" rule dropped into the shared
-// system prompt's "Mode-specific selection rules" section (see
-// research-assistant.js's buildSystemPrompt). Deliberately a plain object,
-// not a fixed enum: the findings doc's three modes (factCheck, define,
-// research) are what's been prompt-tested so far, but adding a new Quick
-// Action is meant to mean "add one entry here", not "invent a second
-// schema" — same one-schema-many-modes idea the findings doc set out.
+// Shared-system-prompt rules only (see research-assistant.js's
+// buildSystemPrompt): Turn Actions. Typed Ask and Custom are freeform —
+// the Ask box / Research Prompt *is* the request, so they are not here.
+// `MODES` is the card outputType allowlist: Turn Action keys plus those two.
 export const MODE_RULES = {
   definition:
     'Explain an obscure word, name, or reference in the FOCUS TURN, including a plausible mishear if the transcript likely garbled it. include how to pronounce it phonetically if it is not a common word. If nothing needs defining, output nothing.',
   facts:
     'Surface general background about what the FOCUS TURN is talking about. Do not say whether the speaker was right. Grounding is only for references — never the subject.',
   answer:
-    'Reply to a question asked in the FOCUS TURN itself. If that Turn is not a question, output nothing rather than answering a different, easier question.',
-  custom: 'Follow Interpretation Mode. Tab text is lyrics (Stage 1). Transcript is the human reading (Stage 2 only).'
+    'Reply to a question asked in the FOCUS TURN itself. If that Turn is not a question, output nothing rather than answering a different, easier question.'
 }
 
-export const MODES = Object.keys(MODE_RULES)
 export const TURN_ACTION_IDS = ['definition', 'facts', 'answer']
+export const FREEFORM_MODES = ['custom', 'ask']
+export const MODES = [...Object.keys(MODE_RULES), ...FREEFORM_MODES]
+
+export function isFreeformMode(mode) {
+  return FREEFORM_MODES.includes(mode)
+}
 
 const MAX_TAKEAWAY_WORDS = 35
 
@@ -72,11 +72,22 @@ function clipWords(value, maxWords) {
 // keep dropping a markdown link or bare URL into mainTakeaway anyway. Strip
 // it app-side rather than trust compliance, same reasoning as
 // shouldSuppress/matchesMode below.
-function stripInlineCitations(value) {
-  return String(value || '')
+function stripInlineCitations(value, { preserveNewlines = false } = {}) {
+  let text = String(value || '')
     .replace(/\[[^\]]*\]\((?:https?:\/\/|www\.)[^)]+\)/gi, '') // [label](url) citation, whole thing
     .replace(/\(?\bhttps?:\/\/\S+\)?/gi, '') // bare URL, with an optional wrapping paren
-    .replace(/\s+([.,;:!?])/g, '$1') // dangling space left before punctuation
+  if (preserveNewlines) {
+    // Keep line breaks (Custom / Ask freeform). Collapse only spaces/tabs
+    // on a line so a markdown-link strip doesn't leave ragged indent.
+    return text
+      .replace(/[^\S\n]+/g, ' ')
+      .replace(/ *([.,;:!?])/g, '$1')
+      .replace(/[^\S\n]+\n/g, '\n')
+      .replace(/\n[^\S\n]+/g, '\n')
+      .trim()
+  }
+  return text
+    .replace(/\s+([.,;:!?])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim()
 }
@@ -167,10 +178,9 @@ export function sanitizeResearchCard(raw) {
     provenInTranscript: toScore(raw?.provenInTranscript),
     ubiquitousKnowledge: toScore(raw?.ubiquitousKnowledge),
     outputType: MODES.includes(raw?.outputType) ? raw.outputType : null,
-    mainTakeaway:
-      raw?.outputType === 'custom'
-        ? stripInlineCitations(raw?.mainTakeaway)
-        : clipWords(stripInlineCitations(raw?.mainTakeaway), MAX_TAKEAWAY_WORDS)
+    mainTakeaway: isFreeformMode(raw?.outputType)
+      ? stripInlineCitations(raw?.mainTakeaway, { preserveNewlines: true })
+      : clipWords(stripInlineCitations(raw?.mainTakeaway), MAX_TAKEAWAY_WORDS)
   }
 }
 

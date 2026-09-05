@@ -348,7 +348,7 @@
             {:else if entry.status === "answered"}
               {@const card = parseResearchCard(entry.answer)}
               {#if card}
-                {#if card.outputType === "custom"}
+                {#if card.outputType === "custom" || card.outputType === "ask"}
                   <div class="research-interpretation">{card.mainTakeaway}</div>
                 {:else}
                   <div class="research-card">
@@ -485,6 +485,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    width: 100%;
   }
 
   .research-entry-header {

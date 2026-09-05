@@ -3,7 +3,7 @@
  * turns a lookup into `{ answer, citations }`. Callers never see prompt text.
  */
 import { env } from '$env/dynamic/private'
-import { matchesMode, MODE_RULES, MODES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
+import { isFreeformMode, matchesMode, MODE_RULES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 import { recordResearchUsage } from './db.js'
 
@@ -101,34 +101,33 @@ function buildMessages(request, pressTime = new Date()) {
   }
 
   if (request.kind === 'voice') {
-    const { context, notes } = request
+    // Typed Ask is freeform like Custom: the box text *is* the request.
+    // No shared system prompt, no MODE_RULES.ask. Placeholders in the
+    // typed text still resolve here. context/notes stay optional extras
+    // (eval harness / leftover voice-shaped callers).
     const query = applyPlaceholders(request.query, { currentTab: request.currentTab, transcript: request.transcript })
-    const mode = 'ask'
+    const userContent = [
+      query ? String(query).trim() : '',
+      request.context ? `FOCUS TURN:\n${request.context}` : '',
+      request.notes ? `GROUNDING:\n${request.notes}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    if (!userContent.trim()) {
+      throw new ResearchAssistantError('INVALID_REQUEST', 'Ask question is empty')
+    }
     return {
-      mode,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(pressTimeIso, mode) },
-        {
-          role: 'user',
-          content: [
-            query ? `Question asked: "${query}"` : '',
-            context ? `FOCUS TURN:\n${context}` : '',
-            notes ? `GROUNDING:\n${notes}` : ''
-          ]
-            .filter(Boolean)
-            .join('\n\n')
-        }
-      ]
+      mode: 'ask',
+      messages: [{ role: 'user', content: userContent }]
     }
   }
 
   throw new ResearchAssistantError('INVALID_REQUEST', `Unknown request kind: ${request?.kind}`)
 }
 
-// Structured-output schema for every mode except `custom` — Custom sends
-// the Research Prompt (see CONTEXT.md) as-is and its reply is used as
-// freeform prose (see askResearchAssistant's `mode === 'custom'`
-// branch), not parsed field-by-field, so it isn't forced through this.
+// Structured-output schema for Turn Actions only — Custom and typed Ask
+// send freeform text (see askResearchAssistant's `isFreeformMode`
+// branch), not parsed field-by-field, so they aren't forced through this.
 // Forcing the shape here (rather than just asking for it in the prompt
 // text) is what stops the model from e.g. echoing a placeholder/wrong
 // value for outputType. There is no `sources` field: the card doesn't
@@ -170,7 +169,7 @@ function buildRequestBody(request, pressTime) {
       // ADR-0007 — so the Usage Dashboard doesn't need to price each model
       // itself from a maintained table.
       usage: { include: true },
-      ...(mode === 'custom' ? {} : { response_format: researchCardSchema(mode) })
+      ...(isFreeformMode(mode) ? {} : { response_format: researchCardSchema(mode) })
     }
   }
 }
@@ -196,7 +195,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
   const body = JSON.stringify(requestBody)
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), mode === 'custom' ? CUSTOM_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), isFreeformMode(mode) ? CUSTOM_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS)
 
   const requestedModel = env.OPENROUTER_MODEL || DEFAULT_MODEL
   const startedAt = performance.now()
@@ -247,11 +246,11 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     cost: usageMeta.usage?.cost ?? null
   })
 
-  if (mode === 'custom') {
+  if (isFreeformMode(mode)) {
     const card = {
       provenInTranscript: 0,
       ubiquitousKnowledge: 0,
-      outputType: 'custom',
+      outputType: mode,
       mainTakeaway: raw
     }
     await appendResearchEvalLog({
