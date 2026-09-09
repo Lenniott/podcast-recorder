@@ -2,7 +2,6 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { Plus, AnnotationPlus, FileSearch02 } from "$lib/icons";
   import TabVideoPlayer from "../TabVideoPlayer.svelte";
-  import TranscriptTab from "./TranscriptTab.svelte";
   import SelectionPopup from "./SelectionPopup.svelte";
   import { TRANSCRIPT_TAB_ID } from "./transcript-sync.js";
   import {
@@ -48,49 +47,13 @@
   export let send = () => {};
   export let clockOffset = 0;
 
-  // This participant's own speech-recognition status — 'stopped' |
-  // 'unsupported' | 'starting' | 'running' | 'retrying' (see
-  // $lib/research/speech-recognition.js). Deliberately per-browser, never
-  // room-shared: whether *you* are being transcribed is your own local
-  // fact, same as your own mic selection. Shown as a small dot on the
-  // Transcript pill so it's visible without switching to that tab — the
-  // same "never let silence stand in for everything's fine" lesson
-  // AGENTS.md already states for recording health.
-  export let transcriptionStatus = "stopped";
-
-  // Turn Action click → Research Assistant. Local pending lives here so
-  // the Block can spin without a room-shared pending card.
-  export let onTurnAction = async () => {};
-
-  // turnId -> actionId[] — which Turn Actions have already run on which
-  // Block, so their icons disable rather than firing the same question at
-  // Research Assistant twice. Room-shared and owned by ResearchPanel (it's
-  // derived from `entriesByTab`, replayed to every peer on join — see
-  // ResearchPanel.svelte's `doneActionsByTurn` prop), so it survives a
-  // refresh; RoomTabs only reads it, via RecordingRoom.svelte's plumbing.
-  export let doneActionsByTurn = {};
-
-  let pendingTurnId = null;
-  let pendingActionId = null;
-
-  async function handleTurnAction(actionId, turnId) {
-    pendingTurnId = turnId;
-    pendingActionId = actionId;
-    try {
-      await onTurnAction(actionId, turnId);
-    } finally {
-      pendingTurnId = null;
-      pendingActionId = null;
-    }
-  }
-
-  const TRANSCRIPTION_STATUS_LABEL = {
-    stopped: "Not transcribing",
-    unsupported: "Transcription isn't supported in this browser",
-    starting: "Starting transcription…",
-    running: "Transcribing your mic",
-    retrying: "Transcription lost connection — retrying…",
-  };
+  // The room's live Transcript, [{id, speaker, text, at}] in server
+  // (append) order. Owned by +page.svelte since ticket 06 — this component
+  // used to hold it and render it, but the Transcript is now a facet of the
+  // right-hand panel (ADR-0008), so the state was lifted to the common
+  // parent and comes back down to both. Read here for one reason only: the
+  // `{transcript}` Placeholder a highlight-fired Custom Prompt ships.
+  export let transcriptLines = [];
 
   const TEXT_DEBOUNCE_MS = 300;
 
@@ -175,12 +138,23 @@
   // highlighted (CONTEXT.md's **Annotation**). The server re-uses that same
   // frozen quote as `{selection}`.
   //
-  // SURFACES, and what ticket 06 has left to do: `selectionSurfaces` below
-  // is the list of elements a highlight may come from, each with the tab its
-  // Annotation belongs to. Everything downstream of it —
-  // resolveSelectionSurface, the quote, the popup, both actions — is
-  // element-agnostic (see selection-annotations.js). Registering the
-  // Transcript is adding an entry to that array, not a second code path.
+  // SURFACES (ticket 06, done): `selectionSurfaces` below is the list of
+  // elements a highlight may come from, each with the tab its Annotation
+  // belongs to. Everything downstream of it — resolveSelectionSurface, the
+  // quote, the popup, both actions — is element-agnostic (see
+  // selection-annotations.js). Registering the Transcript was adding an
+  // entry to that array, not a second code path: a Turn highlight produces
+  // the same Annotation, through the same popup, over the same
+  // annotation_create/annotation_ask messages.
+  //
+  // WHY THE TRANSCRIPT'S ELEMENT ARRIVES AS A PROP: this component hosts
+  // the popup, but since ticket 06 the Transcript renders inside
+  // ResearchPanel, a sibling subtree. That is fine — the popup is
+  // position:fixed in viewport coordinates and the selection listeners are
+  // on `document`, so hosting has nothing to do with containment. The
+  // element flows sideways (ResearchPanel -> RecordingRoom -> here),
+  // exactly as tabVideoTitles/doneActionsByTurn already do between these
+  // same two components.
 
   const SELECTION_ACTION_COMMENT = "comment";
 
@@ -206,13 +180,20 @@
     }),
   ];
 
+  // The rendered Turn list inside ResearchPanel's Transcript facet, or null
+  // while that facet is closed (in which case there is simply no Transcript
+  // surface to highlight, and the array below is Notes-only again).
+  export let transcriptEl = null;
+
   // Every element a highlight may be taken from, with the tab an Annotation
-  // made there is filed under. One entry today; ticket 06 adds the
-  // Transcript's.
-  $: selectionSurfaces =
-    notesEl && activeTabId && !viewingTranscript
-      ? [{ el: notesEl, tabId: activeTabId }]
-      : [];
+  // made there is filed under. Notes files under the active tab; a Turn
+  // files under the reserved Transcript id — ticket 03's per-tab storage
+  // convention, and the same constant needsQuoteRematch keys off, not a new
+  // one.
+  $: selectionSurfaces = [
+    ...(notesEl && activeTabId ? [{ el: notesEl, tabId: activeTabId }] : []),
+    ...(transcriptEl ? [{ el: transcriptEl, tabId: TRANSCRIPT_TAB_ID }] : []),
+  ];
 
   // { quote, rect, tabId } — what the popup is anchored to, or null when
   // nothing usable is highlighted. `quote` is the frozen text; `rect` is
@@ -357,14 +338,17 @@
     if (e.key === "Escape" && selectionAnchor) clearSelectionPopup();
   }
 
-  /** A click that lands outside both the popup and the Notes surface means
-   *  the person has moved on — an open composer shouldn't follow them
-   *  around the page. */
+  /** A click that lands outside both the popup and every registered
+   *  selection surface means the person has moved on — an open composer
+   *  shouldn't follow them around the page. Driven by `selectionSurfaces`
+   *  rather than by `notesEl` alone, or clicking a Turn would dismiss the
+   *  popup that Turn's own highlight just raised. */
   function onDocumentPointerDown(e) {
     if (!selectionAnchor) return;
     const target = e.target;
     if (target?.closest?.("[data-testid='selection-popup']")) return;
-    if (notesEl?.contains?.(target)) return;
+    if (selectionSurfaces.some((surface) => surface.el?.contains?.(target)))
+      return;
     clearSelectionPopup();
   }
 
@@ -380,12 +364,15 @@
   // time, every single time, and nothing about the match is ever stored —
   // see notes-highlights.js for why a persisted offset would be a lie
   // waiting to happen, and for why a Turn-anchored Annotation (ticket 06)
-  // never needs this path at all. `needsQuoteRematch` is that gate: today
-  // it is belt-and-braces next to `!viewingTranscript` (the Transcript
-  // isn't a Notes surface, so its Annotations never reach here anyway), and
-  // it is what ticket 06 flips against when it renders Annotations on Turns.
+  // never needs this path at all. `needsQuoteRematch` is that gate, and
+  // since ticket 06 it is the ONLY thing keeping Turn-anchored Annotations
+  // out of the Notes mirror: `activeTabId` can no longer be the Transcript
+  // id, but this file no longer has a `viewingTranscript` to double-check
+  // against either. The Transcript's own highlights are drawn from the same
+  // frozen quotes by turn-highlights.js, which needs no re-match at all
+  // because a Turn's text can never change.
   $: notesAnnotations =
-    !viewingTranscript && activeTabId && needsQuoteRematch(activeTabId)
+    activeTabId && needsQuoteRematch(activeTabId)
       ? (annotationsByTab[activeTabId] ?? [])
       : [];
   // Driven by notesDomText (what the element shows), never by notesText
@@ -430,31 +417,21 @@
   // tab_video). Bound up to ResearchPanel so `{current_tab}` can bundle it.
   export let tabVideoTitles = {};
 
-  // The Transcript is a sibling piece of room content, not an entry in
-  // `tabs` (see room-state-store.js and ADR-0002) — but "which pill the
-  // room is looking at" is still one room-shared value: activeTabId can
-  // hold either a real tab's id or the reserved TRANSCRIPT_TAB_ID, and
-  // switching to either is broadcast to every peer via the same tab_switch/
-  // tabs_state round trip (see room-state-store.js's switchTab). So
-  // whether we're showing the Transcript is *derived* from activeTabId,
-  // never tracked as separate local-only state.
-  let transcriptLines = []; // [{id, speaker, text, at}], server (append) order
-  $: viewingTranscript = activeTabId === TRANSCRIPT_TAB_ID;
+  // NOTE (ADR-0008, ticket 06): there is deliberately no `viewingTranscript`
+  // here any more, and `activeTabId` can only ever name a real tab. The
+  // Transcript stopped being a room-shared destination the whole room
+  // switches to; it is a personal, local facet of the right-hand panel that
+  // each participant opens for themselves (see ResearchPanel.svelte's
+  // `facet`). Nothing in this component may send a `tab_switch` naming
+  // TRANSCRIPT_TAB_ID — the server refuses it too (room-state-store.js's
+  // switchTab), so the id survives only as the storage key for
+  // Turn-anchored Annotations.
 
   let videoPlayerRef = null; // the mounted TabVideoPlayer for activeTabId
 
   // Room-wide hold-to-talk duck (not per-tab — see applyDuck/resyncDuck).
   let talking = false; // true while *this* browser is holding Talk
   let roomTalking = false; // true while any peer (including us) is holding Talk
-
-  // Room-shared "a transcript_line is probably about to land somewhere in
-  // the room" signal (see ws-rooms.js's transcript_activity protocol doc) —
-  // set via applyTranscriptActivity, same routing pattern as applyDuck.
-  // Deliberately separate from transcriptionStatus above: that prop is
-  // this browser's own recognizer health, this is "is anyone's speech
-  // being processed right now," true even for a peer whose own browser
-  // has no microphone or no Web Speech API support at all.
-  let transcriptActivity = false;
 
   let textDebounceTimer = null;
 
@@ -496,13 +473,16 @@
     document.removeEventListener("mousedown", onDocumentPointerDown, true);
   });
 
-  // Switching tabs (or to the Transcript) reuses the same Notes element for
-  // entirely different text — a popup still anchored to the old tab's
-  // highlight would quote text that is no longer on screen.
+  // Switching tabs reuses the same Notes element for entirely different
+  // text — a popup still anchored to the old tab's highlight would quote
+  // text that is no longer on screen. A Turn-anchored popup is exempt: the
+  // Transcript is its own surface in the side panel, unaffected by which
+  // Notes tab the room is on, so a co-host switching tabs must not yank a
+  // half-typed Comment out from under someone reading the Transcript.
   let popupTabId = null;
   $: if (activeTabId !== popupTabId) {
     popupTabId = activeTabId;
-    clearSelectionPopup();
+    if (selectionAnchor?.tabId !== TRANSCRIPT_TAB_ID) clearSelectionPopup();
   }
 
   // ─── Inbound — called by the page's ws.onmessage, one method per type ──
@@ -538,7 +518,7 @@
   }
 
   function rememberVideoTitle(title) {
-    if (!activeTabId || viewingTranscript) return;
+    if (!activeTabId) return;
     const t = String(title || "").trim();
     if (!t || tabVideoTitles[activeTabId] === t) return;
     tabVideoTitles = { ...tabVideoTitles, [activeTabId]: t };
@@ -546,17 +526,6 @@
 
   export function applyTabText(msg) {
     tabTexts = { ...tabTexts, [msg.tabId]: msg.text };
-  }
-
-  export function applyTranscriptState(msg) {
-    transcriptLines = msg.lines;
-  }
-
-  export function applyTranscriptLine(msg) {
-    transcriptLines = [
-      ...transcriptLines,
-      { id: msg.id, speaker: msg.speaker, text: msg.text, at: msg.at },
-    ];
   }
 
   export function applyDuck(msg) {
@@ -568,12 +537,8 @@
     if (talking) send({ type: "yt_duck", talking: true });
   }
 
-  export function applyTranscriptActivity(msg) {
-    transcriptActivity = !!msg.active;
-  }
-
   function pushActiveVideoToPlayer() {
-    if (!videoPlayerRef || !activeTabId || viewingTranscript) return;
+    if (!videoPlayerRef || !activeTabId) return;
     const v = tabVideos[activeTabId];
     videoPlayerRef.applyState(
       v
@@ -596,18 +561,13 @@
     send({ type: "tab_create", tabId: makeTabId() });
   }
 
-  // Handles switching to a real tab OR to the Transcript — both go over the
-  // wire as the same 'tab_switch' message (room-state-store.js's switchTab
-  // accepts the reserved TRANSCRIPT_TAB_ID as a valid destination), so
-  // "which pill the room is looking at" is one shared value, broadcast to
-  // every peer exactly like switching to any real tab already was.
+  // Switches the room to a real tab. Every destination here comes from
+  // `tabs`, which is the server's own tabs.list — there is no longer any
+  // way for this to name TRANSCRIPT_TAB_ID, and the server would refuse it
+  // if there were (ticket 06; see room-state-store.js's switchTab).
   function switchTab(tabId) {
     if (tabId === activeTabId) return;
     send({ type: "tab_switch", tabId });
-  }
-
-  function switchToTranscript() {
-    switchTab(TRANSCRIPT_TAB_ID);
   }
 
   function closeTab(tabId, event) {
@@ -623,8 +583,7 @@
   // broadcast would fight the local cursor. planInboundNotesUpdate() is
   // that guard, made explicit and testable (see notes-editor.js).
 
-  $: notesText =
-    !viewingTranscript && activeTabId ? (tabTexts[activeTabId] ?? "") : "";
+  $: notesText = activeTabId ? (tabTexts[activeTabId] ?? "") : "";
   // `notesEl` is listed so this re-runs the moment bind:this fills it in.
   $: syncNotesSurface(notesEl, activeTabId, notesText);
 
@@ -757,31 +716,9 @@
         {/if}
       </div>
     {/each}
-    <div class="tab-pill transcript-pill" class:active={viewingTranscript}>
-      <button
-        type="button"
-        class="tab-title"
-        aria-label="Transcript"
-        on:click={switchToTranscript}
-      >
-        Transcript
-        {#if transcriptionStatus !== "stopped"}
-          <span
-            class="transcription-status-dot"
-            data-status={transcriptionStatus}
-            title={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
-            aria-label={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
-          ></span>
-        {/if}
-        {#if transcriptActivity}
-          <span
-            class="transcript-activity-pulse"
-            title="Transcript incoming…"
-            aria-label="Transcript incoming…"
-          ></span>
-        {/if}
-      </button>
-    </div>
+    <!-- No Transcript pill (ADR-0008, ticket 06). This strip lists only
+         real, room-shared tabs now; the Transcript moved to the right-hand
+         panel as a personal, local facet. -->
     <button
       type="button"
       class="btn-ghost btn-icon"
@@ -792,15 +729,7 @@
   </div>
 
   <div class="tab-content">
-    {#if viewingTranscript}
-      <TranscriptTab
-        lines={transcriptLines}
-        {pendingTurnId}
-        {pendingActionId}
-        {doneActionsByTurn}
-        onTurnAction={handleTurnAction}
-      />
-    {:else if activeTabId}
+    {#if activeTabId}
       <div class="shared-notes">
         
         <div class="notes-toolbar-2">
@@ -903,17 +832,25 @@
           ></div>
         </div>
       </div>
+    {:else}
+      <p class="tab-content-empty">Connecting…</p>
+    {/if}
+  </div>
 
-      <!-- Anchored to the highlight, not to this container — it is
-           position: fixed in viewport coordinates (see SelectionPopup.svelte
-           / selection-popup.js). Ticket 05 adds its Custom Prompt buttons by
-           extending `selectionActions`, not by adding markup here. -->
-      <SelectionPopup
+  <!-- Anchored to the highlight, not to any container — it is
+       position: fixed in viewport coordinates (see SelectionPopup.svelte /
+       selection-popup.js). Deliberately OUTSIDE the active-tab branch since
+       ticket 06: the Transcript facet is a registered surface too, and a
+       highlight taken there must raise the popup whether or not this
+       component currently has a Notes tab to show. Its Custom Prompt
+       buttons come from `selectionActions` (ticket 05), never from markup
+       here. -->
+  <SelectionPopup
         rect={selectionAnchor?.rect ?? null}
         actions={selectionActions}
         openActionId={openSelectionActionId}
         onAction={onSelectionAction}
-        ariaLabel="Actions for the highlighted notes text"
+        ariaLabel="Actions for the highlighted text"
       >
         {#if openSelectionActionId === SELECTION_ACTION_COMMENT}
           <form
@@ -945,11 +882,7 @@
             </div>
           </form>
         {/if}
-      </SelectionPopup>
-    {:else}
-      <p class="tab-content-empty">Connecting…</p>
-    {/if}
-  </div>
+  </SelectionPopup>
 </div>
 
 <style>
@@ -1054,44 +987,10 @@
     text-align: center;
   }
 
-  .transcription-status-dot {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-left: 5px;
-    border-radius: 50%;
-    vertical-align: middle;
-    background: var(--muted);
-  }
-  .transcription-status-dot[data-status="running"] {
-    background: var(--success);
-  }
-  .transcription-status-dot[data-status="starting"] {
-    background: var(--warn);
-  }
-  .transcription-status-dot[data-status="retrying"] {
-    background: var(--danger);
-    box-shadow: 0 0 4px var(--danger);
-  }
-
-  /* Room-shared "something's coming" signal — deliberately a different hue
-     and a pulse (not a solid fill) from transcription-status-dot above, so
-     "my mic's recognizer is healthy" and "someone's speech is being
-     processed right now" never read as the same fact at a glance. */
-  .transcript-activity-pulse {
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-left: 5px;
-    border-radius: 50%;
-    vertical-align: middle;
-    background: var(--accent);
-    animation: transcript-activity-pulse 1s ease-in-out infinite;
-  }
-  @keyframes transcript-activity-pulse {
-    0%, 100% { opacity: 0.35; transform: scale(0.85); }
-    50% { opacity: 1; transform: scale(1.15); }
-  }
+  /* The transcription-status dot and the transcript-activity pulse used to
+     live on the Transcript pill here. Both moved to the panel's Transcript
+     facet button with the Transcript itself (ADR-0008, ticket 06) — see
+     ResearchPanel.svelte. */
 
   /* Nested inside the already-bordered .tab-pill — no second border. */
   .tab-close {

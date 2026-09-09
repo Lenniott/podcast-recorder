@@ -55,6 +55,50 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     return latest(ws, 'tabs_state').activeTabId
   }
 
+  it('a Comment left on a Transcript Turn is stored and broadcast, filed under the reserved Transcript id', async () => {
+    // The end-to-end shape ticket 06 produces: highlight a Turn in the
+    // panel's Transcript facet -> the popup's Comment -> annotation_create
+    // carrying TRANSCRIPT_TAB_ID as its tabId. The Transcript is never an
+    // entry in tabs.list (ADR-0002), so this is the one place that id is a
+    // legitimate destination — as a storage key, never as a view.
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    host.emit('message', JSON.stringify({
+      type: 'transcript_line', speaker: 'Host', text: 'It was unbearably hot.'
+    }))
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    comment(host, {
+      tabId: TRANSCRIPT_TAB_ID, id: 'ann-turn-1', quote: 'unbearably hot', text: 'check the date'
+    })
+
+    for (const ws of [host, guest]) {
+      const msg = latest(ws, 'annotation_entry')
+      expect(msg, 'every peer receives the Turn Annotation').toBeTruthy()
+      expect(msg.tabId).toBe(TRANSCRIPT_TAB_ID)
+      expect(msg.entry.quote).toBe('unbearably hot')
+      expect(msg.entry.text).toBe('check the date')
+      expect(msg.entry.author).toBe('Host')
+    }
+    expect(host.sent.some((m) => m.type === 'error')).toBe(false)
+  })
+
+  it('replays Turn Annotations to a late joiner alongside the Notes ones', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    const tabId = activeTabId(host)
+    comment(host, { tabId, id: 'ann-notes', quote: 'notes quote', text: 'on notes' })
+    comment(host, { tabId: TRANSCRIPT_TAB_ID, id: 'ann-turn', quote: 'turn quote', text: 'on a Turn' })
+
+    guest.emit('close') // free a slot
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+
+    const states = late.sent.filter((m) => m.type === 'annotation_state')
+    const byTab = Object.fromEntries(states.map((m) => [m.tabId, m.entries]))
+    expect(byTab[tabId].map((e) => e.id)).toEqual(['ann-notes'])
+    expect(byTab[TRANSCRIPT_TAB_ID].map((e) => e.id)).toEqual(['ann-turn'])
+  })
+
   it('a submitted Comment is stored and broadcast to every participant', () => {
     const tabId = activeTabId(host)
     host.sent.length = 0
@@ -197,16 +241,21 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     wss.connect(rejoiner, 'room1'); join(rejoiner, 'Guest', 'c2')
     const entries = latest(rejoiner, 'annotation_state').entries
     expect(entries).toHaveLength(2)
-    // The base shape ticket 04 relies on must be present, and no offset/anchor/
-    // position field (of any name) may sneak in — those are exactly what a
-    // client tried to smuggle above. Ticket 05 legitimately adds a Card
-    // lifecycle (status/error/citations/customPromptId) on top of this same
-    // base, so this asserts a subset plus a denylist rather than an exact set.
-    const forbidden = ['start', 'end', 'offset', 'anchor', 'position', 'index', 'range']
+    // The point of this assertion is that NO anchor position is ever
+    // stored — not that the shape is frozen forever. Ticket 05 legitimately
+    // added Card fields (status/citations/customPromptId/error) to the same
+    // record, so the check is "every key is a known, non-positional one"
+    // rather than an exact list that a new Annotation kind invalidates.
+    const CORE_KEYS = ['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text']
+    const CARD_KEYS = ['status', 'citations', 'customPromptId', 'error']
     for (const entry of entries) {
-      expect(entry).toMatchObject({ tabId, kind: 'comment', quote: expect.any(String), text: expect.any(String), author: expect.any(String), at: expect.any(Number) })
-      for (const key of forbidden) {
-        expect(entry).not.toHaveProperty(key)
+      const keys = Object.keys(entry)
+      expect(CORE_KEYS.every((k) => keys.includes(k))).toBe(true)
+      expect(keys.filter((k) => ![...CORE_KEYS, ...CARD_KEYS].includes(k))).toEqual([])
+      // The smuggled offset fields specifically, named explicitly so this
+      // fails loudly rather than by absence if the allow-list ever grows.
+      for (const positional of ['start', 'end', 'offset', 'anchor', 'range', 'index']) {
+        expect(keys).not.toContain(positional)
       }
     }
   })

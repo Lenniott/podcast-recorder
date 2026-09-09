@@ -185,7 +185,7 @@ export function deriveDoneActionsByTurn(entriesByTab) {
 }
 
 /**
- * The currently active notes tab's whole text (never the Transcript Tab —
+ * The currently active notes tab's whole text (never the Transcript —
  * Custom does not run on Turns).
  */
 export function activeNotesTabText(tabTexts, activeTabId) {

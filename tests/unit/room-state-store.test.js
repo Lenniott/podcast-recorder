@@ -353,19 +353,96 @@ describe('createRoomStateStore — transcript (append-only, ADR-0002)', () => {
     expect(store.getRoom('room1').tabs.list).toHaveLength(1)
   })
 
-  it('switchTab accepts the reserved Transcript id as a valid destination — "who the room is looking at" is genuinely shared', async () => {
+  it('switchTab refuses the reserved Transcript id — it is a storage key, not a place (ADR-0008, ticket 06)', async () => {
     const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     const store = createRoomStateStore({ durable: fakeDurable() })
     const firstTabId = store.getRoom('room1').tabs.list[0].id
 
-    const toTranscript = store.switchTab('room1', TRANSCRIPT_TAB_ID)
-    expect(toTranscript).toEqual({ ok: true, room: expect.anything() })
-    expect(store.getRoom('room1').tabs.activeTabId).toBe(TRANSCRIPT_TAB_ID)
-
-    // And switching back to a real tab works exactly as before.
-    const backToReal = store.switchTab('room1', firstTabId)
-    expect(backToReal).toEqual({ ok: true, room: expect.anything() })
+    expect(store.switchTab('room1', TRANSCRIPT_TAB_ID)).toEqual({ ok: false, error: 'Unknown tab' })
+    // The room's view is untouched by the attempt.
     expect(store.getRoom('room1').tabs.activeTabId).toBe(firstTabId)
+
+    // Switching between real tabs still works exactly as before.
+    expect(store.createTab('room1', { tabId: 'tab-second01' })).toEqual({ ok: true, room: expect.anything() })
+    expect(store.switchTab('room1', firstTabId)).toEqual({ ok: true, room: expect.anything() })
+    expect(store.getRoom('room1').tabs.activeTabId).toBe(firstTabId)
+  })
+
+  it('addAnnotation accepts the reserved Transcript id — that is the whole point of keeping it (ADR-0008)', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.getRoom('room1')
+    store.appendTranscriptLine('room1', { speaker: 'Host', text: 'It was unbearably hot.' })
+
+    // A Turn-anchored Annotation is filed under the reserved id. The
+    // Transcript is deliberately never an entry in tabs.list (ADR-0002), so
+    // without an explicit allowance here every Comment or Card made on a
+    // Turn would be refused as 'Unknown tab' — the id would exist and be
+    // unusable, which is the opposite of "kept as a storage key".
+    const result = store.addAnnotation('room1', TRANSCRIPT_TAB_ID, {
+      id: 'ann-turn-1',
+      kind: 'comment',
+      quote: 'unbearably hot',
+      text: 'check the date',
+      author: 'Host'
+    })
+    expect(result.ok).toBe(true)
+    expect(result.entry.tabId).toBe(TRANSCRIPT_TAB_ID)
+    expect(result.entry.quote).toBe('unbearably hot')
+    expect(store.getRoom('room1').annotations[TRANSCRIPT_TAB_ID]).toHaveLength(1)
+  })
+
+  it('storing an Annotation under the Transcript id does not make it a tab in any other sense', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    const store = createRoomStateStore({ durable: fakeDurable() })
+    store.getRoom('room1')
+    store.addAnnotation('room1', TRANSCRIPT_TAB_ID, {
+      id: 'ann-turn-1', kind: 'comment', quote: 'q', text: 't', author: 'Host'
+    })
+
+    // Annotation storage is the ONLY allowance. Everything that would treat
+    // it as a place still refuses it.
+    expect(store.switchTab('room1', TRANSCRIPT_TAB_ID)).toEqual({ ok: false, error: 'Unknown tab' })
+    expect(store.closeTab('room1', TRANSCRIPT_TAB_ID)).toEqual({ ok: false, error: 'Unknown tab' })
+    expect(store.setTabText('room1', TRANSCRIPT_TAB_ID, 'hand-typed')).toEqual({ ok: false, error: 'Unknown tab' })
+    expect(store.getRoom('room1').tabs.list.map((t) => t.id)).not.toContain(TRANSCRIPT_TAB_ID)
+  })
+
+  it('heals a room saved with the Transcript as its activeTabId, back when that was switchable', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    // Exactly what a pre-ticket-06 build could have flushed to durable
+    // storage. Nothing renders that id as a view any more, so hydration
+    // must not hand it back as the active tab.
+    const saved = {
+      tabs: { list: [{ id: 'tab-aaaa1111', title: 'Tab 1', video: null, text: 'notes' }], activeTabId: TRANSCRIPT_TAB_ID },
+      transcript: { lines: [] },
+      research: {},
+      annotations: {}
+    }
+    const store = createRoomStateStore({ durable: { load: () => saved, save: () => {} } })
+
+    const room = store.getRoom('room1')
+    expect(room.tabs.activeTabId).toBe('tab-aaaa1111')
+    // The tab list itself, and every other content kind, is untouched.
+    expect(room.tabs.list).toHaveLength(1)
+    expect(room.tabs.list[0].text).toBe('notes')
+  })
+
+  it('leaves a hydrated activeTabId alone when it does name a real tab', () => {
+    const saved = {
+      tabs: {
+        list: [
+          { id: 'tab-aaaa1111', title: 'Tab 1', video: null, text: '' },
+          { id: 'tab-bbbb2222', title: 'Tab 2', video: null, text: '' }
+        ],
+        activeTabId: 'tab-bbbb2222'
+      },
+      transcript: { lines: [] },
+      research: {},
+      annotations: {}
+    }
+    const store = createRoomStateStore({ durable: { load: () => saved, save: () => {} } })
+    expect(store.getRoom('room1').tabs.activeTabId).toBe('tab-bbbb2222')
   })
 
   it('survives a flush-and-evict/rehydrate cycle exactly like tabs/text/video already do', () => {

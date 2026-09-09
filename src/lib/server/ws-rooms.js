@@ -55,16 +55,22 @@
  *                                        — client-generated tabId (like clientId);
  *                                          host and guest are equally allowed
  *   { type: 'tab_switch', tabId }        — changes the room's shared active tab.
- *                                          tabId also accepts the reserved
- *                                          Transcript id (transcript-sync.js's
- *                                          TRANSCRIPT_TAB_ID) as a valid
- *                                          destination — "which pill the room
- *                                          is looking at" is one shared piece
- *                                          of state, broadcast to every peer
- *                                          the same way switching to any real
- *                                          tab already is, even though the
- *                                          Transcript is never itself an
- *                                          entry in tabs.list (see ADR-0002).
+ *                                          tabId must name a real entry in
+ *                                          tabs.list; anything else is
+ *                                          refused. That includes the
+ *                                          reserved Transcript id, which was
+ *                                          briefly a valid destination and
+ *                                          is not one any more (ADR-0008,
+ *                                          ticket 06): the Transcript became
+ *                                          a personal, local facet of each
+ *                                          participant's own right-hand
+ *                                          panel, so "am I looking at the
+ *                                          Transcript" is not room state and
+ *                                          never crosses this socket at all.
+ *                                          The id lives on purely as the
+ *                                          storage key for Turn-anchored
+ *                                          Annotations (see annotation_create
+ *                                          below).
  *   { type: 'tab_close',  tabId }        — refused if it's the only tab left,
  *                                          and always refused for the reserved
  *                                          Transcript id (it is never in
@@ -84,9 +90,9 @@
  *                                          UI remounts without a WS reconnect.
  *   { type: 'transcript_line', speaker, text }
  *                                        — append one new, already-finalized
- *                                          Transcript Tab line (see
- *                                          CONTEXT.md's Turn/Transcript Tab
- *                                          and ADR-0002). Any peer may send
+ *                                          Transcript line (see CONTEXT.md's
+ *                                          Turn/Transcript and ADR-0002).
+ *                                          Any peer may send
  *                                          one at any time — this is
  *                                          deliberately NOT the same
  *                                          mechanism as tab_text: the server

@@ -34,7 +34,19 @@ async function sendTranscriptLine(page, { speaker, text }) {
   )
 }
 
-test('Turn Actions live on a hovered Turn and send Focus plus neighbor Grounding', async ({ browser }) => {
+// SKIPPED BY TICKET 06, TO BE DELETED BY TICKET 07 (ADR-0008).
+//
+// These two cover the per-Turn hover-icon Turn Actions
+// (Definition/Facts/Answer). Ticket 06 retired the Transcript Tab that
+// rendered them — the Transcript is now a facet of the right-hand panel and
+// its action surface is the shared selection popup (highlight a Turn ->
+// Comment + Custom Prompts), which transcript_panel_facet.spec.js covers.
+// So there is no longer any UI for these to drive. They are skipped rather
+// than deleted here because deleting the whole Turn Action path — the
+// server route, research-card.js's suppression scoring, TURN_ACTION_IDS and
+// these specs — is ticket 07's single job, and doing half of it from ticket
+// 06 would leave that ticket a confusing partial diff.
+test.skip('Turn Actions live on a hovered Turn and send Focus plus neighbor Grounding', async ({ browser }) => {
   const host = await browser.newPage()
   await trackLiveSockets(host)
   await stubYouTubeApi(host)
@@ -73,7 +85,7 @@ test('Turn Actions live on a hovered Turn and send Focus plus neighbor Grounding
   await host.close()
 })
 
-test('empty Turn Action lookups do not leave a skim card in the panel', async ({ page }) => {
+test.skip('empty Turn Action lookups do not leave a skim card in the panel', async ({ page }) => {
   await trackLiveSockets(page)
   await stubYouTubeApi(page)
   await createRoom(page, { name: `E2E TurnEmpty ${Date.now()}`, password: 'turn-empty' })
