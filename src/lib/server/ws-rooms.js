@@ -186,6 +186,57 @@
  *                                          else's name.
  *                                          Deliberately NOT gated by Guest
  *                                          Research Access — see the handler.
+ *   { type: 'annotation_ask', tabId, id, kind: 'card', customPromptId,
+ *     quote, currentTab?, transcript?, videoTitle? }
+ *                                        — fire one Custom Prompt against a
+ *                                          highlighted excerpt (ADR-0008,
+ *                                          ticket 05). The Card half of the
+ *                                          same Annotation list
+ *                                          annotation_create writes Comments
+ *                                          into, so its result lands in one
+ *                                          shared list rather than a second
+ *                                          one.
+ *                                          Unlike annotation_create this DOES
+ *                                          need a pending/resolve round trip
+ *                                          — the body is a Research Assistant
+ *                                          answer nobody has yet — so the
+ *                                          server stores a pending Annotation,
+ *                                          broadcasts it as annotation_entry
+ *                                          immediately, runs the lookup, and
+ *                                          then broadcasts the resolved
+ *                                          annotation_entry, or
+ *                                          annotation_error if it failed.
+ *                                          Gated by Guest Research Access
+ *                                          exactly like research_ask: this is
+ *                                          an AI call spent on the room's
+ *                                          behalf, which is what that gate is
+ *                                          for (a Comment isn't, which is why
+ *                                          annotation_create above is
+ *                                          ungated).
+ *                                          `customPromptId` names one of the
+ *                                          deployment's Custom Prompts. The
+ *                                          template itself is NEVER on the
+ *                                          wire — the server looks it up and
+ *                                          resolves the Placeholders, so a
+ *                                          participant's browser never holds
+ *                                          the show's prompt text.
+ *                                          `quote` becomes both the frozen
+ *                                          Annotation quote and the value of
+ *                                          the `{selection}` Placeholder.
+ *                                          currentTab/transcript/videoTitle
+ *                                          are Placeholder ingredients only:
+ *                                          the server keeps just the ones the
+ *                                          chosen template actually references
+ *                                          and drops the rest before the
+ *                                          request is built (see
+ *                                          buildCustomPromptRequest — that
+ *                                          discard is the ADR's spoiler-risk
+ *                                          lesson made structural).
+ *                                          `id` is client-generated and, like
+ *                                          annotation_create, idempotent: a
+ *                                          replayed ask re-broadcasts the
+ *                                          stored Annotation and does NOT
+ *                                          spend a second lookup.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
@@ -304,10 +355,16 @@
  *                                          not a locally invented one).
  *                                          Mirrors research_entry exactly.
  *                                          `entry` is `{id, tabId, kind,
- *                                          quote, text, author, at}`; `kind`
- *                                          is 'comment' today ('card' joins
- *                                          it in ticket 05 — see
- *                                          ANNOTATION_KINDS). `quote` is the
+ *                                          quote, text, status, error,
+ *                                          citations, customPromptId,
+ *                                          author, at}`; `kind` is
+ *                                          'comment' (a person typed it) or
+ *                                          'card' (a Custom Prompt produced
+ *                                          it — see ANNOTATION_KINDS).
+ *                                          `status` is 'answered' from
+ *                                          birth for a Comment, and
+ *                                          'pending' -> 'answered' |
+ *                                          'errored' for a Card. `quote` is the
  *                                          exact text highlighted at
  *                                          creation, frozen: it is never
  *                                          recomputed or replaced by
@@ -323,13 +380,33 @@
  *                                          live annotation_entry for that
  *                                          connection. Mirrors
  *                                          research_state exactly.
+ *   { type: 'annotation_error', tabId, id, message, entry }
+ *                                        — a Card's Research Assistant
+ *                                          lookup failed (ADR-0008, ticket
+ *                                          05). Mirrors what research_error
+ *                                          does to a research entry: the
+ *                                          Annotation moves from pending to
+ *                                          errored with a visible reason,
+ *                                          never left stuck pending with no
+ *                                          explanation. `entry` is the
+ *                                          errored Annotation itself, so a
+ *                                          listener can upsert it through
+ *                                          the same reducer annotation_entry
+ *                                          uses; `message` repeats
+ *                                          `entry.error` for a listener that
+ *                                          only wants the reason. The
+ *                                          errored state is stored too, so a
+ *                                          late joiner's annotation_state
+ *                                          replay shows the same thing.
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
 
-import { getActiveRoomBySlug, saveRoomContent, loadRoomContent } from './db.js'
+import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
+import { askResearchAssistant, buildCustomPromptRequest } from './research-assistant.js'
+import { parseResearchCard } from '../research/research-card.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -428,6 +505,87 @@ function broadcast(slug, msg, excludeClientId = null) {
   if (!room) return
   for (const peer of room.values()) {
     if (peer.clientId !== excludeClientId) send(peer.ws, msg)
+  }
+}
+
+// The Research Assistant's failure codes, as something a participant can
+// actually read. Same job as research-panel.js's describeResearchError,
+// which does this for the HTTP path — a Card that failed must always show
+// why, never sit pending forever.
+const ANNOTATION_ASK_ERRORS = {
+  NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
+  TIMEOUT: 'The Research Assistant took too long to respond. Try again.',
+  UPSTREAM_ERROR: 'The Research Assistant could not be reached. Try again.',
+  EMPTY_ANSWER: 'The Research Assistant had no answer for that. Try rephrasing.',
+  INVALID_REQUEST: 'That prompt could not be run on the highlighted text.'
+}
+
+const ANNOTATION_ASK_GENERIC_ERROR = 'Something went wrong running that prompt.'
+
+// Test seam for the one outbound call this module makes. askResearchAssistant
+// already takes an injected `fetchImpl` (that is how research-assistant.js's
+// own tests avoid ever reaching OpenRouter); a WS handler has no request
+// context to thread one through, so it is injected here instead. null means
+// "use the runtime's own fetch", which is what production always does.
+// Same `_`-prefixed, tests-only shape as _resetRooms below.
+let researchFetchImpl = null
+
+/** Tests only: route the Research Assistant's HTTP call at a fake, so no
+ *  test can spend a real Research Assistant call. Pass null to restore. */
+export function _setResearchFetchForTests(fetchImpl) {
+  researchFetchImpl = fetchImpl || null
+}
+
+/**
+ * Runs one Custom Prompt for a pending Card Annotation and broadcasts the
+ * outcome. Fire-and-forget from the message handler: the socket must not
+ * block for the length of an LLM call, and the pending Annotation is
+ * already broadcast state by the time this starts, so every peer can see
+ * the lookup is happening.
+ *
+ * This deliberately reuses askResearchAssistant — the same entry point the
+ * HTTP research route calls — rather than introducing a second way to reach
+ * the model. What is new here is only how the *request* is built: one named
+ * Custom Prompt plus a resolved `{selection}`, instead of the one global
+ * prompt plus the whole active tab.
+ */
+async function runAnnotationAsk(slug, { annotationId, template, selection, currentTab, transcript, videoTitle }) {
+  const finish = (result, extra = null) => {
+    if (!result.ok) return
+    const msg = extra
+      ? { type: 'annotation_error', tabId: result.tabId, id: result.entry.id, message: extra, entry: result.entry }
+      : { type: 'annotation_entry', tabId: result.tabId, entry: result.entry }
+    broadcast(slug, msg)
+  }
+
+  try {
+    const request = buildCustomPromptRequest({ template, selection, currentTab, transcript, videoTitle })
+    if (!request) {
+      finish(roomStateStore.errorAnnotation(slug, annotationId, { message: 'That prompt is no longer configured.' }),
+        'That prompt is no longer configured.')
+      return
+    }
+    const { answer, citations } = await askResearchAssistant(request, {
+      roomSlug: slug,
+      // undefined lets askResearchAssistant fall back to the runtime's fetch.
+      fetchImpl: researchFetchImpl ?? undefined
+    })
+    // askResearchAssistant hands back a serialized research card; a Card
+    // Annotation's body is the takeaway itself, so the panel renders one
+    // the same way it renders a Comment.
+    const text = parseResearchCard(answer)?.mainTakeaway ?? ''
+    const resolved = roomStateStore.resolveAnnotation(slug, annotationId, { text, citations })
+    if (resolved.ok) {
+      finish(resolved)
+      return
+    }
+    // An empty takeaway is a failed lookup, not a blank Card: resolving to
+    // nothing would leave a row that says nothing and explains nothing.
+    const message = ANNOTATION_ASK_ERRORS.EMPTY_ANSWER
+    finish(roomStateStore.errorAnnotation(slug, annotationId, { message }), message)
+  } catch (e) {
+    const message = ANNOTATION_ASK_ERRORS[e?.code] || ANNOTATION_ASK_GENERIC_ERROR
+    finish(roomStateStore.errorAnnotation(slug, annotationId, { message }), message)
   }
 }
 
@@ -892,6 +1050,65 @@ export function setupWss(wss) {
         for (const p of room.values()) {
           send(p.ws, { type: 'annotation_entry', tabId: result.tabId, entry: result.entry })
         }
+      }
+
+      if (msg.type === 'annotation_ask' && clientId) {
+        // Guest Research Access, the SAME gate research_ask/research_remove
+        // use (cached on the peer at connect as `guestAiAllowed`) — not a
+        // new rule of its own. A Card spends a Research Assistant call on
+        // the room's behalf, which is exactly what that gate controls; the
+        // Comment path above stays ungated because a typed note doesn't.
+        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+          send(ws, { type: 'error', message: 'Only the host can run a prompt in this room.' })
+          return
+        }
+
+        // Resolved server-side from the id: the prompt's template text is
+        // never on the wire and never in a participant's browser.
+        const customPrompt = getCustomPrompt(msg.customPromptId)
+        if (!customPrompt) {
+          send(ws, { type: 'error', message: 'Unknown prompt.' })
+          return
+        }
+
+        const result = roomStateStore.addAnnotation(slug, msg.tabId, {
+          id: msg.id,
+          kind: 'card',
+          quote: msg.quote,
+          // A Card is authored by the prompt that produced it, not by the
+          // person who highlighted the text — that is what makes it visibly
+          // AI-authored in the panel alongside a human's Comment.
+          author: customPrompt.title,
+          customPromptId: customPrompt.id
+        })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+
+        // Pending state is broadcast before the lookup starts, so nobody is
+        // left wondering whether their click did anything.
+        for (const p of room.values()) {
+          send(p.ws, { type: 'annotation_entry', tabId: result.tabId, entry: result.entry })
+        }
+
+        // A replayed ask (annotation-outbox.js re-sending through a
+        // reconnect) is answered with the stored Annotation and must not
+        // spend a second lookup — which is the whole reason addAnnotation
+        // reports `duplicate`.
+        if (result.duplicate) return
+
+        void runAnnotationAsk(slug, {
+          annotationId: result.entry.id,
+          template: customPrompt.prompt,
+          // `{selection}` is the frozen quote the server just stored, never
+          // the raw wire value — so what the prompt sees and what the
+          // Annotation shows can never disagree.
+          selection: result.entry.quote,
+          currentTab: msg.currentTab,
+          transcript: msg.transcript,
+          videoTitle: msg.videoTitle
+        })
       }
 
       if (msg.type === 'tab_text' && clientId) {

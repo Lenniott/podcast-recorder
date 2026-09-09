@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, tick } from "svelte";
-  import { Plus, AnnotationPlus } from "$lib/icons";
+  import { Plus, AnnotationPlus, FileSearch02 } from "$lib/icons";
   import TabVideoPlayer from "../TabVideoPlayer.svelte";
   import TranscriptTab from "./TranscriptTab.svelte";
   import SelectionPopup from "./SelectionPopup.svelte";
@@ -15,6 +15,13 @@
     selectionRect,
     rectOfRange,
   } from "./selection-popup.js";
+  import {
+    customPromptActions,
+    parsePromptActionId,
+    resolveSelectionSurface,
+    buildAnnotationAskPayload,
+    formatTranscriptForPrompt,
+  } from "./selection-annotations.js";
   import { createAnnotationOutbox } from "./annotation-outbox.js";
   import { highlightSegments, needsQuoteRematch } from "./notes-highlights.js";
   import {
@@ -147,24 +154,45 @@
   // drift from what is really there.
   let notesDomText = "";
 
-  // ─── Highlight → popup → Annotation (ADR-0008, ticket 03) ──────────────
+  // ─── Highlight → popup → Annotation (ADR-0008, tickets 03 and 05) ──────
   //
-  // Highlighting Notes text raises a floating popup next to the highlight
-  // whose only action today is Comment; choosing it opens a short input,
-  // and submitting sends `annotation_create` (see ws-rooms.js). The popup
-  // itself is SelectionPopup.svelte — a presentational component that takes
-  // its actions as data, so ticket 05 adds Custom Prompt buttons to this
-  // same popup by appending to `selectionActions` below, without touching
-  // that component (its header comment spells out the contract).
+  // Highlighting text raises a floating popup next to the highlight. Its
+  // actions are Comment (opens a short input; submitting sends
+  // `annotation_create`) and one button per configured Custom Prompt, which
+  // fires IMMEDIATELY — no compose step at all, because a Custom Prompt is
+  // fully self-contained from its saved template (ADR-0008 explicitly
+  // rejected pausing for a typed follow-up). A prompt click sends
+  // `annotation_ask` and the answer comes back as a Card in the same shared
+  // Annotation list the Comments are in.
+  //
+  // The popup itself is SelectionPopup.svelte — presentational, takes its
+  // actions as data and never branches on an id, so both behaviours live
+  // here rather than in it.
   //
   // The quote is frozen the moment the highlight is captured and is what
-  // gets sent — it is never re-derived from the DOM at submit time, so
-  // editing Notes between highlighting and submitting cannot change what
-  // the Annotation claims was highlighted (CONTEXT.md's **Annotation**).
+  // gets sent — it is never re-derived from the DOM at submit/fire time, so
+  // editing Notes in between cannot change what the Annotation claims was
+  // highlighted (CONTEXT.md's **Annotation**). The server re-uses that same
+  // frozen quote as `{selection}`.
+  //
+  // SURFACES, and what ticket 06 has left to do: `selectionSurfaces` below
+  // is the list of elements a highlight may come from, each with the tab its
+  // Annotation belongs to. Everything downstream of it —
+  // resolveSelectionSurface, the quote, the popup, both actions — is
+  // element-agnostic (see selection-annotations.js). Registering the
+  // Transcript is adding an entry to that array, not a second code path.
 
   const SELECTION_ACTION_COMMENT = "comment";
 
-  // Extended, not replaced, by ticket 05's Custom Prompt buttons.
+  // [{id, title}] — every configured Custom Prompt, id + title only. The
+  // template text stays on the server (see ws-rooms.js's annotation_ask).
+  export let customPrompts = [];
+
+  // Guest Research Access, resolved by the page — the same value that
+  // decides whether Ask is available. Prompt buttons still render without
+  // it, disabled, rather than disappearing.
+  export let canRunCustomPrompts = false;
+
   $: selectionActions = [
     {
       id: SELECTION_ACTION_COMMENT,
@@ -172,11 +200,25 @@
       title: "Comment on the highlighted text",
       icon: AnnotationPlus,
     },
+    ...customPromptActions(customPrompts, {
+      canRun: canRunCustomPrompts,
+      icon: FileSearch02,
+    }),
   ];
 
-  // { quote, rect } — what the popup is anchored to, or null when nothing
-  // usable is highlighted. `quote` is the frozen text; `rect` is only
-  // geometry and may be re-measured freely.
+  // Every element a highlight may be taken from, with the tab an Annotation
+  // made there is filed under. One entry today; ticket 06 adds the
+  // Transcript's.
+  $: selectionSurfaces =
+    notesEl && activeTabId && !viewingTranscript
+      ? [{ el: notesEl, tabId: activeTabId }]
+      : [];
+
+  // { quote, rect, tabId } — what the popup is anchored to, or null when
+  // nothing usable is highlighted. `quote` is the frozen text; `rect` is
+  // only geometry and may be re-measured freely; `tabId` is the surface's,
+  // captured at highlight time so switching tabs before firing cannot
+  // re-file the Annotation under a tab that never held the quote.
   let selectionAnchor = null;
   // A clone of the highlighted Range, kept so the popup can stay anchored
   // after the live selection is gone (clicking into the comment input
@@ -203,7 +245,8 @@
     if (openSelectionActionId) return;
     if (typeof window === "undefined") return;
     const selection = window.getSelection?.();
-    if (!notesEl || !selectionIsInside(notesEl, selection)) {
+    const surface = resolveSelectionSurface(selectionSurfaces, selection);
+    if (!surface) {
       selectionAnchor = null;
       anchorRange = null;
       return;
@@ -216,7 +259,7 @@
       return;
     }
     anchorRange = selection.getRangeAt(0).cloneRange();
-    selectionAnchor = { quote, rect };
+    selectionAnchor = { quote, rect, tabId: surface.tabId };
   }
 
   /** Re-measures the anchor after a scroll/resize. The popup is
@@ -233,6 +276,14 @@
   }
 
   async function onSelectionAction(actionId) {
+    // A Custom Prompt fires on the click itself — no composer, no second
+    // confirmation, nothing to type (ADR-0008: "every Custom Prompt fires
+    // immediately, fully self-contained from its saved template").
+    const customPromptId = parsePromptActionId(actionId);
+    if (customPromptId) {
+      runCustomPrompt(customPromptId);
+      return;
+    }
     if (actionId !== SELECTION_ACTION_COMMENT) return;
     openSelectionActionId = SELECTION_ACTION_COMMENT;
     commentDraft = "";
@@ -240,13 +291,45 @@
     commentInputEl?.focus();
   }
 
+  /** Fires one Custom Prompt against the current highlight. The Card comes
+   *  back over `annotation_entry` like any other Annotation — nothing is
+   *  rendered optimistically here, so the panel never shows a row the room
+   *  doesn't have. */
+  function runCustomPrompt(customPromptId) {
+    if (!canRunCustomPrompts) return; // same gate as ws-rooms.js's annotation_ask
+    const anchor = selectionAnchor;
+    const payload = buildAnnotationAskPayload({
+      id: makeAnnotationId(),
+      tabId: anchor?.tabId,
+      customPromptId,
+      // The frozen quote, not a fresh read of the DOM — it is both the
+      // Annotation's anchor and `{selection}`'s value.
+      quote: anchor?.quote,
+      // Placeholder ingredients only. The server keeps just the ones this
+      // prompt's own template references and discards the rest before the
+      // request is built (see buildCustomPromptRequest) — a prompt written
+      // against `{selection}` alone never sees the notes around it.
+      currentTab: tabTexts[anchor?.tabId] ?? "",
+      transcript: formatTranscriptForPrompt(transcriptLines),
+      videoTitle: tabVideoTitles[anchor?.tabId] ?? "",
+    });
+    if (!payload) return;
+    // Same reasoning as a Comment's: send() is a no-op on a dropped socket,
+    // and annotation_ask is idempotent by id server-side (a replayed ask
+    // re-broadcasts the stored Card and does not spend a second lookup).
+    annotationOutbox.track(payload);
+    send(payload);
+    clearSelectionPopup();
+    window.getSelection?.()?.removeAllRanges?.();
+  }
+
   function submitComment() {
     const text = commentDraft.trim();
     const anchor = selectionAnchor;
-    if (!text || !anchor?.quote || !activeTabId || viewingTranscript) return;
+    if (!text || !anchor?.quote || !anchor?.tabId) return;
     const payload = {
       type: "annotation_create",
-      tabId: activeTabId,
+      tabId: anchor.tabId,
       id: makeAnnotationId(),
       kind: "comment",
       // The quote captured when the text was highlighted — deliberately
@@ -325,6 +408,14 @@
     if (msg?.tabId && Array.isArray(msg.entries)) {
       annotationsByTab = reduceAnnotationState(annotationsByTab, msg);
     }
+  }
+
+  /** A Card's lookup failed. The server clearly has the Annotation (it
+   *  stored it, ran the prompt and failed), so this is just as much an
+   *  acknowledgement as annotation_entry — re-sending the ask on the next
+   *  reconnect would only re-broadcast the same errored row. */
+  export function applyAnnotationError(msg) {
+    if (msg?.entry?.id) annotationOutbox.acknowledge(msg.entry.id);
   }
 
   /** Re-announce Comments the server never confirmed, on every successful

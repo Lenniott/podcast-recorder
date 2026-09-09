@@ -30,7 +30,10 @@
   import {
     applyAnnotationEntry as reduceAnnotationEntry,
     applyAnnotationState as reduceAnnotationState,
+    applyAnnotationError as reduceAnnotationError,
     visibleAnnotations,
+    isCardAnnotation,
+    annotationStatus,
   } from "./annotation-panel.js";
 
   const TURN_ACTION_LABEL = {
@@ -181,6 +184,12 @@
    *  makes rejoining a room show the Annotations that were already there. */
   export function applyAnnotationState(msg) {
     annotationsByTab = reduceAnnotationState(annotationsByTab, msg);
+  }
+
+  /** A Card's Research Assistant lookup failed (ticket 05) — the row moves
+   *  from pending to a visible reason rather than spinning forever. */
+  export function applyAnnotationError(msg) {
+    annotationsByTab = reduceAnnotationError(annotationsByTab, msg);
   }
 
   function removeEntry(entryId) {
@@ -353,28 +362,71 @@
         {customTitle}
       </button>
     {/if}
-    <!-- Annotations (ADR-0008, ticket 03) — the active tab's, newest first.
-         Not gated by canAskResearch: a Comment is a plain human note, not a
-         Research Assistant action, so Guest Research Access does not apply
-         to reading or writing one (see ws-rooms.js's annotation_create). -->
+    <!-- Annotations (ADR-0008, tickets 03 and 05) — the active tab's,
+         newest first. Comments (human) and Cards (a Custom Prompt's answer)
+         share ONE list on purpose: they are the same concept, both anchored
+         to a frozen quote, and separating them would make a reader check two
+         places for what was said about one highlight. Reading is not gated
+         by canAskResearch — the gate is on *spending* a Research Assistant
+         call (see ws-rooms.js's annotation_ask), not on seeing the result. -->
     <section class="annotation-list" data-testid="annotation-list">
       <h3 class="annotation-list-title">Annotations</h3>
       <div class="annotation-entries" bind:this={annotationsEl}>
         {#if annotations.length === 0}
           <p class="research-empty">
-            Highlight text in the notes to comment on it.
+            Highlight text in the notes to comment on it or run a prompt.
           </p>
         {:else}
           {#each annotations as annotation (annotation.id)}
-            <article class="annotation" data-kind={annotation.kind}>
+            {@const isCard = isCardAnnotation(annotation)}
+            {@const status = annotationStatus(annotation)}
+            <article
+              class="annotation"
+              class:annotation-card={isCard}
+              data-kind={annotation.kind}
+              data-status={status}
+              data-testid="annotation"
+            >
               <!-- The frozen quote — exactly the text that was highlighted
                    when this Annotation was made, never recomputed from the
                    notes as they stand now. -->
               <blockquote class="annotation-quote">
                 {annotation.quote}
               </blockquote>
-              <p class="annotation-text">{annotation.text}</p>
-              <p class="annotation-author">{annotation.author}</p>
+              {#if status === "pending"}
+                <p class="annotation-pending" aria-live="polite">
+                  Running {annotation.author}…
+                </p>
+              {:else if status === "errored"}
+                <p class="annotation-error-text">{annotation.error}</p>
+              {:else}
+                <p class="annotation-text">{annotation.text}</p>
+              {/if}
+              <!-- Who said it. A Card names the prompt that produced it and
+                   is badged as AI, so a reader skimming the list is never
+                   left guessing whether a person or the assistant wrote a
+                   given row. -->
+              <p class="annotation-author">
+                {#if isCard}
+                  <span class="annotation-badge" data-testid="annotation-badge"
+                    >AI</span
+                  >
+                {/if}
+                {annotation.author}
+              </p>
+              {#if isCard && annotation.citations?.length}
+                <ul class="annotation-citations">
+                  {#each dedupeCitationsByHost(annotation.citations) as citation (citation.host)}
+                    <li>
+                      <a
+                        href={citation.url}
+                        target="_blank"
+                        rel="noopener noreferrer">{citation.host}</a
+                      >
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </article>
           {/each}
         {/if}
@@ -592,6 +644,69 @@
   .annotation-author {
     margin: 0;
     font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A Card is the assistant talking, not a co-host — the accent edge and
+     the badge together make that readable at a glance in a mixed list,
+     rather than relying on the author name alone (a prompt title like
+     "Fact check" reads a lot like a person's note otherwise). */
+  .annotation-card {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
+  }
+
+  .annotation-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 5px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .annotation-pending {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .annotation-pending::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+    animation: research-pulse 1s ease-in-out infinite;
+  }
+
+  .annotation-error-text {
+    margin: 0;
+    font-size: 13px;
+    color: var(--danger, #d33);
+  }
+
+  .annotation-citations {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+  }
+
+  .annotation-citations a {
     color: var(--muted);
   }
 

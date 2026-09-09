@@ -7,6 +7,11 @@ vi.mock('../../src/lib/server/db.js', () => ({
     password_hash: 'mock-hash',
     guest_ai_allowed: 0
   })),
+  // ws-rooms resolves an annotation_ask's Custom Prompt by id (ticket 05);
+  // research-assistant records usage. Neither is exercised by this Comment
+  // suite — see ws-annotation-ask.test.js — but both must exist to import.
+  getCustomPrompt: vi.fn(() => null),
+  recordResearchUsage: vi.fn(),
   default: {}
 }))
 
@@ -155,7 +160,7 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     const tabId = activeTabId(host)
     const cases = [
       { tabId: 'tab-nope', id: 'a1', quote: 'q', text: 't' },
-      { tabId, id: 'a2', quote: 'q', text: 't', kind: 'card' }, // ticket 05's kind, not valid yet
+      { tabId, id: 'a2', quote: 'q', text: 't', kind: 'nonsense' },
       { tabId, id: 'a3', quote: '   ', text: 't' },
       { tabId, id: 'a4', quote: 'q', text: '   ' }
     ]

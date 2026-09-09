@@ -24,7 +24,9 @@ import { TURN_ACTION_IDS } from '../research/research-card.js'
 import {
   ANNOTATION_KINDS,
   MAX_ANNOTATION_TEXT_LEN,
+  MAX_ANNOTATION_ANSWER_LEN,
   MAX_ANNOTATION_AUTHOR_LEN,
+  isAiAuthoredKind,
   normalizeQuote,
   upsertAnnotation
 } from '../research/annotation-sync.js'
@@ -402,13 +404,20 @@ export function createRoomStateStore({
   /**
    * Records one Annotation against the tab its quote was highlighted in.
    *
-   * Unlike addResearchEntry there is no pending/resolve lifecycle: a
-   * Comment's content is already complete the moment a person submits it,
-   * so this is the only mutation an Annotation ever gets — it is written
-   * once and thereafter read-only. `quote` in particular is frozen here and
-   * is never recomputed or replaced by any later call (ticket 04 re-finds
-   * it in current Notes text to draw a highlight; that is a read, and a
-   * failed match leaves the Annotation and its quote exactly as stored).
+   * `quote` is frozen here and is never recomputed or replaced by any later
+   * call (ticket 04 re-finds it in current Notes text to draw a highlight;
+   * that is a read, and a failed match leaves the Annotation and its quote
+   * exactly as stored).
+   *
+   * A **Comment** has no pending/resolve lifecycle: its content is already
+   * complete the moment a person submits it, so it is born 'answered' and
+   * this is the only mutation it ever gets. A **Card** (ADR-0008, ticket
+   * 05) does: its body is a Research Assistant answer that does not exist
+   * yet, so it is born 'pending' with an empty `text` — real, broadcast
+   * state from the instant it is created, never a client-only illusion —
+   * and moves exactly once, through resolveAnnotation or errorAnnotation
+   * below. Which kinds work that way is isAiAuthoredKind's call, not a
+   * literal 'card' test here.
    *
    * `tabId` is validated against the room's real tabs but is otherwise
    * taken from the caller — deliberately unlike research_ask, which forces
@@ -421,7 +430,7 @@ export function createRoomStateStore({
    * name — never read off the wire message, so nobody can post a Comment
    * under someone else's name.
    */
-  function addAnnotation(slug, tabId, { id, kind, quote, text, author } = {}) {
+  function addAnnotation(slug, tabId, { id, kind, quote, text, author, customPromptId } = {}) {
     return withRoom(slug, (content) => {
       const annotationId = String(id || '').slice(0, 64)
       if (!annotationId) return { ok: false, error: 'Invalid annotation id' }
@@ -435,16 +444,21 @@ export function createRoomStateStore({
       const cleanQuote = normalizeQuote(quote)
       if (!cleanQuote) return { ok: false, error: 'An annotation needs the text it is anchored to' }
 
+      const awaitingAnswer = isAiAuthoredKind(annotationKind)
       const cleanText = String(text || '').trim().slice(0, MAX_ANNOTATION_TEXT_LEN)
-      if (!cleanText) return { ok: false, error: 'A comment cannot be empty' }
+      // Only a human-authored Annotation must arrive with its body — a Card's
+      // body is the answer, and the answer is the thing we are waiting for.
+      if (!cleanText && !awaitingAnswer) return { ok: false, error: 'A comment cannot be empty' }
 
       const existing = (content.annotations[tid] || []).find((a) => a.id === annotationId)
       if (existing) {
         // Same id, already stored: this is a reconnecting client re-sending
-        // an annotation_create it never saw acknowledged (see
-        // annotation-outbox.js), not a second Comment. Re-broadcast what is
-        // already stored rather than storing a near-duplicate — the stored
-        // record, quote included, stays exactly as first written.
+        // a create it never saw acknowledged (see annotation-outbox.js), not
+        // a second Annotation. Re-broadcast what is already stored rather
+        // than storing a near-duplicate — the stored record, quote included,
+        // stays exactly as first written. `duplicate` is what tells
+        // ws-rooms.js not to spend a second Research Assistant call on a
+        // replayed annotation_ask.
         return { ok: true, room: content, entry: existing, tabId: tid, duplicate: true }
       }
 
@@ -453,12 +467,66 @@ export function createRoomStateStore({
         tabId: tid,
         kind: annotationKind,
         quote: cleanQuote,
-        text: cleanText,
+        text: awaitingAnswer ? '' : cleanText,
+        status: awaitingAnswer ? 'pending' : 'answered',
+        error: null,
+        citations: [],
+        // Which Custom Prompt produced this Card, kept so a later ticket can
+        // tell two Cards on the same quote apart; null for a Comment.
+        customPromptId: customPromptId ? String(customPromptId).slice(0, 64) : null,
         author: String(author || '').trim().slice(0, MAX_ANNOTATION_AUTHOR_LEN) || 'Guest',
         at: Date.now()
       }
       content.annotations[tid] = upsertAnnotation(content.annotations[tid], entry)
       return { ok: true, room: content, entry, tabId: tid, duplicate: false }
+    })
+  }
+
+  /** Finds an Annotation by id across every tab's list — same reasoning as
+   *  findResearchEntry: an Annotation's tabId is fixed at creation, so a
+   *  later resolve/error never has to re-supply it. */
+  function findAnnotation(content, annotationId) {
+    for (const tabId of Object.keys(content.annotations)) {
+      const idx = content.annotations[tabId].findIndex((a) => a.id === annotationId)
+      if (idx !== -1) return { tabId, idx }
+    }
+    return null
+  }
+
+  /** The Research Assistant answered a pending Card. Mirrors
+   *  resolveResearchEntry — `quote`, `author` and `at` are untouched. */
+  function resolveAnnotation(slug, annotationId, { text, citations } = {}) {
+    return withRoom(slug, (content) => {
+      const found = findAnnotation(content, String(annotationId || ''))
+      if (!found) return { ok: false, error: 'Unknown annotation' }
+
+      const entry = content.annotations[found.tabId][found.idx]
+      const answer = String(text || '').trim().slice(0, MAX_ANNOTATION_ANSWER_LEN)
+      if (!answer) return { ok: false, error: 'A card cannot resolve to an empty answer' }
+      entry.status = 'answered'
+      entry.text = answer
+      entry.citations = sanitizeCitations(citations)
+      entry.error = null
+      return { ok: true, room: content, entry, tabId: found.tabId }
+    })
+  }
+
+  /** The lookup behind a pending Card failed. This and resolveAnnotation are
+   *  the ONLY places a pending Card's status changes — a Card left pending
+   *  with no explanation is precisely the "UI claiming things are fine when
+   *  they might not be" AGENTS.md forbids, so the reason is always stored
+   *  and always visible. */
+  function errorAnnotation(slug, annotationId, { message } = {}) {
+    return withRoom(slug, (content) => {
+      const found = findAnnotation(content, String(annotationId || ''))
+      if (!found) return { ok: false, error: 'Unknown annotation' }
+
+      const entry = content.annotations[found.tabId][found.idx]
+      entry.status = 'errored'
+      entry.error = String(message || 'Something went wrong.').slice(0, MAX_ANNOTATION_ANSWER_LEN)
+      entry.text = ''
+      entry.citations = []
+      return { ok: true, room: content, entry, tabId: found.tabId }
     })
   }
 
@@ -486,6 +554,8 @@ export function createRoomStateStore({
     errorResearchEntry,
     removeResearchEntry,
     addAnnotation,
+    resolveAnnotation,
+    errorAnnotation,
     _resetForTests
   }
 }

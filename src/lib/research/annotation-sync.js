@@ -17,16 +17,47 @@
  * The `kind` discriminator — which sort of author produced an Annotation
  * (see CONTEXT.md's **Comment** and **Card**).
  *
- *   'comment' — a person typed it (this ticket).
- *   'card'    — a Custom Prompt produced it (ticket 05 adds this value; add
- *               it to this array and every kind-agnostic path below keeps
- *               working, because nothing here branches on the value).
+ *   'comment' — a person typed it (ticket 03).
+ *   'card'    — a Custom Prompt produced it (ticket 05).
  *
  * The panel lists every kind together, so this exists to label a row and to
- * let a future ticket render one kind differently — never to scope storage,
+ * let the panel render one kind differently — never to scope storage,
  * broadcast, or replay, all of which are kind-agnostic on purpose.
  */
-export const ANNOTATION_KINDS = ['comment']
+export const ANNOTATION_KINDS = ['comment', 'card']
+
+/**
+ * Whether a `kind` needs the Research Assistant to produce its body.
+ *
+ * This is the single place "which Annotation kinds cost an AI call" is
+ * decided, and it is what Guest Research Access is applied to (see
+ * ws-rooms.js's annotation_ask handler). A Comment is a plain human note
+ * and is deliberately ungated (ticket 03); a Card is an AI lookup and is
+ * gated exactly like Ask (ADR-0008).
+ */
+export function isAiAuthoredKind(kind) {
+  return kind === 'card'
+}
+
+/**
+ * An Annotation's lifecycle status.
+ *
+ * A Comment has none of this — it is complete the instant a person submits
+ * it — so it is stored as 'answered' from birth and nothing ever moves it.
+ * A Card genuinely does have a lifecycle, because its body is not known
+ * until the Research Assistant replies: it is created 'pending', broadcast
+ * immediately so every peer sees the lookup happening, and then moves once
+ * to 'answered' or 'errored'. A pending Card must NEVER be left stuck with
+ * no explanation — that is the same "never let the UI claim things are
+ * fine" rule AGENTS.md states for recording health, and is why the error
+ * path stores a visible reason rather than silently dropping the row.
+ */
+export const ANNOTATION_STATUSES = ['pending', 'answered', 'errored']
+
+/** Same cap, and same reasoning, as MAX_RESEARCH_ANSWER_LEN: a Card body is
+ *  freeform Research Assistant output, not a typed note, so it gets the
+ *  answer budget rather than the Comment one. */
+export const MAX_ANNOTATION_ANSWER_LEN = 8000
 
 /** Capped for the same reason MAX_RESEARCH_ANSWER_LEN is: a frozen quote is
  *  trusted-enough client-relayed content, and this only stops an unbounded

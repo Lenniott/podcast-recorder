@@ -816,6 +816,14 @@
         researchPanel?.applyAnnotationState?.(msg)
         roomTabs?.applyAnnotationState?.(msg)
       }
+      // A Card's lookup failed (ticket 05). Routed to both for the same
+      // reasons annotation_entry is: the panel has to show the reason, and
+      // RoomTabs has to stop re-sending an ask the server has clearly
+      // already seen.
+      if (msg.type === 'annotation_error') {
+        researchPanel?.applyAnnotationError?.(msg)
+        roomTabs?.applyAnnotationError?.(msg)
+      }
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'transcript_activity') roomTabs?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
@@ -1006,6 +1014,7 @@
     guestCanAskResearch={data.guestCanAskResearch}
     customEnabled={data.customEnabled}
     customTitle={data.customTitle}
+    customPrompts={data.customPrompts}
     roomPassword={data.roomPassword}
     {wsStatus}
     {peers}
