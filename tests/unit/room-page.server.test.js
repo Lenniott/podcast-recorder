@@ -3,10 +3,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import db, {
+  createCustomPrompt,
   createRoom,
   getRoomBySlug,
-  setResearchPrompt,
-  setResearchPromptTitle,
+  updateCustomPrompt,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -182,21 +182,24 @@ describe('rec/[slug]/+page.server', () => {
       expect(data.roomPassword).toBeNull()
     })
 
-    it('keeps Custom off until both Research Prompt and Title are set', async () => {
+    // The room's single Custom button runs the first Custom Prompt in the
+    // list until ticket 05 lets a highlight pick one by id, and ticket 07
+    // retires the button entirely.
+    it('keeps Custom off until a usable Custom Prompt exists, then runs the first one', async () => {
       await seedRoom()
       const { load } = await loadPage()
       const empty = await load({ params: { slug: SLUG }, cookies: makeCookies() })
       expect(empty.customEnabled).toBe(false)
       expect(empty.customTitle).toBe('')
 
-      setResearchPrompt('Read {current_tab}.')
-      const promptOnly = await load({ params: { slug: SLUG }, cookies: makeCookies() })
-      expect(promptOnly.customEnabled).toBe(false)
+      const created = createCustomPrompt({ title: 'Interpret', prompt: 'Read {current_tab}.' })
+      const configured = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(configured.customEnabled).toBe(true)
+      expect(configured.customTitle).toBe('Interpret')
 
-      setResearchPromptTitle('Interpret')
-      const both = await load({ params: { slug: SLUG }, cookies: makeCookies() })
-      expect(both.customEnabled).toBe(true)
-      expect(both.customTitle).toBe('Interpret')
+      updateCustomPrompt(created.id, { title: 'Interpret', prompt: '   ' })
+      const blankTemplate = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(blankTemplate.customEnabled).toBe(false)
     })
   })
 

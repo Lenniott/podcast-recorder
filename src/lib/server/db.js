@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { randomBytes } from 'crypto'
 import { mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { isRoomExpired } from './room-lifetime.js'
@@ -67,17 +68,36 @@ function getDb() {
     )
   `)
 
-  // Deployment-wide settings — one row per key. Holds the Research Prompt
-  // and Research Prompt Title (see CONTEXT.md), replacing the retired
-  // RESEARCH_CUSTOM_PROMPT env var and the hardcoded INTERPRETATION_MODE_PROMPT
-  // constant. A key/value shape (rather than a dedicated column-per-setting
-  // table) so a new setting is another row, not a migration.
+  // Deployment-wide settings — one row per key. A key/value shape (rather
+  // than a dedicated column-per-setting table) so a new setting is another
+  // row, not a migration. The Research Prompt and Research Prompt Title
+  // used to live here as two rows; ADR-0008 replaced that single pair with
+  // the custom_prompts collection below, and migrateLegacyResearchPrompt()
+  // moves any surviving pair across.
   _db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )
   `)
+
+  // Custom Prompts (see CONTEXT.md, ADR-0008) — the deployment-wide list of
+  // named `{title, prompt text}` pairs that replaced the one global Research
+  // Prompt. Same site-password-gated scope as the setting it replaced: not
+  // per-room, and no room column here deliberately. `id` is the stable
+  // identifier a highlight-triggered lookup references, so it must survive a
+  // title edit — hence a generated id rather than the title as a key.
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS custom_prompts (
+      id         TEXT PRIMARY KEY,
+      title      TEXT NOT NULL,
+      prompt     TEXT NOT NULL,
+      position   INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `)
+
+  migrateLegacyResearchPrompt(_db)
 
   // Always-on usage log backing the Usage Dashboard — one row per
   // askResearchAssistant call, every call, regardless of whether the debug
@@ -154,33 +174,101 @@ export function deleteRoomContent(slug) {
   return getDb().prepare('DELETE FROM room_content WHERE slug = ?').run(slug).changes
 }
 
-const RESEARCH_PROMPT_KEY = 'research_prompt'
-const RESEARCH_PROMPT_TITLE_KEY = 'research_prompt_title'
+const LEGACY_RESEARCH_PROMPT_KEY = 'research_prompt'
+const LEGACY_RESEARCH_PROMPT_TITLE_KEY = 'research_prompt_title'
 
-/** The Research Prompt (see CONTEXT.md) — '' when unset. Custom also needs a Title. */
-export function getResearchPrompt() {
-  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(RESEARCH_PROMPT_KEY)
-  return row ? row.value : ''
+/**
+ * One-time move of the retired single Research Prompt (two `settings` rows)
+ * into the custom_prompts collection, so an existing deployment's prompt
+ * isn't silently lost the first time it runs this build. Only ever fires on
+ * a DB that still has those rows; the rows are deleted afterwards so it
+ * can't run twice or resurrect a prompt the operator has since deleted.
+ */
+function migrateLegacyResearchPrompt(db) {
+  const read = (key) => db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? ''
+  const prompt = read(LEGACY_RESEARCH_PROMPT_KEY)
+  const title = read(LEGACY_RESEARCH_PROMPT_TITLE_KEY)
+  if (!prompt && !title) return
+
+  if (String(prompt).trim() || String(title).trim()) {
+    db.prepare(`
+      INSERT INTO custom_prompts (id, title, prompt, position, created_at) VALUES (?, ?, ?, ?, ?)
+    `).run(makeCustomPromptId(), String(title).trim() || 'Custom', String(prompt), 0, Date.now())
+  }
+  db.prepare('DELETE FROM settings WHERE key IN (?, ?)')
+    .run(LEGACY_RESEARCH_PROMPT_KEY, LEGACY_RESEARCH_PROMPT_TITLE_KEY)
 }
 
-export function setResearchPrompt(value) {
-  getDb().prepare(`
-    INSERT INTO settings (key, value) VALUES (?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(RESEARCH_PROMPT_KEY, String(value ?? ''))
+/** Stable Custom Prompt id — opaque, only ever compared for equality. */
+function makeCustomPromptId() {
+  return `cp_${randomBytes(8).toString('hex')}`
 }
 
-/** The Research Prompt Title — Custom's button label. '' when unset. */
-export function getResearchPromptTitle() {
-  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(RESEARCH_PROMPT_TITLE_KEY)
-  return row ? row.value : ''
+function toCustomPrompt(row) {
+  return row ? { id: row.id, title: row.title, prompt: row.prompt } : null
 }
 
-export function setResearchPromptTitle(value) {
-  getDb().prepare(`
-    INSERT INTO settings (key, value) VALUES (?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(RESEARCH_PROMPT_TITLE_KEY, String(value ?? '').trim())
+/**
+ * Every configured Custom Prompt (see CONTEXT.md), in author-chosen order.
+ * Includes the full template text — for the Usage Dashboard editor and for
+ * server-side resolution, not for shipping wholesale to a room's clients.
+ */
+export function listCustomPrompts() {
+  return getDb()
+    .prepare('SELECT id, title, prompt FROM custom_prompts ORDER BY position ASC, created_at ASC')
+    .all()
+    .map(toCustomPrompt)
+}
+
+/**
+ * Custom Prompt id + title only — what a selection popup needs to render one
+ * button per prompt, without shipping every prompt's template text to every
+ * participant. This is the "list all Custom Prompts" seam other surfaces call.
+ */
+export function listCustomPromptSummaries() {
+  return getDb()
+    .prepare('SELECT id, title FROM custom_prompts ORDER BY position ASC, created_at ASC')
+    .all()
+    .map((row) => ({ id: row.id, title: row.title }))
+}
+
+/** One Custom Prompt by its stable id — null when there's no such prompt. */
+export function getCustomPrompt(id) {
+  const row = getDb().prepare('SELECT id, title, prompt FROM custom_prompts WHERE id = ?').get(String(id ?? ''))
+  return toCustomPrompt(row) || null
+}
+
+/**
+ * The saved template text for one Custom Prompt id — the seam a triggered
+ * lookup resolves through. An unknown id gives '', matching the Placeholder
+ * rule: a missing piece of context is silently empty, never an error here.
+ * The caller decides whether an empty template is worth refusing.
+ */
+export function getCustomPromptTemplate(id) {
+  return getCustomPrompt(id)?.prompt ?? ''
+}
+
+/** Appends a Custom Prompt to the end of the list; returns the created row. */
+export function createCustomPrompt({ title, prompt }) {
+  const db = getDb()
+  const nextPosition = (db.prepare('SELECT MAX(position) AS max FROM custom_prompts').get()?.max ?? -1) + 1
+  const record = { id: makeCustomPromptId(), title: String(title ?? '').trim(), prompt: String(prompt ?? '') }
+  db.prepare(`
+    INSERT INTO custom_prompts (id, title, prompt, position, created_at) VALUES (?, ?, ?, ?, ?)
+  `).run(record.id, record.title, record.prompt, nextPosition, Date.now())
+  return record
+}
+
+/** Retitles/rewrites one Custom Prompt in place — its id is unchanged, so a
+ *  prompt stays the same prompt to anything holding a reference to it. */
+export function updateCustomPrompt(id, { title, prompt }) {
+  return getDb()
+    .prepare('UPDATE custom_prompts SET title = ?, prompt = ? WHERE id = ?')
+    .run(String(title ?? '').trim(), String(prompt ?? ''), String(id ?? '')).changes > 0
+}
+
+export function deleteCustomPrompt(id) {
+  return getDb().prepare('DELETE FROM custom_prompts WHERE id = ?').run(String(id ?? '')).changes > 0
 }
 
 /** One row per askResearchAssistant call — see ADR-0007. Never throws into

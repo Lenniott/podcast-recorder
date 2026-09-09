@@ -229,30 +229,56 @@ export async function passRecordingCheck(page) {
   await expect(overlay).toBeHidden()
 }
 
-export async function saveResearchPrompt(page, text, title = 'Interpret') {
+/** Opens the Usage Dashboard's Custom Prompts tab, past the SSR/hydration
+ *  race openCreateRoom hits too: the tab button is in the SSR HTML before
+ *  on:click is attached, so a single click can silently no-op. */
+async function openCustomPrompts(page) {
   await page.goto('/')
   await unlockIfNeeded(page)
-  const promptTab = page.getByRole('button', { name: 'Prompt', exact: true })
-  const textarea = page.locator('textarea[name="research-prompt"]')
-  const titleInput = page.locator('input[name="research-prompt-title"]')
-  // Same hydration race as openCreateRoom: Prompt is in the SSR HTML
-  // before on:click is attached. A single click can no-op and then
-  // textarea.waitFor() burns the full test timeout.
+  const promptsTab = page.getByRole('button', { name: 'Prompts', exact: true })
+  const heading = page.getByRole('heading', { name: 'Custom Prompts' })
   await expect(async () => {
-    if (await textarea.isVisible()) return
-    await promptTab.click()
-    await expect(textarea).toBeVisible({ timeout: 500 })
+    if (await heading.isVisible()) return
+    await promptsTab.click()
+    await expect(heading).toBeVisible({ timeout: 500 })
   }).toPass({ timeout: 15_000 })
-  const previous = {
-    prompt: await textarea.inputValue(),
-    title: await titleInput.inputValue()
+}
+
+/**
+ * Puts the deployment-wide Custom Prompt list into a known state: exactly one
+ * prompt, or none at all when either half is empty (the list has no way to
+ * store a half-filled prompt — the form rejects it). Returns the previous
+ * first prompt so a test can restore it, since this config is shared across
+ * every room on the deployment, not scoped to the room under test.
+ */
+export async function setSingleCustomPrompt(page, text, title = 'Interpret') {
+  await openCustomPrompts(page)
+
+  const rows = page.locator('.prompt-row')
+  const previous = { prompt: '', title: '' }
+  if (await rows.first().isVisible().catch(() => false)) {
+    previous.title = (await rows.first().locator('.row-title').textContent())?.trim() ?? ''
+    await rows.first().getByRole('button', { name: 'Edit' }).click()
+    previous.prompt = await rows.first().locator('textarea[name="custom-prompt-text"]').inputValue()
+    await rows.first().getByRole('button', { name: 'Cancel' }).click()
   }
-  await titleInput.fill(title)
-  await textarea.fill(text)
-  await page.getByRole('button', { name: 'Save Research Prompt' }).click()
-  await expect(page.getByRole('button', { name: 'Save Research Prompt' })).toBeEnabled()
-  await expect(titleInput).toHaveValue(title)
-  await expect(textarea).toHaveValue(text)
+
+  // Clear the list first: "one specific prompt" is the only state these
+  // tests can reason about, and a leftover row would add a second button.
+  while (await rows.count()) {
+    await rows.first().getByRole('button', { name: 'Delete' }).click()
+    await openCustomPrompts(page)
+  }
+
+  if (String(text).trim() && String(title).trim()) {
+    await page.getByRole('button', { name: 'New Custom Prompt' }).click()
+    await page.locator('input[name="custom-prompt-title"]').fill(title)
+    await page.locator('textarea[name="custom-prompt-text"]').fill(text)
+    await page.getByRole('button', { name: 'Add Custom Prompt' }).click()
+    await expect(page.locator('.prompt-row .row-title')).toHaveText(title)
+  } else {
+    await expect(rows).toHaveCount(0)
+  }
   return previous
 }
 

@@ -90,7 +90,10 @@ export function buildManualAskRequest(question, currentTabText = '', transcriptL
     context: '',
     notes: '',
     currentTab: formatCurrentTabContext(currentTabText, videoTitle).slice(0, MAX_TAB_TEXT_LEN),
-    transcript: joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
+    transcript: joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET),
+    // Sent alongside `currentTab` rather than only inside it, so a prompt can
+    // ask for the title on its own via `{video_title}` (see CONTEXT.md).
+    videoTitle: String(videoTitle || '').trim()
   }
 }
 
@@ -216,7 +219,7 @@ export function buildCustomRequest(text, transcriptLines, videoTitle = '') {
   const trimmed = formatCurrentTabContext(text, videoTitle).trim().slice(0, MAX_TAB_TEXT_LEN)
   if (!trimmed) return null
   const transcript = joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
-  return { kind: 'custom', text: trimmed, transcript }
+  return { kind: 'custom', text: trimmed, transcript, videoTitle: String(videoTitle || '').trim() }
 }
 
 export function hasUsableResearchAnswer(answer) {

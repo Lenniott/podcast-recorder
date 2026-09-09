@@ -2,7 +2,7 @@
   import SitePasswordGate from "$lib/home/SitePasswordGate.svelte";
   import CreateEpisodeModal from "$lib/home/CreateEpisodeModal.svelte";
   import UsageDashboardStats from "$lib/home/UsageDashboardStats.svelte";
-  import ResearchPromptEditor from "$lib/home/ResearchPromptEditor.svelte";
+  import CustomPromptListEditor from "$lib/home/CustomPromptListEditor.svelte";
   import { HomeRecorLogo, Plus } from "$lib/icons";
   import { shouldOpenCreateEpisodeModal } from "$lib/home/create-episode-modal.js";
 
@@ -47,7 +47,7 @@
                 class="btn-secondary btn-sm new-room"
                 on:click={() => (openTab = "prompt")}
               >
-                Prompt
+                Prompts
               </button>
             {:else if openTab === "prompt"}
               <button
@@ -81,10 +81,12 @@
             <UsageDashboardStats usageDashboard={data.usageDashboard} />
           {:else if openTab === "prompt"}
             <div class="page-prompt">
-              <ResearchPromptEditor
-                researchPrompt={form?.researchPrompt ?? data.researchPrompt}
-                researchPromptTitle={form?.researchPromptTitle ?? data.researchPromptTitle}
-                promptError={form?.promptError}
+              <CustomPromptListEditor
+                customPrompts={data.customPrompts}
+                promptError={form?.promptError ?? ""}
+                promptErrorId={form?.promptErrorId ?? ""}
+                draftTitle={form?.draftTitle ?? ""}
+                draftPrompt={form?.draftPrompt ?? ""}
               />
             </div>
           {:else}

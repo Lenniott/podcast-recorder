@@ -1,7 +1,7 @@
 <script>
   // Totals + per-room breakdown half of the Usage Dashboard (see
   // CONTEXT.md) — the Research Prompt editor is the other half,
-  // ResearchPromptEditor.svelte, composed alongside this by the page.
+  // CustomPromptListEditor.svelte, composed alongside this by the page.
   export let usageDashboard;
 
   function formatCost(cost) {

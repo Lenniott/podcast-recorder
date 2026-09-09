@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { deleteRoom, getRoomBySlug, getResearchPrompt, getResearchPromptTitle } from '$lib/server/db.js'
-import { isCustomEnabled } from '$lib/home/research-prompt.js'
+import { deleteRoom, getRoomBySlug, listCustomPrompts } from '$lib/server/db.js'
+import { isCustomPromptRunnable } from '$lib/home/custom-prompts.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
@@ -41,6 +41,8 @@ export async function load({ params, cookies }) {
   const isHostClaim = getHostClaim(slug, cookies, room, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
+  const [firstCustomPrompt] = listCustomPrompts()
+
   return {
     slug,
     roomName: room.name,
@@ -48,8 +50,12 @@ export async function load({ params, cookies }) {
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
     isHostClaim,
     guestCanAskResearch: !!room.guest_ai_allowed,
-    customEnabled: isCustomEnabled(getResearchPrompt(), getResearchPromptTitle()),
-    customTitle: getResearchPromptTitle(),
+    // The room's single Custom button predates the Custom Prompt list and is
+    // retired by ticket 07, once a highlight can trigger any prompt by id
+    // (ticket 05). Until then it runs the first prompt in the list, so an
+    // existing deployment's one prompt keeps working across this change.
+    customEnabled: isCustomPromptRunnable(firstCustomPrompt),
+    customTitle: firstCustomPrompt?.title ?? '',
     createdAt: room.created_at,
     roomPassword: isHostClaim ? (room.password_plain || null) : null
   }

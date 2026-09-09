@@ -4,7 +4,7 @@
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { verifySessionToken, getHostClaim } from '$lib/server/auth.js'
-import { getActiveRoomBySlug, getResearchPrompt } from '$lib/server/db.js'
+import { getActiveRoomBySlug, listCustomPrompts } from '$lib/server/db.js'
 import { askResearchAssistant, ResearchAssistantError } from '$lib/server/research-assistant.js'
 import { TURN_ACTION_IDS } from '$lib/research/research-card.js'
 
@@ -25,19 +25,25 @@ function validateRequestBody(body) {
     if (!isOptionalString(body.query, MAX_QUERY_LENGTH)) return null
     if (!isOptionalString(body.context, MAX_TEXT_LENGTH)) return null
     if (!isOptionalString(body.notes, MAX_TEXT_LENGTH)) return null
-    // currentTab/transcript are Placeholder ingredients only (see
-    // CONTEXT.md) — substituted into `query` in research-assistant.js when
-    // the asker wrote {current_tab}/{transcript} themselves, never added
-    // to the request automatically.
+    // currentTab/transcript/videoTitle/selection are Placeholder ingredients
+    // only (see CONTEXT.md) — substituted into `query` in
+    // research-assistant.js when the asker wrote the matching Placeholder
+    // themselves, never added to the request automatically. One an asker
+    // didn't reference costs nothing; one they referenced with nothing to
+    // fill it resolves to ''.
     if (!isOptionalString(body.currentTab, MAX_TEXT_LENGTH)) return null
     if (!isOptionalString(body.transcript, MAX_TEXT_LENGTH)) return null
+    if (!isOptionalString(body.videoTitle, MAX_TEXT_LENGTH)) return null
+    if (!isOptionalString(body.selection, MAX_TEXT_LENGTH)) return null
     return {
       kind: 'voice',
       query: body.query ?? null,
       context: body.context ?? '',
       notes: body.notes ?? '',
       currentTab: body.currentTab ?? '',
-      transcript: body.transcript ?? ''
+      transcript: body.transcript ?? '',
+      videoTitle: body.videoTitle ?? '',
+      selection: body.selection ?? ''
     }
   }
 
@@ -51,7 +57,15 @@ function validateRequestBody(body) {
   if (body.kind === 'custom') {
     if (typeof body.text !== 'string' || body.text.length === 0 || body.text.length > MAX_TEXT_LENGTH) return null
     if (!isOptionalString(body.transcript, MAX_TEXT_LENGTH)) return null
-    return { kind: 'custom', text: body.text, transcript: body.transcript ?? '' }
+    if (!isOptionalString(body.videoTitle, MAX_TEXT_LENGTH)) return null
+    if (!isOptionalString(body.selection, MAX_TEXT_LENGTH)) return null
+    return {
+      kind: 'custom',
+      text: body.text,
+      transcript: body.transcript ?? '',
+      videoTitle: body.videoTitle ?? '',
+      selection: body.selection ?? ''
+    }
   }
 
   return null
@@ -77,10 +91,12 @@ export async function POST({ params, request, cookies, fetch }) {
   const validated = validateRequestBody(body)
   if (!validated) return json({ error: 'invalid-request' }, { status: 400 })
 
-  // Stamped onto every lookup so the Research Eval Log can record the
-  // configured Research Prompt even when this call did not send it
-  // (Turn Actions / Ask). Custom still uses it as the whole request.
-  validated.researchPrompt = getResearchPrompt()
+  // Stamped onto every lookup so the Research Eval Log can record the prompt
+  // text behind it even when this call did not send one (Turn Actions / Ask).
+  // Still the *first* Custom Prompt rather than a requested id: this route's
+  // `custom` kind is the retired single-Custom-button path (ticket 07), and
+  // choosing a prompt by id arrives with the highlight trigger in ticket 05.
+  validated.researchPrompt = listCustomPrompts()[0]?.prompt ?? ''
 
   if (validated.kind === 'custom') {
     // Same gate as ws-rooms.js's research_ask/research_remove — Guest

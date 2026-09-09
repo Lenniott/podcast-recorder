@@ -41,20 +41,78 @@ Hard rules:
 - If nothing survives the mode rule, leave mainTakeaway an empty string and the scores 0 — that combination means "nothing to report".`
 }
 
-// Placeholder substitution (see CONTEXT.md) — the one place `{current_tab}`/
-// `{transcript}` get resolved, so every free-text field that accepts them
-// (the Research Prompt, an Ask question) goes through this same rule
+// Placeholder substitution (see CONTEXT.md) — the one place every
+// Placeholder gets resolved, so every free-text field that accepts them (a
+// Custom Prompt's template, an Ask question) goes through this same rule
 // rather than each caller splicing strings its own way. A placeholder with
-// no value supplied (e.g. `{transcript}` before any transcript exists)
-// resolves to '' — silently, not an error: the host's own prompt text is
-// what decides whether that's worth noting.
-const PLACEHOLDERS = { current_tab: 'currentTab', transcript: 'transcript' }
+// no value supplied (e.g. `{transcript}` before any transcript exists, or
+// `{selection}` when the prompt wasn't triggered from a highlight) resolves
+// to '' — silently, not an error: the prompt's own author is what decides
+// whether that's worth noting. Text that isn't a known placeholder is left
+// exactly as written, so prose containing braces survives untouched.
+const PLACEHOLDERS = {
+  current_tab: 'currentTab',
+  transcript: 'transcript',
+  selection: 'selection',
+  video_title: 'videoTitle',
+  current_time: 'currentTime',
+  latest_transcript: 'latestTranscript'
+}
+
+/** The Placeholder names a prompt author can write, for UI/docs to list. */
+export const PLACEHOLDER_NAMES = Object.keys(PLACEHOLDERS)
+
+// `{latest_transcript}`'s window (see CONTEXT.md) — a bounded *recent* slice,
+// deliberately distinct from `{transcript}`'s everything-so-far. 700 words is
+// the number the design session settled on; it isn't derived from a token
+// budget, so don't "fix" it to match one.
+export const LATEST_TRANSCRIPT_WORD_LIMIT = 700
+
+/**
+ * Last `wordLimit` whitespace-separated words of `transcript`, sliced out of
+ * the original string rather than re-joined from a word array — a transcript
+ * is newline-separated Turns, and rebuilding it word-by-word would flatten
+ * every speaker boundary into one paragraph.
+ */
+export function latestTranscriptWindow(transcript, wordLimit = LATEST_TRANSCRIPT_WORD_LIMIT) {
+  const text = String(transcript ?? '')
+  if (!text.trim() || !(wordLimit > 0)) return ''
+  const words = [...text.matchAll(/\S+/g)]
+  if (words.length <= wordLimit) return text.trim()
+  return text.slice(words[words.length - wordLimit].index).trim()
+}
 
 export function applyPlaceholders(template, values = {}) {
+  // `{latest_transcript}` is derived from the transcript the caller already
+  // supplies, so no caller has to window it itself — but an explicit
+  // latestTranscript still wins. With no transcript at all it derives to '',
+  // which is the same unset-resolves-to-empty rule the others follow.
+  const resolved =
+    values.latestTranscript == null
+      ? { ...values, latestTranscript: latestTranscriptWindow(values.transcript) }
+      : values
+
   return String(template || '').replace(/\{(\w+)\}/g, (match, name) => {
     const key = PLACEHOLDERS[name]
-    return key ? String(values[key] ?? '') : match
+    return key ? String(resolved[key] ?? '') : match
   })
+}
+
+/**
+ * Pulls the Placeholder ingredients off a request. `custom` carries the
+ * active tab's body as `text` and `voice` as `currentTab` — the two request
+ * shapes predate each other; everything else is named the same in both.
+ * `{current_time}` is the one Placeholder no caller supplies: it's the
+ * request's own press time, so it's filled in here.
+ */
+function placeholderValues(request, pressTimeIso) {
+  return {
+    currentTab: request.kind === 'custom' ? request.text : request.currentTab,
+    transcript: request.transcript,
+    selection: request.selection,
+    videoTitle: request.videoTitle,
+    currentTime: pressTimeIso
+  }
 }
 
 function buildMessages(request, pressTime = new Date()) {
@@ -80,19 +138,15 @@ function buildMessages(request, pressTime = new Date()) {
   }
 
   if (request.kind === 'custom') {
-    // The Research Prompt (see CONTEXT.md) is the whole request — no
-    // hardcoded stage structure wraps it any more (see ADR-0006).
-    // Whatever `{current_tab}`/`{transcript}` the host's own prompt text
-    // references is resolved here, the one seam every Placeholder goes
-    // through (applyPlaceholders above).
+    // A Custom Prompt's template (see CONTEXT.md) is the whole request — no
+    // hardcoded stage structure wraps it any more (see ADR-0006). Whatever
+    // Placeholders the prompt's own text references are resolved here, the
+    // one seam every Placeholder goes through (applyPlaceholders above).
     const template = String(request.instruction || '').trim()
     if (!template) {
-      throw new ResearchAssistantError('INVALID_REQUEST', 'Research Prompt is not configured')
+      throw new ResearchAssistantError('INVALID_REQUEST', 'Custom Prompt is not configured')
     }
-    const instruction = applyPlaceholders(template, {
-      currentTab: request.text,
-      transcript: request.transcript
-    })
+    const instruction = applyPlaceholders(template, placeholderValues(request, pressTimeIso))
     const mode = 'custom'
     return {
       mode,
@@ -105,7 +159,7 @@ function buildMessages(request, pressTime = new Date()) {
     // No shared system prompt, no MODE_RULES.ask. Placeholders in the
     // typed text still resolve here. context/notes stay optional extras
     // (eval harness / leftover voice-shaped callers).
-    const query = applyPlaceholders(request.query, { currentTab: request.currentTab, transcript: request.transcript })
+    const query = applyPlaceholders(request.query, placeholderValues(request, pressTimeIso))
     const userContent = [
       query ? String(query).trim() : '',
       request.context ? `FOCUS TURN:\n${request.context}` : '',

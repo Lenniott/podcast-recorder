@@ -7,15 +7,14 @@ import db, {
   createRoom,
   deleteRoom,
   deleteRoomContent,
+  createCustomPrompt,
   getActiveRoomBySlug,
-  getResearchPrompt,
-  getResearchPromptTitle,
   getRoomBySlug,
+  listCustomPrompts,
   loadRoomContent,
   roomExists,
   saveRoomContent,
-  setResearchPrompt,
-  setResearchPromptTitle,
+  updateCustomPrompt,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -206,22 +205,21 @@ describe('room content durable store (Room State Store\'s durable adapter)', () 
   })
 })
 
-describe('Research Prompt settings', () => {
-  it('returns empty strings when unset', () => {
-    expect(getResearchPrompt()).toBe('')
-    expect(getResearchPromptTitle()).toBe('')
+// Full Custom Prompt CRUD lives in custom-prompts.test.js — this is only the
+// storage-shape check that used to cover the two retired settings rows.
+describe('Custom Prompt storage', () => {
+  it('starts empty', () => {
+    expect(listCustomPrompts()).toEqual([])
   })
 
-  it('stores and reads back the Research Prompt and its Title', () => {
-    setResearchPrompt('Read {current_tab}.')
-    setResearchPromptTitle('  Interpret  ')
-    expect(getResearchPrompt()).toBe('Read {current_tab}.')
-    expect(getResearchPromptTitle()).toBe('Interpret')
+  it('stores and reads a Custom Prompt back by its own id', () => {
+    const created = createCustomPrompt({ title: '  Interpret  ', prompt: 'Read {current_tab}.' })
+    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'Interpret', prompt: 'Read {current_tab}.' }])
   })
 
-  it('overwrites rather than duplicating', () => {
-    setResearchPromptTitle('Interpret')
-    setResearchPromptTitle('TSIA')
-    expect(getResearchPromptTitle()).toBe('TSIA')
+  it('edits in place rather than duplicating', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'a' })
+    updateCustomPrompt(created.id, { title: 'TSIA', prompt: 'b' })
+    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'TSIA', prompt: 'b' }])
   })
 })

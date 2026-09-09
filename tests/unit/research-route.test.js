@@ -15,7 +15,7 @@ vi.mock('../../src/lib/server/research-assistant.js', async () => {
 })
 
 import { hashPassword, makeSessionToken } from '../../src/lib/server/auth.js'
-import db, { createRoom, _resetDb, setResearchPrompt } from '../../src/lib/server/db.js'
+import db, { createRoom, _resetDb, createCustomPrompt } from '../../src/lib/server/db.js'
 import { askResearchAssistant } from '../../src/lib/server/research-assistant.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
@@ -110,8 +110,8 @@ describe('POST /rec/[slug]/research — success', () => {
     expect(options.fetchImpl).toBe(fakeFetch)
   })
 
-  it('stamps the stored Research Prompt onto every lookup so the eval log can record it', async () => {
-    setResearchPrompt('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
+  it('stamps the first Custom Prompt onto every lookup so the eval log can record it', async () => {
+    createCustomPrompt({ title: 'Interpret', prompt: 'Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.' })
     const cookies = await authedCookies()
     const { POST } = await loadRoute()
     askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
@@ -131,7 +131,7 @@ describe('POST /rec/[slug]/research — success', () => {
 
 describe('POST /rec/[slug]/research — Custom gated by Guest Research Access', () => {
   it('rejects (403) Custom from a non-host when Guest Research Access is off', async () => {
-    setResearchPrompt('Summarise the notes.')
+    createCustomPrompt({ title: 'Summarise', prompt: 'Summarise the notes.' })
     const cookies = await authedCookies() // guestAiAllowed defaults to false
     const { POST } = await loadRoute()
 
@@ -146,8 +146,8 @@ describe('POST /rec/[slug]/research — Custom gated by Guest Research Access', 
     expect(askResearchAssistant).not.toHaveBeenCalled()
   })
 
-  it('allows Custom from a non-host when the room has Guest Research Access on, sending the stored Research Prompt', async () => {
-    setResearchPrompt('Summarise the notes.')
+  it('allows Custom from a non-host when the room has Guest Research Access on, sending the stored prompt', async () => {
+    createCustomPrompt({ title: 'Summarise', prompt: 'Summarise the notes.' })
     const cookies = await authedCookies({ guestAiAllowed: true })
     const { POST } = await loadRoute()
     askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
@@ -176,7 +176,11 @@ describe('POST /rec/[slug]/research — request validation', () => {
     ['voice with a non-string context', { kind: 'voice', query: 'x', context: 42, notes: '' }],
     ['voice with an oversized notes field', { kind: 'voice', query: 'x', context: '', notes: 'x'.repeat(20_001) }],
     ['voice with a non-string currentTab', { kind: 'voice', query: 'x', context: '', notes: '', currentTab: 42 }],
-    ['voice with an oversized transcript', { kind: 'voice', query: 'x', context: '', notes: '', transcript: 'x'.repeat(20_001) }]
+    ['voice with an oversized transcript', { kind: 'voice', query: 'x', context: '', notes: '', transcript: 'x'.repeat(20_001) }],
+    ['voice with a non-string selection', { kind: 'voice', query: 'x', context: '', notes: '', selection: 42 }],
+    ['voice with an oversized selection', { kind: 'voice', query: 'x', context: '', notes: '', selection: 'x'.repeat(20_001) }],
+    ['voice with a non-string videoTitle', { kind: 'voice', query: 'x', context: '', notes: '', videoTitle: 42 }],
+    ['custom with a non-string selection', { kind: 'custom', text: 'notes', selection: 42 }]
   ])('rejects (400) a request body: %s', async (_label, body) => {
     const cookies = await authedCookies()
     const { POST } = await loadRoute()

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets, saveResearchPrompt, roomTabsReady, loadVideo } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, trackLiveSockets, setSingleCustomPrompt, roomTabsReady, loadVideo } from './helpers.js'
 
 function cardAnswer(takeaway, mode = 'facts') {
   return JSON.stringify({
@@ -94,10 +94,10 @@ test('empty Turn Action lookups do not leave a skim card in the panel', async ({
   await page.close()
 })
 
-test('Interpret follows Guest Research Access; empty Research Prompt or Title hides it', async ({ browser }) => {
+test('Interpret follows Guest Research Access; no configured Custom Prompt hides it', async ({ browser }) => {
   const host = await browser.newPage()
   await stubYouTubeApi(host)
-  const previous = await saveResearchPrompt(host, '')
+  const previous = await setSingleCustomPrompt(host, '')
 
   try {
     const password = 'custom-host'
@@ -110,12 +110,7 @@ test('Interpret follows Guest Research Access; empty Research Prompt or Title hi
     await expect(host.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
     await expect(guest.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
 
-    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}', '')
-    await host.goto(roomUrl)
-    await roomTabsReady(host)
-    await expect(host.getByRole('button', { name: 'Interpret' })).toHaveCount(0)
-
-    await saveResearchPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}', 'Interpret')
+    await setSingleCustomPrompt(host, 'E2E Interpret prompt {current_tab} {transcript}', 'Interpret')
     await host.goto(roomUrl)
     await roomTabsReady(host)
     await guest.reload()
@@ -126,14 +121,14 @@ test('Interpret follows Guest Research Access; empty Research Prompt or Title hi
 
     await guest.close()
   } finally {
-    await saveResearchPrompt(host, previous.prompt, previous.title)
+    await setSingleCustomPrompt(host, previous.prompt, previous.title)
     await host.close()
   }
 })
 
 test('Interpret bundles a loaded video title ahead of notes into {current_tab}', async ({ page }) => {
   await stubYouTubeApi(page)
-  const previous = await saveResearchPrompt(page, 'E2E {current_tab}')
+  const previous = await setSingleCustomPrompt(page, 'E2E {current_tab}')
   try {
     await createRoom(page, { name: `E2E VideoTitle ${Date.now()}`, password: 'video-title' })
     const requests = await captureResearchRequests(page)
@@ -145,6 +140,6 @@ test('Interpret bundles a loaded video title ahead of notes into {current_tab}',
     await expect.poll(() => requests.at(0)?.text).toBe('Video: Stub YouTube Title\n\nthe lyrics')
     expect(requests[0].kind).toBe('custom')
   } finally {
-    await saveResearchPrompt(page, previous.prompt, previous.title)
+    await setSingleCustomPrompt(page, previous.prompt, previous.title)
   }
 })

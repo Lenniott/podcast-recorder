@@ -142,8 +142,15 @@ describe('buildManualAskRequest', () => {
       context: '',
       notes: '',
       currentTab: '',
-      transcript: ''
+      transcript: '',
+      videoTitle: ''
     })
+  })
+
+  it('sends the video title as its own Placeholder ingredient, not only folded into currentTab', () => {
+    const request = buildManualAskRequest('What is this?', 'my notes', [], 'Episode 12')
+    expect(request.videoTitle).toBe('Episode 12')
+    expect(request.currentTab).toBe('Video: Episode 12\n\nmy notes')
   })
 
   it('trims whitespace and caps an overlong question', () => {
@@ -226,11 +233,17 @@ describe('activeNotesTabText / Custom', () => {
   })
 
   it('buildCustomRequest uses the notes text as lyrics and the Transcript as Stage 2', () => {
-    expect(buildCustomRequest('  hello  ')).toEqual({ kind: 'custom', text: 'hello', transcript: '' })
+    expect(buildCustomRequest('  hello  ')).toEqual({
+      kind: 'custom',
+      text: 'hello',
+      transcript: '',
+      videoTitle: ''
+    })
     expect(buildCustomRequest('lyrics', [{ speaker: 'Host', text: 'this is about grief' }])).toEqual({
       kind: 'custom',
       text: 'lyrics',
-      transcript: 'Host: this is about grief'
+      transcript: 'Host: this is about grief',
+      videoTitle: ''
     })
     expect(buildCustomRequest('')).toBeNull()
   })
@@ -274,7 +287,8 @@ describe('formatCurrentTabContext / video title', () => {
     expect(buildCustomRequest('', [], 'Never Gonna Give You Up')).toEqual({
       kind: 'custom',
       text: 'Video: Never Gonna Give You Up',
-      transcript: ''
+      transcript: '',
+      videoTitle: 'Never Gonna Give You Up'
     })
   })
 })

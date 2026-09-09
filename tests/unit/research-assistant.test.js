@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { askResearchAssistant, applyPlaceholders, ResearchAssistantError } from '../../src/lib/server/research-assistant.js'
+import {
+  askResearchAssistant,
+  applyPlaceholders,
+  latestTranscriptWindow,
+  LATEST_TRANSCRIPT_WORD_LIMIT,
+  PLACEHOLDER_NAMES,
+  ResearchAssistantError
+} from '../../src/lib/server/research-assistant.js'
+import { PLACEHOLDER_HELP } from '../../src/lib/home/custom-prompts.js'
 import { serializeResearchCard } from '../../src/lib/research/research-card.js'
 import { appendResearchEvalLog } from '../../src/lib/server/research-eval-log.js'
 import { recordResearchUsage } from '../../src/lib/server/db.js'
@@ -231,12 +239,129 @@ describe('applyPlaceholders', () => {
     expect(result).toBe('Lyrics: verse one\nContext: Host: hi\nAlso: {unknown}')
   })
 
-  it('resolves a placeholder with no value supplied to an empty string, not an error', () => {
-    expect(applyPlaceholders('Transcript: {transcript}', { currentTab: 'x' })).toBe('Transcript: ')
-  })
-
   it('is a no-op on text with no placeholders', () => {
     expect(applyPlaceholders('plain text', { currentTab: 'x' })).toBe('plain text')
+  })
+
+  // The full Placeholder set (see CONTEXT.md / ADR-0008). Each one is checked
+  // twice: it resolves the value it's given, and — the rule that matters most,
+  // because a prompt author writes a Placeholder for context that may simply
+  // not exist yet — it resolves to '' when nothing supplies it, silently.
+  it('substitutes {selection}', () => {
+    expect(applyPlaceholders('Explain: {selection}', { selection: 'the Monroe Doctrine' })).toBe(
+      'Explain: the Monroe Doctrine'
+    )
+  })
+
+  it('substitutes {video_title} independently of {current_tab}', () => {
+    const result = applyPlaceholders('{video_title} // {current_tab}', {
+      videoTitle: 'Episode 12',
+      currentTab: 'Video: Episode 12\n\nsome notes'
+    })
+    expect(result).toBe('Episode 12 // Video: Episode 12\n\nsome notes')
+  })
+
+  it('substitutes {current_time}', () => {
+    expect(applyPlaceholders('Now: {current_time}', { currentTime: '2026-09-09T10:00:00.000Z' })).toBe(
+      'Now: 2026-09-09T10:00:00.000Z'
+    )
+  })
+
+  it('substitutes {latest_transcript} from an explicitly supplied value', () => {
+    expect(applyPlaceholders('Recent: {latest_transcript}', { latestTranscript: 'Host: just now' })).toBe(
+      'Recent: Host: just now'
+    )
+  })
+
+  it.each([
+    ['{current_tab}', 'current_tab'],
+    ['{transcript}', 'transcript'],
+    ['{selection}', 'selection'],
+    ['{video_title}', 'video_title'],
+    ['{current_time}', 'current_time'],
+    ['{latest_transcript}', 'latest_transcript']
+  ])('resolves %s to an empty string when nothing supplies it', (placeholder) => {
+    expect(applyPlaceholders(`[${placeholder}]`, {})).toBe('[]')
+    expect(applyPlaceholders(`[${placeholder}]`)).toBe('[]')
+  })
+
+  it('resolves every placeholder at once when all six are supplied', () => {
+    const template = '{selection}|{current_tab}|{video_title}|{transcript}|{latest_transcript}|{current_time}'
+    const result = applyPlaceholders(template, {
+      selection: 'sel',
+      currentTab: 'tab',
+      videoTitle: 'title',
+      transcript: 'full',
+      latestTranscript: 'recent',
+      currentTime: 'now'
+    })
+    expect(result).toBe('sel|tab|title|full|recent|now')
+  })
+
+  it('derives {latest_transcript} from {transcript} when no explicit window is supplied', () => {
+    const transcript = 'Host: one two three'
+    expect(applyPlaceholders('{latest_transcript}', { transcript })).toBe(transcript)
+  })
+
+  it('windows a derived {latest_transcript} to the last 700 words, while {transcript} stays whole', () => {
+    const transcript = Array.from({ length: 900 }, (_, i) => `w${i}`).join(' ')
+    const resolved = applyPlaceholders('{latest_transcript}', { transcript })
+    const words = resolved.split(/\s+/)
+
+    expect(words).toHaveLength(LATEST_TRANSCRIPT_WORD_LIMIT)
+    expect(words[0]).toBe('w200')
+    expect(words.at(-1)).toBe('w899')
+    expect(applyPlaceholders('{transcript}', { transcript })).toBe(transcript)
+  })
+
+  it('lets an explicit latestTranscript override the derived window', () => {
+    const transcript = Array.from({ length: 900 }, (_, i) => `w${i}`).join(' ')
+    expect(applyPlaceholders('{latest_transcript}', { transcript, latestTranscript: 'pinned' })).toBe('pinned')
+  })
+})
+
+describe('latestTranscriptWindow', () => {
+  it('is the whole transcript when it is shorter than the limit', () => {
+    expect(latestTranscriptWindow('Host: hello there')).toBe('Host: hello there')
+  })
+
+  it('keeps the last 700 words by default', () => {
+    const words = Array.from({ length: 1000 }, (_, i) => `w${i}`)
+    const result = latestTranscriptWindow(words.join(' '))
+    expect(result.split(' ')).toHaveLength(700)
+    expect(result.startsWith('w300 ')).toBe(true)
+  })
+
+  it('preserves the newlines between Turns rather than flattening them', () => {
+    const transcript = ['Alice: one two', 'Bob: three four', 'Alice: five six'].join('\n')
+    expect(latestTranscriptWindow(transcript, 5)).toBe('three four\nAlice: five six')
+  })
+
+  it('is empty for an empty, whitespace-only or missing transcript', () => {
+    expect(latestTranscriptWindow('')).toBe('')
+    expect(latestTranscriptWindow('   \n  ')).toBe('')
+    expect(latestTranscriptWindow(null)).toBe('')
+    expect(latestTranscriptWindow(undefined)).toBe('')
+  })
+})
+
+describe('PLACEHOLDER_NAMES', () => {
+  it('is exactly the six Placeholders CONTEXT.md documents', () => {
+    expect([...PLACEHOLDER_NAMES].sort()).toEqual([
+      'current_tab',
+      'current_time',
+      'latest_transcript',
+      'selection',
+      'transcript',
+      'video_title'
+    ])
+  })
+
+  // The editor's help list is hand-written (research-assistant.js is
+  // server-only, so the browser bundle can't import the real set) — this is
+  // what stops the two drifting apart.
+  it('matches the Placeholder list the Custom Prompt editor advertises', () => {
+    expect(PLACEHOLDER_HELP.map((p) => p.name).sort()).toEqual([...PLACEHOLDER_NAMES].sort())
   })
 })
 

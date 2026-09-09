@@ -1,7 +1,14 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { createRoom, getRoomBySlug, getResearchPrompt, getResearchPromptTitle, setResearchPrompt, setResearchPromptTitle } from '$lib/server/db.js'
-import { RESEARCH_PROMPT_TITLE_MAX_LENGTH } from '$lib/home/research-prompt.js'
+import {
+  createRoom,
+  getRoomBySlug,
+  listCustomPrompts,
+  createCustomPrompt,
+  updateCustomPrompt,
+  deleteCustomPrompt
+} from '$lib/server/db.js'
+import { validateCustomPrompt } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
@@ -31,6 +38,20 @@ function verifySiteToken(token) {
   } catch { return false }
 }
 
+/** No SITE_PASSWORD set means open access — same rule as verifySiteToken. */
+function isSiteAuthed(cookies) {
+  return !env.SITE_PASSWORD || verifySiteToken(cookies.get(SITE_COOKIE))
+}
+
+async function readCustomPromptForm(request) {
+  const data = await request.formData()
+  return {
+    id: String(data.get('custom-prompt-id') || '').trim(),
+    title: String(data.get('custom-prompt-title') || '').trim(),
+    prompt: String(data.get('custom-prompt-text') || '')
+  }
+}
+
 export async function load({ cookies, url }) {
   const siteAuthed = verifySiteToken(cookies.get(SITE_COOKIE))
   console.log('[load /] siteProtected=%s siteAuthed=%s', !!env.SITE_PASSWORD, siteAuthed)
@@ -43,8 +64,7 @@ export async function load({ cookies, url }) {
     // siteAuthed check as the create form, not a separate admin secret.
     // Only computed once past that gate: it's a handful of DB/filesystem
     // reads per room and has no reason to run for an unauthenticated hit.
-    researchPrompt: siteAuthed ? getResearchPrompt() : '',
-    researchPromptTitle: siteAuthed ? getResearchPromptTitle() : '',
+    customPrompts: siteAuthed ? listCustomPrompts() : [],
     usageDashboard: siteAuthed ? getUsageDashboard(env) : null
   }
 }
@@ -77,22 +97,39 @@ export const actions = {
     throw redirect(303, '/')
   },
 
-  save_research_prompt: async ({ request, cookies }) => {
-    if (env.SITE_PASSWORD && !verifySiteToken(cookies.get(SITE_COOKIE))) {
-      return fail(403, { promptError: 'Not authorised.' })
+  // Custom Prompt CRUD (see CONTEXT.md) — deployment-wide, gated by the same
+  // site password as room creation, exactly like the single Research Prompt
+  // these three replaced. Not per-room and not reachable from inside a room:
+  // a Host can't edit these mid-show (ADR-0008).
+  create_custom_prompt: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.', promptErrorId: 'new' })
+    const { title, prompt } = await readCustomPromptForm(request)
+    const promptError = validateCustomPrompt({ title, prompt })
+    if (promptError) {
+      // Hand the draft back so a rejected title doesn't discard the template.
+      return fail(400, { promptError, promptErrorId: 'new', draftTitle: title, draftPrompt: prompt })
     }
-    const data = await request.formData()
-    const researchPrompt = String(data.get('research-prompt') || '')
-    const researchPromptTitle = String(data.get('research-prompt-title') || '').trim()
-    if (researchPromptTitle.length > RESEARCH_PROMPT_TITLE_MAX_LENGTH) {
-      return fail(400, {
-        promptError: `Title too long (max ${RESEARCH_PROMPT_TITLE_MAX_LENGTH} chars)`,
-        researchPrompt,
-        researchPromptTitle
-      })
+    createCustomPrompt({ title, prompt })
+    throw redirect(303, '/')
+  },
+
+  update_custom_prompt: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.' })
+    const { id, title, prompt } = await readCustomPromptForm(request)
+    if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
+    const promptError = validateCustomPrompt({ title, prompt })
+    if (promptError) return fail(400, { promptError, promptErrorId: id })
+    if (!updateCustomPrompt(id, { title, prompt })) {
+      return fail(404, { promptError: 'That Custom Prompt no longer exists.', promptErrorId: id })
     }
-    setResearchPrompt(researchPrompt)
-    setResearchPromptTitle(researchPromptTitle)
+    throw redirect(303, '/')
+  },
+
+  delete_custom_prompt: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.' })
+    const { id } = await readCustomPromptForm(request)
+    if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
+    deleteCustomPrompt(id)
     throw redirect(303, '/')
   },
 

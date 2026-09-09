@@ -66,8 +66,7 @@ describe('+page.server', () => {
         siteProtected: false,
         notFound: false,
         expired: false,
-        researchPrompt: '',
-        researchPromptTitle: '',
+        customPrompts: [],
         usageDashboard: { totals: { calls: 0, tokens: 0, cost: 0 }, rooms: [] }
       })
     })
@@ -281,62 +280,141 @@ describe('+page.server', () => {
     })
   })
 
-  describe('actions.save_research_prompt', () => {
-    it('persists the Research Prompt and Title then redirects home', async () => {
+  describe('Custom Prompt actions', () => {
+    const promptForm = (entries) =>
+      formRequest({ 'custom-prompt-id': '', 'custom-prompt-title': '', 'custom-prompt-text': '', ...entries })
+
+    it('creates a Custom Prompt then redirects home', async () => {
       const { actions } = await loadPage()
       await expectRedirect(
-        () => actions.save_research_prompt({
-          request: formRequest({
-            'research-prompt': 'Read {current_tab}.',
-            'research-prompt-title': '  Interpret  '
+        () =>
+          actions.create_custom_prompt({
+            request: promptForm({ 'custom-prompt-title': '  Interpret  ', 'custom-prompt-text': 'Read {selection}.' }),
+            cookies: makeCookies()
           }),
-          cookies: makeCookies()
-        }),
         303,
         '/'
       )
-      expect(roomsDb.getResearchPrompt()).toBe('Read {current_tab}.')
-      expect(roomsDb.getResearchPromptTitle()).toBe('Interpret')
+      expect(roomsDb.listCustomPrompts()).toMatchObject([{ title: 'Interpret', prompt: 'Read {selection}.' }])
     })
 
-    it('rejects a title over 40 characters without writing', async () => {
-      roomsDb.setResearchPrompt('kept')
-      roomsDb.setResearchPromptTitle('Interpret')
+    it('appends rather than replacing, so the list grows', async () => {
+      const { actions } = await loadPage()
+      for (const title of ['First', 'Second']) {
+        await expectRedirect(
+          () =>
+            actions.create_custom_prompt({
+              request: promptForm({ 'custom-prompt-title': title, 'custom-prompt-text': 'text' }),
+              cookies: makeCookies()
+            }),
+          303,
+          '/'
+        )
+      }
+      expect(roomsDb.listCustomPrompts().map((p) => p.title)).toEqual(['First', 'Second'])
+    })
+
+    it('edits an existing Custom Prompt in place, keeping its id', async () => {
+      const created = roomsDb.createCustomPrompt({ title: 'Old', prompt: 'old text' })
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.update_custom_prompt({
+            request: promptForm({
+              'custom-prompt-id': created.id,
+              'custom-prompt-title': 'New',
+              'custom-prompt-text': 'new text'
+            }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.listCustomPrompts()).toEqual([{ id: created.id, title: 'New', prompt: 'new text' }])
+    })
+
+    it('deletes a Custom Prompt', async () => {
+      const keep = roomsDb.createCustomPrompt({ title: 'Keep', prompt: 'a' })
+      const drop = roomsDb.createCustomPrompt({ title: 'Drop', prompt: 'b' })
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.delete_custom_prompt({
+            request: promptForm({ 'custom-prompt-id': drop.id }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.listCustomPrompts().map((p) => p.id)).toEqual([keep.id])
+    })
+
+    it('rejects a title over 40 characters without writing, handing the draft back', async () => {
       const { actions } = await loadPage()
       const title = 't'.repeat(41)
-      const result = await actions.save_research_prompt({
-        request: formRequest({
-          'research-prompt': 'new prompt',
-          'research-prompt-title': title
-        }),
+      const result = await actions.create_custom_prompt({
+        request: promptForm({ 'custom-prompt-title': title, 'custom-prompt-text': 'new prompt' }),
         cookies: makeCookies()
       })
       expect(result).toMatchObject({
         status: 400,
         data: {
           promptError: 'Title too long (max 40 chars)',
-          researchPrompt: 'new prompt',
-          researchPromptTitle: title
+          promptErrorId: 'new',
+          draftTitle: title,
+          draftPrompt: 'new prompt'
         }
       })
-      expect(roomsDb.getResearchPrompt()).toBe('kept')
-      expect(roomsDb.getResearchPromptTitle()).toBe('Interpret')
+      expect(roomsDb.listCustomPrompts()).toEqual([])
     })
 
-    it('rejects save when the site is locked and there is no site cookie', async () => {
-      process.env.SITE_PASSWORD = SITE_PASSWORD
+    it('rejects an empty title or empty prompt text without writing', async () => {
       const { actions } = await loadPage()
-      const result = await actions.save_research_prompt({
-        request: formRequest({
-          'research-prompt': 'nope',
-          'research-prompt-title': 'Nope'
+      const noTitle = await actions.create_custom_prompt({
+        request: promptForm({ 'custom-prompt-text': 'text' }),
+        cookies: makeCookies()
+      })
+      const noText = await actions.create_custom_prompt({
+        request: promptForm({ 'custom-prompt-title': 'Interpret' }),
+        cookies: makeCookies()
+      })
+      expect(noTitle).toMatchObject({ status: 400, data: { promptError: 'Title is required' } })
+      expect(noText).toMatchObject({ status: 400, data: { promptError: 'Prompt text is required' } })
+      expect(roomsDb.listCustomPrompts()).toEqual([])
+    })
+
+    it('reports an edit to a Custom Prompt that no longer exists', async () => {
+      const { actions } = await loadPage()
+      const result = await actions.update_custom_prompt({
+        request: promptForm({
+          'custom-prompt-id': 'cp_gone',
+          'custom-prompt-title': 'Interpret',
+          'custom-prompt-text': 'text'
         }),
         cookies: makeCookies()
       })
-      expect(result).toMatchObject({
-        status: 403,
-        data: { promptError: 'Not authorised.' }
-      })
+      expect(result).toMatchObject({ status: 404, data: { promptError: 'That Custom Prompt no longer exists.' } })
     })
+
+    // Same site-password gate as room creation — Custom Prompts are
+    // deployment-wide config, not something a room's Host can reach.
+    it.each(['create_custom_prompt', 'update_custom_prompt', 'delete_custom_prompt'])(
+      'rejects %s when the site is locked and there is no site cookie',
+      async (actionName) => {
+        process.env.SITE_PASSWORD = SITE_PASSWORD
+        const existing = roomsDb.createCustomPrompt({ title: 'Kept', prompt: 'kept text' })
+        const { actions } = await loadPage()
+        const result = await actions[actionName]({
+          request: promptForm({
+            'custom-prompt-id': existing.id,
+            'custom-prompt-title': 'Nope',
+            'custom-prompt-text': 'nope'
+          }),
+          cookies: makeCookies()
+        })
+        expect(result).toMatchObject({ status: 403, data: { promptError: 'Not authorised.' } })
+        expect(roomsDb.listCustomPrompts()).toEqual([{ id: existing.id, title: 'Kept', prompt: 'kept text' }])
+      }
+    )
   })
 })
