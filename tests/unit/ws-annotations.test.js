@@ -172,7 +172,7 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     }
   })
 
-  it('stores exactly {id,tabId,kind,quote,text,author,at} — no anchor position of any kind (ticket 04)', () => {
+  it('never stores an anchor position of any kind — the quote is the only anchor (ticket 04)', () => {
     const tabId = activeTabId(host)
     host.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: 'we talked about the moon landing today' }))
     comment(host, { tabId, id: 'a1', quote: 'the moon landing', text: 'check the date' })
@@ -197,8 +197,17 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     wss.connect(rejoiner, 'room1'); join(rejoiner, 'Guest', 'c2')
     const entries = latest(rejoiner, 'annotation_state').entries
     expect(entries).toHaveLength(2)
+    // The base shape ticket 04 relies on must be present, and no offset/anchor/
+    // position field (of any name) may sneak in — those are exactly what a
+    // client tried to smuggle above. Ticket 05 legitimately adds a Card
+    // lifecycle (status/error/citations/customPromptId) on top of this same
+    // base, so this asserts a subset plus a denylist rather than an exact set.
+    const forbidden = ['start', 'end', 'offset', 'anchor', 'position', 'index', 'range']
     for (const entry of entries) {
-      expect(Object.keys(entry).sort()).toEqual(['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text'])
+      expect(entry).toMatchObject({ tabId, kind: 'comment', quote: expect.any(String), text: expect.any(String), author: expect.any(String), at: expect.any(Number) })
+      for (const key of forbidden) {
+        expect(entry).not.toHaveProperty(key)
+      }
     }
   })
 
