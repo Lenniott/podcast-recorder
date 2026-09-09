@@ -7,9 +7,10 @@ actually being said.
 ## Language
 
 **Research Assistant**:
-The live lookup help during a recording: **Turn Actions** on the Transcript
-Tab, plus **Ask** and **Custom** in the right-side panel. Results are
-room-shared and scoped per Tab.
+The live lookup help during a recording: **Ask**, typed in the right-side
+panel, plus any **Custom Prompt** triggered from a highlighted selection
+on Notes text or a Transcript Turn (see ADR-0008 — this replaced Turn
+Actions on the old Transcript Tab). Results are room-shared **Annotation**s.
 _Avoid_: AI panel, sidebar bot
 
 **Voice Trigger** _(superseded by Research Mode — see ADR-0004; kept here
@@ -51,38 +52,43 @@ A one-click prompt run against the *whole* text of the currently active
 Tab. Never a text selection.
 _Avoid_: prompt button, canned prompt
 
-**Turn Action**:
-A one-click lookup on a **Focus Turn** — hover that Turn, then press
+**Turn Action** _(retired — see ADR-0008; replaced by **Custom Prompt**)_:
+Was a one-click lookup on a **Focus Turn** — hover that Turn, then press
 Definition, Facts, or Answer (icons on the Turn, not in the panel). The
-clicked Turn is the subject; **Grounding** is a fixed neighbor window.
+clicked Turn was the subject; **Grounding** was a fixed neighbor window.
 _Avoid_: quick action (for transcript jobs), highlight button, chunk action
 
-**Focus Turn**:
-The one Turn a participant invoked a Turn Action on. It is the subject of
-that lookup, never Grounding.
+**Focus Turn** _(retired — see ADR-0008)_:
+Was the one Turn a participant invoked a Turn Action on — the subject of
+that lookup, never Grounding. Superseded by `{selection}`: any Custom
+Prompt can reference the highlighted excerpt directly, on Notes text or a
+Turn alike.
 _Avoid_: highlight, selected chunk, section, the time in the text
 
-**Grounding**:
-The two Turns immediately before the Focus Turn, plus the one Turn after
-it if that Turn already exists. Included so the model can resolve
-references. Grounding is never what the answer is *about*.
+**Grounding** _(retired — see ADR-0008)_:
+Was the two Turns immediately before the Focus Turn, plus the one Turn
+after it if that Turn already exists — a fixed context window baked into
+every Turn Action. Superseded: a Custom Prompt's author decides what
+context (if any) it references via **Placeholders** — there is no more
+single hardcoded grounding rule for every show.
 _Avoid_: context (alone — overloaded with tab text and prompt "context")
 
-**Definition**:
-A Turn Action that explains an obscure word, name, or reference in the
-Focus Turn (including a plausible mishear when the transcript likely
-garbled it).
+**Definition** _(retired — see ADR-0008)_:
+Was a Turn Action that explained an obscure word, name, or reference in
+the Focus Turn. Retired because giving it real Grounding made it
+interpret meaning it had no business interpreting (see ADR-0008); a show
+wanting this today writes its own Custom Prompt.
 _Avoid_: define (the old whole-tab Quick Action)
 
-**Facts**:
-A Turn Action that surfaces general background about what the Focus Turn
-is talking about. Not a verdict on whether a speaker was right.
+**Facts** _(retired — see ADR-0008)_:
+Was a Turn Action that surfaced general background about what the Focus
+Turn was talking about. See **Definition**.
 _Avoid_: fact-check, key facts, Fact-check (those meant verify-or-extract
 against a whole tab)
 
-**Answer**:
-A Turn Action that replies to a question asked in the Focus Turn itself.
-If that Turn is not a question, there is nothing to Answer.
+**Answer** _(retired — see ADR-0008)_:
+Was a Turn Action that replied to a question asked in the Focus Turn
+itself. See **Definition**.
 _Avoid_: research (the old mode name), Research recent conversation
 
 **Ask**:
@@ -92,49 +98,51 @@ Transcript and no tab text unless the asker opts in with a **Placeholder**
 _Avoid_: custom (that's a saved instruction, not a one-off question)
 
 **Placeholder**:
-`{current_tab}` or `{transcript}`, written inline in free text handed to
-the Research Assistant (an Ask question, or the **Research Prompt**) and
-substituted with the live active Tab (YouTube title if loaded, then notes)
-/ room Transcript right before the request is sent. Substitution happens
-in one place — the Research Assistant Client — so it never matters which
-free-text field it came from.
+Written inline in free text handed to the Research Assistant (an Ask
+question, or a **Custom Prompt**) and substituted right before the
+request is sent. Substitution happens in one place — the Research
+Assistant Client — so it never matters which free-text field it came
+from. The set (see ADR-0008 for the four added there):
+- `{current_tab}` — video title (if loaded) then the tab's notes text.
+- `{transcript}` — the room Transcript so far.
+- `{selection}` — the excerpt a participant just highlighted to trigger
+  the Custom Prompt. Empty when the prompt was triggered some other way.
+- `{video_title}` — the active tab's video title alone, without notes.
+- `{latest_transcript}` — the last ~700 words of the Transcript, a
+  bounded recent window (contrast `{transcript}`, which is everything).
+- `{current_time}` — wall-clock time at request time.
 _Avoid_: prop (collides with Svelte component props, used constantly
 elsewhere in this codebase), token, variable
 
-**Research Prompt**:
-The one instruction text the **Custom** action sends as its whole request,
-written using **Placeholders** for whatever live content it wants. Global
-to the deployment, not per-room, and not written by a room's Host — it's
-set on the create-room page by whoever holds the site password (see
-**Usage Dashboard**), before any room exists, then simply available for
-Custom to use inside every room afterward. Custom is disabled (button off)
-whenever the Research Prompt or the **Research Prompt Title** is empty.
-_Avoid_: Custom prompt, Interpretation Mode, custom instruction, host-set
-(ambiguous with room Host)
+**Research Prompt**, **Research Prompt Title**, **Custom** _(all retired
+— see ADR-0008; replaced by **Custom Prompt**)_:
+Were, respectively: the one instruction text a single global action sent
+as its whole request; that action's button label; and the action itself
+(ran the prompt against the active notes Tab's text and the room
+Transcript). All three collapse into **Custom Prompt** below — there is
+no more single global prompt, there's a list of them.
+_Avoid_: Custom prompt as a synonym for the old singular Research Prompt
+— that phrase is now the current, canonical plural term instead; a
+reader hitting old references to "Custom prompt" meaning the one global
+instruction should read **Custom Prompt** (capitalized as a term) below.
 
-**Research Prompt Title**:
-The label of the **Custom** button in every room, set alongside the
-**Research Prompt** on the create-room page. Same deployment-wide scope as
-the prompt itself. Custom stays off until both title and prompt have text.
-_Avoid_: Interpret (historical button copy; the lookup is still Custom)
-
-**Custom**:
-The panel action that runs the **Research Prompt** against the active
-notes Tab's text and the room Transcript. Gated by **Guest Research
-Access** exactly like Ask and Turn Actions — no special-case host-only
-rule of its own. Distinct from the Research Prompt itself: Custom is the
-button/call, the Research Prompt is the text it sends, and the Research
-Prompt Title is what the button shows.
-_Avoid_: Ask, Quick Action, Interpret (the button label is the Research
-Prompt Title — the lookup is Custom), host-only (that carve-out is gone —
-see Guest Research Access)
-_Avoid_: Ask, Quick Action, Interpret (the button label is the Research
-Prompt Title — the lookup is Custom), Interpretation Mode (the old
-two-stage structure this replaced)
+**Custom Prompt**:
+One saved `{title, prompt text}` pair a participant can trigger from a
+highlighted selection (on Notes text or a Transcript Turn) — replaces
+Definition/Facts/Answer and the old singular Research Prompt/Custom
+(ADR-0008). Written using **Placeholders**, fires immediately with no
+extra input once triggered — the prompt's own text is the whole request.
+Same scope as the old Research Prompt: a deployment-wide list, not
+per-room, set on the create-room page by whoever holds the site password
+(see **Usage Dashboard**), never edited by a room's Host mid-show. Gated
+by **Guest Research Access** exactly like Ask, no special-case host-only
+rule of its own.
+_Avoid_: Turn Action, Definition/Facts/Answer, Quick Action, Interpret,
+Interpretation Mode (all retired terms this replaces — see above)
 
 **Guest Research Access**:
 A per-room, host-set-at-creation checkbox letting every guest in that room
-use every Research Assistant action — Ask, Turn Actions, and Custom alike
+use every Research Assistant action — Ask and every Custom Prompt alike
 — not just the Host. One flag, no per-action carve-outs. Off by default.
 Set once, at room creation, on the create-room form — not editable
 afterward from inside the room.
@@ -143,8 +151,8 @@ _Avoid_: RESEARCH_GUEST_CAN_ASK (the retired deployment-wide env var this replac
 **Usage Dashboard**:
 The section of the create-room page (visible once past the site password,
 same as the create form) showing Research Assistant cost/usage across every
-room — running totals plus a per-room breakdown — and the Research Prompt
-editor. Not a separate page or route.
+room — running totals plus a per-room breakdown — and the **Custom
+Prompt** list editor. Not a separate page or route.
 _Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
 usage page
 
@@ -155,35 +163,66 @@ latency), written only when enabled. Rooms still expire; the log is what
 survives for prompt work after a show.
 _Avoid_: keeping rooms, immortal rooms, eval-runs as the only corpus (that's canned)
 
-**Research Card**:
-The glanceable result of a lookup: a short takeaway meant to be skimmed
-during conversation, not read in a focus state. Newest cards sit at the
-top of the panel. Only a successful lookup stays as a visible card; a
-job miss or suppressed lookup is written to the Research Eval Log and
-does not leave a "nothing to add" row. While a lookup is in flight, a
-processing block occupies that same top slot so it is obvious something
-is happening.
-_Avoid_: Nothing new to add (as a standing history item)
+**Annotation** _(ADR-0008)_:
+A note anchored to a highlighted span of content — Notes text or a
+Transcript Turn — authored either by a person (a **Comment**) or by a
+Custom Prompt (a **Card**). Room-shared, listed together with every other
+Annotation in the panel regardless of which kind authored it or which
+surface (Notes or Transcript) it's anchored to. Anchored by a frozen
+quote of the original excerpt, not a live position: the quote is the
+Annotation's permanent record, and re-finding it in current Notes text to
+draw a highlight is best-effort only — if the text was edited away, the
+Annotation still exists with its quote, it just draws no highlight. Never
+a persistent character-offset link, and never a highlight shown with
+false confidence.
+_Avoid_: highlight (that's the visual, not the note), block comment
 
-**Block**:
-One unit of text in a tab surface: optional label, the text, hover actions.
-On the Transcript Tab each Block is a **Turn** and is read-only. Notes tabs
-stay a single shared textarea until they are rebuilt as editable Blocks.
+**Comment**:
+An Annotation authored by a person, not a Custom Prompt.
+_Avoid_: note, margin note
+
+**Card** _(renamed from **Research Card** — see ADR-0008)_:
+An Annotation authored by a Custom Prompt: the glanceable result of a
+lookup, a short takeaway meant to be skimmed during conversation, not
+read in a focus state. Newest Cards sit at the top of the panel. Only a
+successful lookup stays as a visible Card; a job miss is written to the
+Research Eval Log and does not leave a "nothing to add" row. While a
+lookup is in flight, a processing block occupies that same top slot so
+it is obvious something is happening.
+_Avoid_: Research Card (old name — the concept is now a kind of
+Annotation, not its own standalone thing), Nothing new to add (as a
+standing history item)
+
+**Block** _(superseded — see ADR-0008)_:
+Was meant as one unit of text in a tab surface: optional label, the text,
+hover actions, with the Transcript's read-only **Turn**s as one example
+and Notes tabs eventually "rebuilt as editable Blocks" as the other.
+That second half never happened: ADR-0008 kept Notes as a single shared,
+freeform text surface and anchored **Annotation**s to arbitrary
+highlighted spans of it instead of restructuring Notes into an array of
+Blocks. A Turn is still one read-only unit of Transcript content; just
+don't call it a Block going forward.
 _Avoid_: chunk, section, transcript line (say Turn), textarea row
 
-**Transcript Tab**:
-The one permanent, uncloseable Tab every room has (alongside its normal
-first Tab), populated automatically with the live, speaker-labeled
-transcript of both participants as they talk. Read-only — nobody can type
-into it by hand. It's the "central place" the Research Assistant reads
-both participants' conversation from, and it's what "accurate turns" means:
-correctly ordered, correctly attributed, never dropped, even when both
-people are talking near-simultaneously.
-_Avoid_: live captions tab, notes tab
+**Transcript** _(was **Transcript Tab** — see ADR-0008)_:
+The live, speaker-labeled record of both participants' conversation.
+Populated automatically, read-only — nobody can type into it by hand.
+It's the "central place" the Research Assistant reads the conversation
+from, and it's what "accurate turns" means: correctly ordered, correctly
+attributed, never dropped, even when both people are talking
+near-simultaneously. No longer a Tab in the main tab strip: it's a
+facet of the right panel, a reference surface a participant dips into to
+browse or highlight a Turn, not a place they sit. Unlike the panel's
+shared Annotation list, which facet of the panel a participant is
+currently looking at (Transcript vs. the Annotation feed) is personal,
+local to their own browser — nobody's screen jumps because their
+co-host glanced at it.
+_Avoid_: Transcript Tab (retired name — it isn't a Tab any more), live
+captions tab, notes tab
 
 **Turn**:
 One transcript line: a single participant's finalized utterance, labeled
-with who said it. On the Transcript Tab, a Turn is one read-only **Block**.
+with who said it. Read-only; an **Annotation** can anchor to one directly.
 
 **Transcript Activity**:
 A room-shared "something's coming" pulse on the Transcript Tab pill, true
