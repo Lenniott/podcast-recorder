@@ -20,8 +20,8 @@ test('room content survives eviction and is restored on rejoin', async ({ browse
   const notesBox = host.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })
   await notesBox.fill('notes that must survive eviction')
   // Let the debounced tab_text send actually reach the server before we
-  // disconnect — the textarea's onInput debounce (see RoomTabs.svelte) is
-  // 300ms.
+  // disconnect — the Notes surface's onInput debounce (see RoomTabs.svelte)
+  // is 300ms.
   await host.waitForTimeout(500)
 
   // Closing just the room's WebSocket (not the whole page) is what actually
@@ -45,7 +45,7 @@ test('room content survives eviction and is restored on rejoin', async ({ browse
 
   await expect(
     rejoined.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })
-  ).toHaveValue('notes that must survive eviction', { timeout: 15_000 })
+  ).toHaveText('notes that must survive eviction', { timeout: 15_000 })
 
   await rejoined.close()
   await context.close()

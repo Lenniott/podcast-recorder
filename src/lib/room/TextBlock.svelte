@@ -4,8 +4,10 @@
 
   /**
    * One unit of text in a tab surface (ADR-0005). On the Transcript Tab
-   * each Block is a Turn. Notes stay a textarea this MVP; `editable` is
-   * the seam for later contenteditable Blocks.
+   * each Block is a Turn. Notes are NOT built out of these: ADR-0008 kept
+   * Notes as one continuous freeform surface and moved it to its own
+   * contenteditable element in RoomTabs.svelte instead, so `editable`
+   * stays unused here.
    */
   let {
     label = "",

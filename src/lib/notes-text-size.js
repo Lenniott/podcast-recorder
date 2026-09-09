@@ -1,4 +1,4 @@
-// Text size for the shared notes textarea only — not a site-wide setting.
+// Text size for the shared Notes surface only — not a site-wide setting.
 // Like theme, this is a per-browser display preference: host and guest each
 // pick their own, and it's never sent over the room WS, so there's nothing
 // to keep in sync between them.

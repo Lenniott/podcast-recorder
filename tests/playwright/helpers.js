@@ -343,8 +343,8 @@ export function presenceRow(page, name) {
  */
 export async function roomTabsReady(page) {
   // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
-  // tab_state WS message is applied) rather than the shared textarea's
-  // rendered visibility — the textarea can be attached-but-not-yet-laid-out
+  // tab_state WS message is applied) rather than the Notes surface's
+  // rendered visibility — it can be attached-but-not-yet-laid-out
   // for a beat after the WS state lands, which made this a flaky race,
   // especially under a cold `npm run dev` worker still compiling the bundle.
   await page.locator('.room-tabs[data-ws-ready="true"]').waitFor({ timeout: 30_000 })

@@ -202,8 +202,8 @@
  *                                                           fresh triggerAtMs
  *   { type: 'tab_text',        tabId, text }
  *                                        — broadcast to everyone except the sender
- *                                          (so a typist's own textarea isn't
- *                                          clobbered mid-keystroke), replayed
+ *                                          (so a typist's own Notes surface
+ *                                          isn't clobbered mid-keystroke), replayed
  *                                          per-tab (for tabs with non-empty text)
  *                                          to late joiners
  *   { type: 'transcript_state', lines: [{id, speaker, text, at}] }

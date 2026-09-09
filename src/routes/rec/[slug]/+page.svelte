@@ -785,7 +785,7 @@
       // that holds the true, complete, current value for every tab (both
       // its own just-typed keystrokes AND every peer's broadcast text) —
       // the tab_text broadcast itself deliberately excludes the sender (so
-      // a typist's own textarea isn't clobbered by an echo of its own
+      // a typist's own Notes surface isn't clobbered by an echo of its own
       // keystrokes), which is lossy for anyone re-deriving a second copy
       // from it, exactly the case a solo participant typing their own
       // notes would hit.

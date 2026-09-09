@@ -49,7 +49,7 @@ test('Transcript tab: permanent, uncloseable, read-only, and shared in order bet
     host.locator('.tab-pill', { hasText: 'Transcript' }).getByRole('button', { name: /Close/ })
   ).toHaveCount(0)
 
-  // ── Switching to it shows a read-only view: no editable textarea ─────
+  // ── Switching to it shows a read-only view: no editable Notes ───────
   await transcriptPill.click()
   await expect(
     host.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })
