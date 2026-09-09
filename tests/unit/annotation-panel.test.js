@@ -2,11 +2,15 @@ import { describe, it, expect } from 'vitest'
 import {
   applyAnnotationEntry,
   applyAnnotationState,
+  applyAnnotationError,
+  annotationStatus,
+  isCardAnnotation,
   visibleAnnotations
 } from '../../src/lib/research/annotation-panel.js'
 import {
   ANNOTATION_KINDS,
   MAX_ANNOTATION_QUOTE_LEN,
+  isAiAuthoredKind,
   makeAnnotationId,
   normalizeQuote,
   upsertAnnotation
@@ -24,9 +28,15 @@ const entry = (id, over = {}) => ({
 })
 
 describe('annotation-sync', () => {
-  it("'comment' is a known kind and 'card' is not yet (ticket 05 adds it)", () => {
+  it("'comment' (human) and 'card' (a Custom Prompt's answer) are both known kinds", () => {
     expect(ANNOTATION_KINDS).toContain('comment')
-    expect(ANNOTATION_KINDS).not.toContain('card')
+    expect(ANNOTATION_KINDS).toContain('card')
+  })
+
+  it('only a Card is AI-authored — that is what Guest Research Access is applied to', () => {
+    expect(isAiAuthoredKind('card')).toBe(true)
+    expect(isAiAuthoredKind('comment')).toBe(false)
+    expect(isAiAuthoredKind(undefined)).toBe(false)
   })
 
   it('makeAnnotationId is unique and prefixed', () => {
@@ -75,6 +85,39 @@ describe('annotation-panel — applying broadcasts', () => {
     const before = applyAnnotationEntry({}, { tabId: 'tab-2', entry: entry('keep', { tabId: 'tab-2' }) })
     const after = applyAnnotationState(before, { tabId: 'tab-1', entries: [entry('a1')] })
     expect(after['tab-2'].map((e) => e.id)).toEqual(['keep'])
+  })
+
+  it('applyAnnotationError replaces a pending Card with the errored one, in place', () => {
+    const pending = entry('k1', { kind: 'card', status: 'pending', text: '' })
+    const before = applyAnnotationEntry({}, { tabId: 'tab-1', entry: pending })
+    const after = applyAnnotationError(before, {
+      tabId: 'tab-1',
+      id: 'k1',
+      message: 'The Research Assistant timed out.',
+      entry: { ...pending, status: 'errored', error: 'The Research Assistant timed out.' }
+    })
+    expect(after['tab-1']).toHaveLength(1)
+    expect(after['tab-1'][0]).toMatchObject({ status: 'errored', error: 'The Research Assistant timed out.' })
+  })
+
+  it('applyAnnotationError with no entry leaves the list untouched rather than dropping a row', () => {
+    const before = applyAnnotationEntry({}, { tabId: 'tab-1', entry: entry('a1') })
+    expect(applyAnnotationError(before, { tabId: 'tab-1', id: 'a1' })).toBe(before)
+  })
+})
+
+describe('annotation-panel — telling a Card apart from a Comment', () => {
+  it('isCardAnnotation is what the panel badges as AI-authored', () => {
+    expect(isCardAnnotation(entry('k1', { kind: 'card' }))).toBe(true)
+    expect(isCardAnnotation(entry('a1'))).toBe(false)
+    expect(isCardAnnotation(null)).toBe(false)
+  })
+
+  it('annotationStatus defaults to answered — a Comment, and any row stored before Cards existed', () => {
+    expect(annotationStatus(entry('a1'))).toBe('answered')
+    expect(annotationStatus({})).toBe('answered')
+    expect(annotationStatus(entry('k1', { kind: 'card', status: 'pending' }))).toBe('pending')
+    expect(annotationStatus(entry('k2', { kind: 'card', status: 'errored' }))).toBe('errored')
   })
 })
 

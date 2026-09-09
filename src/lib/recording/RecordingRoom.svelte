@@ -37,6 +37,9 @@
   export let guestCanAskResearch = false;
   export let customEnabled = false;
   export let customTitle = "";
+  // [{id, title}] — every configured Custom Prompt, for the selection
+  // popup's one-button-per-prompt row (ADR-0008, ticket 05).
+  export let customPrompts = [];
   export let roomPassword = "";
   export let wsStatus = "disconnected";
   export let peers = [];
@@ -148,6 +151,8 @@
       bind:tabTexts
       bind:tabVideoTitles
       {doneActionsByTurn}
+      {customPrompts}
+      canRunCustomPrompts={isHostClaim || guestCanAskResearch}
       onTurnAction={(actionId, turnId) => researchPanel?.runTurnAction?.(actionId, turnId)}
     />
   </main>

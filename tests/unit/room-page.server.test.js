@@ -201,6 +201,39 @@ describe('rec/[slug]/+page.server', () => {
       const blankTemplate = await load({ params: { slug: SLUG }, cookies: makeCookies() })
       expect(blankTemplate.customEnabled).toBe(false)
     })
+
+    // ADR-0008, ticket 05: every configured Custom Prompt becomes its own
+    // one-click button in the selection popup, so the page has to ship the
+    // whole list — but only id + title.
+    it('ships every configured Custom Prompt as id + title, never the template text', async () => {
+      const passwordHash = await seedRoom()
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET)
+      })
+
+      expect((await load({ params: { slug: SLUG }, cookies })).customPrompts).toEqual([])
+
+      createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
+      createCustomPrompt({ title: 'Define it', prompt: 'Define {selection}.' })
+
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.customPrompts.map((p) => p.title)).toEqual(['Fact check', 'Define it'])
+      expect(data.customPrompts.every((p) => typeof p.id === 'string' && p.id)).toBe(true)
+      // The show's prompt wording stays on the server — the browser only
+      // ever names a prompt by id (see ws-rooms.js's annotation_ask).
+      expect(JSON.stringify(data.customPrompts)).not.toContain('Fact-check {selection}')
+      expect(data.customPrompts.some((p) => 'prompt' in p)).toBe(false)
+    })
+
+    it('ships no Custom Prompts to someone who has not passed the room password', async () => {
+      await seedRoom()
+      createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
+      const { load } = await loadPage()
+      const data = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(data.authenticated).toBe(false)
+      expect(data.customPrompts).toEqual([])
+    })
   })
 
   describe('actions.enter', () => {

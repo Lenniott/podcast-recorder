@@ -693,9 +693,14 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
     const { store, tabId } = storeWithRoom()
     const { ok, entry } = store.addAnnotation('room1', tabId, valid)
     expect(ok).toBe(true)
-    expect(Object.keys(entry).sort()).toEqual(['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text'])
+    expect(Object.keys(entry).sort()).toEqual([
+      'at', 'author', 'citations', 'customPromptId', 'error', 'id', 'kind', 'quote', 'status', 'tabId', 'text'
+    ])
     expect(entry).toMatchObject({
-      id: 'a1', tabId, kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host'
+      id: 'a1', tabId, kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host',
+      // A Comment is complete the instant it is submitted — it is born
+      // answered and nothing ever moves it (unlike a Card, below).
+      status: 'answered', error: null, citations: [], customPromptId: null
     })
     expect(typeof entry.at).toBe('number')
   })
@@ -720,12 +725,84 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
   it('refuses an unknown tab, an unknown kind, an empty quote, an empty comment and a missing id', () => {
     const { store, tabId } = storeWithRoom()
     expect(store.addAnnotation('room1', 'tab-nope', valid).ok).toBe(false)
-    // 'card' is ticket 05's kind — not valid until it joins ANNOTATION_KINDS.
-    expect(store.addAnnotation('room1', tabId, { ...valid, kind: 'card' }).ok).toBe(false)
+    expect(store.addAnnotation('room1', tabId, { ...valid, kind: 'nonsense' }).ok).toBe(false)
     expect(store.addAnnotation('room1', tabId, { ...valid, quote: '  ' }).ok).toBe(false)
     expect(store.addAnnotation('room1', tabId, { ...valid, text: '  ' }).ok).toBe(false)
     expect(store.addAnnotation('room1', tabId, { ...valid, id: '' }).ok).toBe(false)
     expect(store.getRoom('room1').annotations).toEqual({})
+  })
+
+  // ── Card Annotations (ADR-0008, ticket 05) ──────────────────────────────
+
+  const card = { id: 'c1', kind: 'card', quote: 'the moon landing', author: 'Fact check', customPromptId: 'cp_1' }
+
+  it('a Card is born pending with an empty body — its answer does not exist yet', () => {
+    const { store, tabId } = storeWithRoom()
+    const { ok, entry } = store.addAnnotation('room1', tabId, card)
+    expect(ok).toBe(true)
+    expect(entry).toMatchObject({
+      id: 'c1', kind: 'card', status: 'pending', text: '', error: null, customPromptId: 'cp_1', author: 'Fact check'
+    })
+    // Real, stored state from the instant it is created, not a client-only
+    // illusion — a rejoiner replaying this tab sees the pending Card.
+    expect(store.getRoom('room1').annotations[tabId]).toHaveLength(1)
+  })
+
+  it('a Card still needs its quote — the excerpt is what the prompt runs on', () => {
+    const { store, tabId } = storeWithRoom()
+    expect(store.addAnnotation('room1', tabId, { ...card, quote: '   ' }).ok).toBe(false)
+  })
+
+  it('resolveAnnotation moves a pending Card to answered, leaving the frozen quote alone', () => {
+    const { store, tabId } = storeWithRoom()
+    const created = store.addAnnotation('room1', tabId, card)
+    const resolved = store.resolveAnnotation('room1', 'c1', {
+      text: 'Apollo 11 landed on 20 July 1969.',
+      citations: [{ url: 'https://en.wikipedia.org/wiki/Apollo_11', title: 'Apollo 11' }]
+    })
+    expect(resolved.ok).toBe(true)
+    expect(resolved.tabId).toBe(tabId)
+    expect(resolved.entry).toMatchObject({
+      status: 'answered',
+      text: 'Apollo 11 landed on 20 July 1969.',
+      error: null,
+      quote: 'the moon landing',
+      at: created.entry.at
+    })
+    expect(resolved.entry.citations).toEqual([
+      { url: 'https://en.wikipedia.org/wiki/Apollo_11', title: 'Apollo 11' }
+    ])
+  })
+
+  it('refuses to resolve a Card to an empty answer — a blank row explains nothing', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    expect(store.resolveAnnotation('room1', 'c1', { text: '   ' }).ok).toBe(false)
+    expect(store.getRoom('room1').annotations[tabId][0].status).toBe('pending')
+  })
+
+  it('errorAnnotation moves a pending Card to a visible reason, never leaving it stuck', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    const errored = store.errorAnnotation('room1', 'c1', { message: 'The Research Assistant timed out.' })
+    expect(errored.ok).toBe(true)
+    expect(errored.entry).toMatchObject({
+      status: 'errored', error: 'The Research Assistant timed out.', text: '', quote: 'the moon landing'
+    })
+  })
+
+  it('resolve/error on an unknown annotation id is refused rather than silently creating one', () => {
+    const { store } = storeWithRoom()
+    expect(store.resolveAnnotation('room1', 'nope', { text: 'x' }).ok).toBe(false)
+    expect(store.errorAnnotation('room1', 'nope', { message: 'x' }).ok).toBe(false)
+  })
+
+  it('finds a Card to resolve even after the room has switched to another tab', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    store.createTab('room1', { tabId: 'tab-second' })
+    expect(store.getRoom('room1').tabs.activeTabId).toBe('tab-second')
+    expect(store.resolveAnnotation('room1', 'c1', { text: 'an answer' }).tabId).toBe(tabId)
   })
 
   it('falls back to a display name rather than storing an empty author', () => {

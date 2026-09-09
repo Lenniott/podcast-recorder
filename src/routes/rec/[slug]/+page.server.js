@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { deleteRoom, getRoomBySlug, listCustomPrompts } from '$lib/server/db.js'
+import { deleteRoom, getRoomBySlug, listCustomPrompts, listCustomPromptSummaries } from '$lib/server/db.js'
 import { isCustomPromptRunnable } from '$lib/home/custom-prompts.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
@@ -56,6 +56,12 @@ export async function load({ params, cookies }) {
     // existing deployment's one prompt keeps working across this change.
     customEnabled: isCustomPromptRunnable(firstCustomPrompt),
     customTitle: firstCustomPrompt?.title ?? '',
+    // id + title only — one selection-popup button per Custom Prompt
+    // (ADR-0008, ticket 05). Deliberately NOT the template text: the server
+    // resolves that by id when an annotation_ask arrives, so a participant's
+    // browser never holds the show's prompt wording. Only sent to someone
+    // already through the room's password gate.
+    customPrompts: authenticated ? listCustomPromptSummaries() : [],
     createdAt: room.created_at,
     roomPassword: isHostClaim ? (room.password_plain || null) : null
   }

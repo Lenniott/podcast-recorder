@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   askResearchAssistant,
   applyPlaceholders,
+  buildCustomPromptRequest,
+  referencedPlaceholders,
   latestTranscriptWindow,
   LATEST_TRANSCRIPT_WORD_LIMIT,
   PLACEHOLDER_NAMES,
@@ -681,6 +683,131 @@ describe('askResearchAssistant — error kinds', () => {
       await assertion
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+// ─── Highlight → Custom Prompt request building (ADR-0008, ticket 05) ──────
+//
+// This is the ADR's central lesson under test. The design session's real
+// failure was a fixed lookup mode that, handed a whole lyric as grounding,
+// leaked thematic interpretation the hosts had not yet discussed on air. The
+// fix was "the host writes their own prompt" — which is only a real fix if a
+// prompt written to reference `{selection}` alone genuinely receives nothing
+// but the highlighted excerpt.
+
+describe('referencedPlaceholders', () => {
+  it('reports only the Placeholders a template actually writes', () => {
+    expect([...referencedPlaceholders('Define {selection} using {transcript}.')].sort())
+      .toEqual(['selection', 'transcript'])
+  })
+
+  it('ignores braces that are not Placeholders, so prose survives untouched', () => {
+    expect([...referencedPlaceholders('Use {selection} but not {made_up} or {}.')])
+      .toEqual(['selection'])
+    expect([...referencedPlaceholders('')]).toEqual([])
+    expect([...referencedPlaceholders(null)]).toEqual([])
+  })
+})
+
+describe('buildCustomPromptRequest — a prompt only ever receives what it asked for', () => {
+  const everything = {
+    selection: 'the second verse',
+    currentTab: 'ALL THE NOTES, including where the episode is going',
+    transcript: 'Host: we have not talked about this yet',
+    videoTitle: 'Episode 12'
+  }
+
+  /** The exact messages this request would put on the wire to OpenRouter. */
+  async function sentMessages(request, pressTime = new Date()) {
+    process.env.OPENROUTER_API_KEY = 'test-api-key'
+    const fetchImpl = vi.fn().mockResolvedValue(
+      okResponse({ choices: [{ message: { content: 'an answer', annotations: [] } }] })
+    )
+    await askResearchAssistant(request, { fetchImpl, pressTime })
+    return JSON.parse(fetchImpl.mock.calls[0][1].body).messages
+  }
+
+  it('SPOILER RISK: a {selection}-only prompt receives the excerpt and nothing else', async () => {
+    const request = buildCustomPromptRequest({
+      template: 'Give a plain-language reading of: {selection}',
+      ...everything
+    })
+
+    expect(request.selection).toBe('the second verse')
+    // Not merely left unsubstituted — absent from the request entirely, so
+    // there is nothing here for a later change to the prompt-assembly code
+    // to accidentally start including.
+    expect(request.text).toBe('')
+    expect(request.transcript).toBe('')
+    expect(request.videoTitle).toBe('')
+
+    // And end to end: nothing but the excerpt reaches the model.
+    const sent = JSON.stringify(await sentMessages(request))
+    expect(sent).toContain('the second verse')
+    expect(sent).not.toContain('ALL THE NOTES')
+    expect(sent).not.toContain('we have not talked about this yet')
+    expect(sent).not.toContain('Episode 12')
+  })
+
+  it('a prompt that DOES reference {transcript} still gets the whole transcript', () => {
+    const request = buildCustomPromptRequest({
+      template: 'Given {transcript}, is {selection} already settled?',
+      ...everything
+    })
+    expect(request.transcript).toBe('Host: we have not talked about this yet')
+    expect(request.selection).toBe('the second verse')
+    // Still not the notes — it did not ask for those.
+    expect(request.text).toBe('')
+  })
+
+  it('{latest_transcript} is windowed from the same ingredient, so it counts as asking for it', () => {
+    const request = buildCustomPromptRequest({ template: 'Recently: {latest_transcript}', ...everything })
+    expect(request.transcript).toBe('Host: we have not talked about this yet')
+  })
+
+  it('{current_tab} and {video_title} are each carried only when referenced', () => {
+    const tabOnly = buildCustomPromptRequest({ template: 'Notes: {current_tab}', ...everything })
+    expect(tabOnly.text).toBe('ALL THE NOTES, including where the episode is going')
+    expect(tabOnly.videoTitle).toBe('')
+    expect(buildCustomPromptRequest({ template: 'Title: {video_title}', ...everything }).videoTitle)
+      .toBe('Episode 12')
+  })
+
+  it('{current_time} needs no ingredient and is filled from the press time', async () => {
+    const request = buildCustomPromptRequest({ template: 'It is {current_time}.', ...everything })
+    const messages = await sentMessages(request, new Date('2026-09-09T12:00:00.000Z'))
+    expect(messages[0].content).toBe('It is 2026-09-09T12:00:00.000Z.')
+  })
+
+  it('sends the template as the whole request, Placeholders resolved, no wrapper prompt', async () => {
+    const request = buildCustomPromptRequest({ template: 'Fact-check this claim: {selection}', ...everything })
+    expect(await sentMessages(request)).toEqual([
+      { role: 'user', content: 'Fact-check this claim: the second verse' }
+    ])
+  })
+
+  it('logs the unsubstituted template, so the Eval Log shows the prompt behind the call', () => {
+    expect(buildCustomPromptRequest({ template: 'Define {selection}', ...everything }).researchPrompt)
+      .toBe('Define {selection}')
+  })
+
+  it('returns null for a blank or missing template rather than an empty lookup', () => {
+    expect(buildCustomPromptRequest({ template: '   ', ...everything })).toBe(null)
+    expect(buildCustomPromptRequest({ template: null })).toBe(null)
+    expect(buildCustomPromptRequest()).toBe(null)
+  })
+
+  it('bounds every ingredient it does carry', () => {
+    const request = buildCustomPromptRequest({
+      template: '{selection} {current_tab} {transcript} {video_title}',
+      selection: 'x'.repeat(30_000),
+      currentTab: 'y'.repeat(30_000),
+      transcript: 'z'.repeat(30_000),
+      videoTitle: 'w'.repeat(30_000)
+    })
+    for (const value of [request.selection, request.text, request.transcript, request.videoTitle]) {
+      expect(value.length).toBe(20_000)
     }
   })
 })

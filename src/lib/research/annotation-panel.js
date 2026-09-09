@@ -28,6 +28,34 @@ export function applyAnnotationState(annotationsByTab, msg) {
   return { ...annotationsByTab, [msg.tabId]: msg.entries }
 }
 
+/** Applies an `annotation_error` broadcast — a Card whose Research
+ *  Assistant lookup failed (ADR-0008, ticket 05). The message carries the
+ *  errored Annotation itself, so this is the same upsert
+ *  applyAnnotationEntry does rather than a second way to mutate the list;
+ *  it exists so a caller can route the error message type without knowing
+ *  that. A pending Card must always end up somewhere visible. */
+export function applyAnnotationError(annotationsByTab, msg) {
+  if (!msg?.entry) return annotationsByTab
+  return applyAnnotationEntry(annotationsByTab, msg)
+}
+
+/** Whether an Annotation's body came from the Research Assistant rather
+ *  than from a person — what the panel labels and styles differently. */
+export function isCardAnnotation(annotation) {
+  return annotation?.kind === 'card'
+}
+
+/**
+ * An Annotation's lifecycle status, defaulted for the rows that predate it.
+ *
+ * A Comment has always been complete on arrival, and Annotations stored
+ * before Cards existed carry no `status` at all — both are 'answered'.
+ * Only a Card is ever 'pending' or 'errored'.
+ */
+export function annotationStatus(annotation) {
+  return annotation?.status || 'answered'
+}
+
 /**
  * Which Annotations the panel shows: the active tab's, newest first.
  *

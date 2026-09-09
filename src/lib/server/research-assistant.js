@@ -82,6 +82,76 @@ export function latestTranscriptWindow(transcript, wordLimit = LATEST_TRANSCRIPT
   return text.slice(words[words.length - wordLimit].index).trim()
 }
 
+/** Same ceiling POST /rec/[slug]/research applies to every Placeholder
+ *  ingredient it accepts — one bound, applied wherever a request is built,
+ *  rather than a second number that could drift from the route's. */
+const MAX_PLACEHOLDER_VALUE_LEN = 20_000
+
+/**
+ * The Placeholder names a template actually writes (unknown `{words}` are
+ * ignored, exactly as applyPlaceholders leaves them alone).
+ */
+export function referencedPlaceholders(template) {
+  const names = new Set()
+  for (const [, name] of String(template || '').matchAll(/\{(\w+)\}/g)) {
+    if (PLACEHOLDERS[name]) names.add(name)
+  }
+  return names
+}
+
+/**
+ * Builds the `custom` request for ONE Custom Prompt triggered from a
+ * highlighted excerpt (ADR-0008, ticket 05) — the generalization of the
+ * retired single-Custom builder, which always sent the one global prompt
+ * plus the whole active tab.
+ *
+ * **It carries only the ingredients the template itself references.** This
+ * is the ADR's central lesson made structural rather than advisory: a
+ * prompt written to reference `{selection}` alone must never be handed the
+ * surrounding Notes or the Transcript, because a fixed policy that fed a
+ * whole lyric as grounding leaked thematic interpretation the hosts had not
+ * yet discussed on air. applyPlaceholders would already refuse to *splice*
+ * an unreferenced value into the prompt text; dropping it here means it
+ * never reaches the request at all, so there is nothing for a later change
+ * to the prompt-assembly code to accidentally start including.
+ *
+ * `{current_time}` needs no ingredient — research-assistant fills it from
+ * the request's own press time.
+ *
+ * Returns null for an unknown/blank template: the caller decides whether
+ * that's an error worth surfacing.
+ */
+export function buildCustomPromptRequest({
+  template,
+  selection = '',
+  currentTab = '',
+  transcript = '',
+  videoTitle = ''
+} = {}) {
+  const instruction = String(template ?? '').trim()
+  if (!instruction) return null
+
+  const referenced = referencedPlaceholders(instruction)
+  const wants = (name) => referenced.has(name)
+  const cap = (value) => String(value ?? '').slice(0, MAX_PLACEHOLDER_VALUE_LEN)
+
+  return {
+    kind: 'custom',
+    instruction,
+    // `text` is where a `custom` request carries `{current_tab}`'s value —
+    // see placeholderValues below, which predates this builder.
+    text: wants('current_tab') ? cap(currentTab) : '',
+    selection: wants('selection') ? cap(selection) : '',
+    // `{latest_transcript}` is windowed *from* `{transcript}`'s ingredient
+    // (see applyPlaceholders), so referencing either one needs it.
+    transcript: wants('transcript') || wants('latest_transcript') ? cap(transcript) : '',
+    videoTitle: wants('video_title') ? cap(videoTitle).trim() : '',
+    // Logged unsubstituted, so the Eval Log shows the template behind the
+    // call and not only what went to the model.
+    researchPrompt: instruction
+  }
+}
+
 export function applyPlaceholders(template, values = {}) {
   // `{latest_transcript}` is derived from the transcript the caller already
   // supplies, so no caller has to window it itself — but an explicit
