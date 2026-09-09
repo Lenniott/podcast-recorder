@@ -27,6 +27,14 @@
   import { createAudioEngine } from '$lib/recording/audio-engine.js'
   import { createLevelMeter } from '$lib/recording/level-meter.js'
   import { createTranscriptCapture } from '$lib/room/transcript-capture.js'
+  // The two transcript reducers, unchanged (ADR-0002's append-only
+  // delivery/ordering is not what ticket 06 touched) — they just run here
+  // now that this page owns the lines rather than each child keeping its
+  // own listener. See `transcriptLines` below.
+  import {
+    applyTranscriptState as reduceTranscriptState,
+    applyTranscriptLine as reduceTranscriptLine
+  } from '$lib/research/research-panel.js'
 
   export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
@@ -43,6 +51,21 @@
   // participant) copy of its own. See RoomTabs.svelte's own comment on
   // `export let tabTexts`.
   let tabTexts = {}
+  // [{id, speaker, text, at}], in server (append) order — the room's live
+  // Transcript. Lifted to this page in ticket 06 (ADR-0008): it used to be
+  // tracked twice, once in RoomTabs (which rendered the Transcript Tab) and
+  // once in ResearchPanel (which needed the lines as a Placeholder
+  // ingredient). Now RoomTabs no longer renders it at all and the panel
+  // does, so the common parent holds the one copy and hands it to both —
+  // neither child can drift from the other about what was said. Delivery
+  // and ordering are untouched; only the owner moved.
+  let transcriptLines = []
+  // 'annotations' | 'transcript' — which facet of the right-hand panel this
+  // participant is looking at. LOCAL UI ONLY, never shared over the room WS,
+  // exactly like researchCollapsed below: the Transcript stopped being a
+  // room-shared view precisely so one person opening it doesn't move
+  // anybody else's screen (see CONTEXT.md's **Transcript**).
+  let researchFacet = 'annotations'
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -790,15 +813,14 @@
       // from it, exactly the case a solo participant typing their own
       // notes would hit.
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
+      // The Transcript is state this page owns since ticket 06, not a
+      // message fanned out to two components that each kept their own copy.
+      // Both children read `transcriptLines` as a plain prop instead.
       if (msg.type === 'transcript_state') {
-        roomTabs?.applyTranscriptState?.(msg)
-        // Same reasoning as tab_text above — a Quick Action run on the
-        // Transcript tab needs the lines-so-far too.
-        researchPanel?.applyTranscriptState?.(msg)
+        transcriptLines = reduceTranscriptState(transcriptLines, msg)
       }
       if (msg.type === 'transcript_line') {
-        roomTabs?.applyTranscriptLine?.(msg)
-        researchPanel?.applyTranscriptLine?.(msg)
+        transcriptLines = reduceTranscriptLine(transcriptLines, msg)
       }
       if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
       if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
@@ -825,7 +847,10 @@
         roomTabs?.applyAnnotationError?.(msg)
       }
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
-      if (msg.type === 'transcript_activity') roomTabs?.applyTranscriptActivity?.(msg)
+      // The "something's coming" pulse moved with the Transcript itself
+      // (ticket 06): it now rides the panel's Transcript facet button (and
+      // its collapse toggle when the panel is shut), not a tab-strip pill.
+      if (msg.type === 'transcript_activity') researchPanel?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {
@@ -1003,9 +1028,11 @@
   <RecordingRoom
     bind:sidebarCollapsed
     bind:researchCollapsed
+    bind:researchFacet
     bind:roomTabs
     bind:researchPanel
     bind:tabTexts
+    {transcriptLines}
     {transcriptionStatus}
     bind:canvasEl={canvas}
     roomName={data.roomName}

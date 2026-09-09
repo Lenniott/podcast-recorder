@@ -12,6 +12,7 @@
  * research-panel.js's own entriesByTab.
  */
 import { upsertAnnotation } from './annotation-sync.js'
+import { TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 
 /** Applies an `annotation_entry` broadcast into annotationsByTab. Upsert,
  *  not append: a reconnecting peer may re-send a create it never saw
@@ -67,7 +68,40 @@ export function annotationStatus(annotation) {
  * 'card' rather than needing a second ordering rule.
  */
 export function visibleAnnotations(annotationsByTab, activeTabId) {
-  const list = (annotationsByTab || {})[activeTabId] || []
+  return newestFirst((annotationsByTab || {})[activeTabId] || [])
+}
+
+/**
+ * Which Annotations the panel's feed shows now that the Transcript is a
+ * facet rather than a Tab (ADR-0008, ticket 06): the active Notes tab's
+ * Annotations AND every Turn-anchored one, in one newest-first list.
+ *
+ * This is the merge CONTEXT.md's **Annotation** entry describes — "listed
+ * together with every other Annotation in the panel regardless of which
+ * kind authored it or which surface (Notes or Transcript) it's anchored
+ * to" — and it is only correct because of what the two surfaces are.
+ * `visibleAnnotations` above stays per-tab because a Notes Annotation
+ * quotes text that exists in exactly one tab, so showing it under another
+ * would quote something that isn't there. A Turn-anchored Annotation
+ * quotes the Transcript, which is one room-wide surface that no tab owns
+ * and that the participant can open in this very panel — it is never "not
+ * there", whichever Notes tab happens to be active.
+ *
+ * The reserved Transcript id is still the storage key it always was
+ * (ticket 03's per-tab convention); what changed in ticket 06 is only that
+ * it stopped being something `activeTabId` can ever hold.
+ */
+export function visibleAnnotationsForRoom(annotationsByTab, activeTabId) {
+  const byTab = annotationsByTab || {}
+  const notes = activeTabId && activeTabId !== TRANSCRIPT_TAB_ID ? byTab[activeTabId] || [] : []
+  const turns = byTab[TRANSCRIPT_TAB_ID] || []
+  return newestFirst([...notes, ...turns])
+}
+
+/** Newest first, ties broken by the order the list already had — so two
+ *  Annotations written in the same millisecond keep a stable, repeatable
+ *  order instead of flickering between renders. */
+function newestFirst(list) {
   return list
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => (b.entry.at || 0) - (a.entry.at || 0) || b.index - a.index)

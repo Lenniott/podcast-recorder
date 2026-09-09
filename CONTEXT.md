@@ -225,12 +225,18 @@ One transcript line: a single participant's finalized utterance, labeled
 with who said it. Read-only; an **Annotation** can anchor to one directly.
 
 **Transcript Activity**:
-A room-shared "something's coming" pulse on the Transcript Tab pill, true
-while any participant's speech recognizer has an interim (not-yet-finalized)
-result in flight. Deliberately not the interim words themselves — no live
-streaming of unfinalized text between participants, just a heads-up that a
-Turn is likely about to land. Separate from a participant's own local
-transcription status (their recognizer's health, e.g. "retrying"): Activity
-is about the room, status is about one browser.
+A room-shared "something's coming" pulse on the right panel's **Transcript**
+facet button (it rode the Transcript Tab pill until that was retired — see
+ADR-0008), true while any participant's speech recognizer has an interim
+(not-yet-finalized) result in flight. It sits on the control that *opens*
+the facet, not inside it, because its whole job is to reach a participant
+who does not currently have the Transcript open — including one whose panel
+is collapsed, where it moves to the collapse toggle. Deliberately not the
+interim words themselves — no live streaming of unfinalized text between
+participants, just a heads-up that a Turn is likely about to land. Separate
+from a participant's own local transcription status (their recognizer's
+health, e.g. "retrying"), which sits on the same button as its own distinct
+dot: Activity is about the room, status is about one browser.
 _Avoid_: live captions, interim transcript, typing indicator (in the
-chat-app sense — this carries no text, just a boolean)
+chat-app sense — this carries no text, just a boolean), Transcript Tab pill
+(retired — there is no pill)

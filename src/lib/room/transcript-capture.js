@@ -2,7 +2,7 @@ import { createSpeechRecognition } from '../research/speech-recognition.js'
 
 /**
  * Wires the Record button's lifecycle to speech recognition and the
- * Transcript Tab wire protocol (ticket 01's `{ type: 'transcript_line',
+ * Transcript wire protocol (ticket 01's `{ type: 'transcript_line',
  * speaker, text }` message — see src/lib/server/ws-rooms.js's protocol doc
  * comment).
  *

@@ -55,7 +55,7 @@ function fireFinalResult(page, text) {
   }, text)
 }
 
-test('Start Recording starts speech recognition; a finalized utterance appears in the Transcript tab; Stop Recording stops it', async ({ page }) => {
+test('Start Recording starts speech recognition; a finalized utterance appears in the Transcript facet; Stop Recording stops it', async ({ page }) => {
   await stubSpeechRecognition(page)
   await stubYouTubeApi(page)
   const password = 'voice-capture-happy'
@@ -70,14 +70,15 @@ test('Start Recording starts speech recognition; a finalized utterance appears i
   // button, no separate consent step (ADR-0003).
   await expect.poll(() => page.evaluate(() => window.__srStartCount || 0)).toBeGreaterThan(0)
 
-  // Status dot on the Transcript tab pill confirms a confirmed-running
+  // Status dot on the panel's Transcript facet button (it moved there
+  // with the Transcript itself — ticket 06) confirms a confirmed-running
   // session, not just an attempted one (speech-recognition.js only fires
   // onStatusChange('running') after the fake's onstart callback lands).
   await expect(page.locator('.transcription-status-dot')).toHaveAttribute('data-status', 'running')
 
   await fireFinalResult(page, 'Hello from the test.')
 
-  await page.getByRole('button', { name: 'Transcript' }).click()
+  await page.getByTestId('facet-transcript').click()
   await expect(page.locator('.transcript-line')).toHaveCount(1)
   await expect(page.locator('.transcript-line').first()).toContainText('Host')
   await expect(page.locator('.transcript-line').first()).toContainText('Hello from the test.')
@@ -92,7 +93,7 @@ test('Start Recording starts speech recognition; a finalized utterance appears i
   await page.close()
 })
 
-test('an interim (non-final) result is never added to the Transcript tab', async ({ page }) => {
+test('an interim (non-final) result is never added to the Transcript facet', async ({ page }) => {
   await stubSpeechRecognition(page)
   await stubYouTubeApi(page)
   const password = 'voice-capture-interim'
@@ -110,7 +111,7 @@ test('an interim (non-final) result is never added to the Transcript tab', async
     })
   })
 
-  await page.getByRole('button', { name: 'Transcript' }).click()
+  await page.getByTestId('facet-transcript').click()
   await expect(page.getByText('No transcript yet')).toBeVisible()
   await expect(page.locator('.transcript-line')).toHaveCount(0)
 
@@ -163,6 +164,12 @@ test('an interim result shows a room-shared "transcript incoming" pulse to every
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await passRecordingCheck(host)
   await expect.poll(() => host.evaluate(() => window.__srStartCount || 0)).toBeGreaterThan(0)
+
+  // The pulse rides the panel's Transcript facet button since ticket 06 —
+  // both peers are on the Annotation feed, which is the point: the
+  // heads-up has to reach someone who does NOT have the Transcript open.
+  await expect(host.getByTestId('facet-annotations')).toHaveAttribute('aria-pressed', 'true')
+  await expect(guest.getByTestId('facet-annotations')).toHaveAttribute('aria-pressed', 'true')
 
   // Nothing said yet — no pulse for either peer.
   await expect(host.locator('.transcript-activity-pulse')).toHaveCount(0)

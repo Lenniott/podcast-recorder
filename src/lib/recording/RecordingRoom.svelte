@@ -20,15 +20,26 @@
   // sideways into ResearchPanel so `{current_tab}` can bundle it. Nothing
   // above RecordingRoom needs this (unlike tabTexts).
   let tabVideoTitles = {};
-  // turnId -> actionId[] — ResearchPanel's own derived, room-shared "which
-  // Turn Actions already ran" (see its own doc comment on the prop of the
-  // same name). Local to this component, unlike tabTexts: nothing above
-  // this needs it, it only flows sideways from ResearchPanel into RoomTabs.
-  let doneActionsByTurn = {};
-  // This browser's own speech-recognition status — passed straight through
-  // to RoomTabs' status dot (see its own prop doc comment). Per-browser,
-  // never synced to the room.
+  // The rendered Turn list inside ResearchPanel's Transcript facet, bound
+  // up here and handed sideways to RoomTabs — which hosts the shared
+  // selection popup and registers this element as a selection surface, so
+  // highlighting a Turn offers the same Comment + Custom Prompt actions
+  // Notes text does (ADR-0008, ticket 06). Same sideways-plumbing pattern
+  // as tabVideoTitles above; nothing above this component needs it.
+  let transcriptEl = null;
+  // This browser's own speech-recognition status — passed through to the
+  // panel's Transcript facet button, which is where the Transcript lives
+  // since ticket 06. Per-browser, never synced to the room.
   export let transcriptionStatus = "stopped";
+  // [{id, speaker, text, at}] — the room's live Transcript, owned by
+  // +page.svelte (lifted there in ticket 06) and read by both children:
+  // the panel renders the Turns, RoomTabs only needs them for a
+  // highlight-fired Custom Prompt's `{transcript}` Placeholder.
+  export let transcriptLines = [];
+  // 'annotations' | 'transcript' — which panel facet this participant is
+  // looking at. Local and personal, exactly like researchCollapsed above;
+  // never sent over the room WS.
+  export let researchFacet = "annotations";
   export let canvasEl;
 
   export let roomName = "";
@@ -146,14 +157,13 @@
     <RoomTabs
       {send}
       {clockOffset}
-      {transcriptionStatus}
+      {transcriptLines}
+      {transcriptEl}
       bind:this={roomTabs}
       bind:tabTexts
       bind:tabVideoTitles
-      {doneActionsByTurn}
       {customPrompts}
       canRunCustomPrompts={isHostClaim || guestCanAskResearch}
-      onTurnAction={(actionId, turnId) => researchPanel?.runTurnAction?.(actionId, turnId)}
     />
   </main>
 
@@ -166,9 +176,12 @@
     {guestCanAskResearch}
     {customEnabled}
     {customTitle}
+    {transcriptLines}
+    {transcriptionStatus}
+    bind:facet={researchFacet}
+    bind:turnsEl={transcriptEl}
     bind:collapsed={researchCollapsed}
     bind:this={researchPanel}
-    bind:doneActionsByTurn
   />
 </div>
 

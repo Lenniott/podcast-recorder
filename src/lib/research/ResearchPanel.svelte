@@ -18,8 +18,6 @@
     buildManualAskRequest,
     buildTurnActionRequest,
     buildCustomRequest,
-    applyTranscriptState as reduceTranscriptState,
-    applyTranscriptLine as reduceTranscriptLine,
     activeNotesTabText,
     activeTabVideoTitle,
     hasCustomText,
@@ -32,9 +30,12 @@
     applyAnnotationState as reduceAnnotationState,
     applyAnnotationError as reduceAnnotationError,
     visibleAnnotations,
+    visibleAnnotationsForRoom,
     isCardAnnotation,
     annotationStatus,
   } from "./annotation-panel.js";
+  import TranscriptFacet from "./TranscriptFacet.svelte";
+  import { TRANSCRIPT_TAB_ID } from "$lib/room/transcript-sync.js";
 
   const TURN_ACTION_LABEL = {
     definition: "Definition",
@@ -52,6 +53,62 @@
   // researchCollapsed in +page.svelte), independent of the left sidebar's
   // own collapsed state.
   export let collapsed = false;
+
+  // ─── Which facet this participant is looking at (ADR-0008, ticket 06) ──
+  //
+  // 'annotations' | 'transcript'. PERSONAL AND LOCAL TO THIS BROWSER, in
+  // exactly the same way (and by exactly the same mechanism) as `collapsed`
+  // above: a plain variable in +page.svelte, bound down through
+  // RecordingRoom, never touched by `send` and never derived from a WS
+  // message. That is the whole point of the Transcript ceasing to be a Tab
+  // — it used to be room-shared `activeTabId`, so one participant glancing
+  // at it moved everybody else's main stage. Nobody's screen should change
+  // because their co-host looked something up (see CONTEXT.md's
+  // **Transcript**).
+  //
+  // If you are ever tempted to sync this: don't. There is no facet_switch
+  // message, and adding one would re-introduce the exact behaviour ADR-0008
+  // retired.
+  export let facet = "annotations";
+
+  // [{id, speaker, text, at}] in server (append) order — the room's live
+  // Transcript, lifted to +page.svelte (ticket 06) so the tab strip's
+  // `{transcript}` placeholder and this panel's facet read one copy rather
+  // than each keeping their own listener. Delivery/ordering is unchanged
+  // (transcript_state/transcript_line, ADR-0002); only the owner moved.
+  export let transcriptLines = [];
+
+  // bind:turnsEl — the rendered Turn list, handed up so RoomTabs.svelte can
+  // register it as a selection surface (see TranscriptFacet.svelte). Flows
+  // sideways between the two components via RecordingRoom, the same way
+  // tabTexts/tabVideoTitles already do.
+  export let turnsEl = null;
+
+  // This participant's own speech-recognition status — 'stopped' |
+  // 'unsupported' | 'starting' | 'running' | 'retrying'. Per-browser, never
+  // room-shared: whether *you* are being transcribed is your own local
+  // fact. It moved here from the retired Transcript pill (ticket 06)
+  // because this button is now the only place a participant goes to think
+  // about the Transcript, and AGENTS.md's rule applies — a silently-dead
+  // recognizer must stay visible, never indistinguishable from "fine".
+  export let transcriptionStatus = "stopped";
+
+  const TRANSCRIPTION_STATUS_LABEL = {
+    stopped: "Not transcribing",
+    unsupported: "Transcription isn't supported in this browser",
+    starting: "Starting transcription…",
+    running: "Transcribing your mic",
+    retrying: "Transcription lost connection — retrying…",
+  };
+
+  // Room-shared "a transcript_line is probably about to land somewhere in
+  // the room" pulse (see ws-rooms.js's transcript_activity protocol doc).
+  // Moved off the retired Transcript pill onto the facet's own button
+  // (ticket 06) so a participant still gets the heads-up without having the
+  // facet open. Deliberately separate from transcriptionStatus above: that
+  // is this browser's recognizer health, this is "someone in the room is
+  // being processed right now", true even for a peer with no microphone.
+  let transcriptActivity = false;
 
   // tabId -> string — RoomTabs.svelte's own true, complete, current copy
   // of every tab's text (both its own just-typed keystrokes AND every
@@ -100,7 +157,15 @@
   // and a question, an Annotation has neither — it is written once and is
   // then a permanent record of a quote plus a note.
   let annotationsByTab = {};
-  $: annotations = visibleAnnotations(annotationsByTab, activeTabId);
+  // The feed lists the active Notes tab's Annotations AND every
+  // Turn-anchored one, together, newest first — see
+  // visibleAnnotationsForRoom for why the Transcript's are the one
+  // cross-tab case (ticket 06). Before this, Turn Annotations were filed
+  // under a tabId that `activeTabId` could hold; now it never can, so
+  // scoping the feed to activeTabId alone would hide them entirely.
+  $: annotations = visibleAnnotationsForRoom(annotationsByTab, activeTabId);
+  // Just the Transcript's, for drawing highlights back onto the Turns.
+  $: turnAnnotations = visibleAnnotations(annotationsByTab, TRANSCRIPT_TAB_ID);
 
   // Read by RecordingRoom.svelte via bind:doneActionsByTurn and passed down
   // into RoomTabs — same "computed here, bound up, handed down as a plain
@@ -108,8 +173,6 @@
   // this file's `export let tabTexts` doc comment above).
   export let doneActionsByTurn = {};
   $: doneActionsByTurn = deriveDoneActionsByTurn(entriesByTab);
-
-  let transcriptLines = [];
 
   $: notesText = activeNotesTabText(tabTexts, activeTabId);
   $: videoTitle = activeTabVideoTitle(tabVideoTitles, activeTabId);
@@ -146,12 +209,16 @@
     activeTabId = msg.activeTabId;
   }
 
-  export function applyTranscriptState(msg) {
-    transcriptLines = reduceTranscriptState(transcriptLines, msg);
-  }
-
-  export function applyTranscriptLine(msg) {
-    transcriptLines = reduceTranscriptLine(transcriptLines, msg);
+  /** The room-shared "something's coming" pulse (ticket 06 moved this here
+   *  from the retired Transcript pill — see ws-rooms.js's
+   *  transcript_activity). Routed by the page, same pattern as applyDuck.
+   *
+   *  transcript_state/transcript_line are deliberately NOT handled here any
+   *  more: the lines themselves are lifted to +page.svelte and arrive as
+   *  the `transcriptLines` prop, so the tab strip and this panel can never
+   *  disagree about what the Transcript says. */
+  export function applyTranscriptActivity(msg) {
+    transcriptActivity = !!msg.active;
   }
 
   export function applyResearchEntry(msg) {
@@ -326,10 +393,73 @@
       {:else}
         <ChevronRight />
       {/if}
+      <!-- A collapsed panel hides the facet buttons entirely, so the pulse
+           rides the only control left. Without this, "new Turns are
+           arriving" would be invisible to anyone with the panel shut —
+           which is exactly the participant the heads-up is for. -->
+      {#if collapsed && transcriptActivity}
+        <span
+          class="transcript-activity-pulse"
+          data-testid="transcript-activity-pulse"
+          title="Transcript incoming…"
+          aria-label="Transcript incoming…"
+        ></span>
+      {/if}
     </button>
   </div>
 
   {#if !collapsed}
+    <!-- Transcript vs. the Annotation feed. PERSONAL AND LOCAL — clicking
+         either sends nothing over the WS (see `facet`'s doc comment). -->
+    <div class="facet-toggle" role="group" aria-label="Panel view">
+      <button
+        type="button"
+        class="btn-ghost btn-sm facet-btn"
+        class:is-active={facet === "annotations"}
+        aria-pressed={facet === "annotations"}
+        data-testid="facet-annotations"
+        on:click={() => (facet = "annotations")}
+      >
+        Annotations
+      </button>
+      <button
+        type="button"
+        class="btn-ghost btn-sm facet-btn"
+        class:is-active={facet === "transcript"}
+        aria-pressed={facet === "transcript"}
+        data-testid="facet-transcript"
+        on:click={() => (facet = "transcript")}
+      >
+        Transcript
+        {#if transcriptionStatus !== "stopped"}
+          <span
+            class="transcription-status-dot"
+            data-status={transcriptionStatus}
+            title={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
+            aria-label={TRANSCRIPTION_STATUS_LABEL[transcriptionStatus]}
+          ></span>
+        {/if}
+        {#if transcriptActivity}
+          <span
+            class="transcript-activity-pulse"
+            data-testid="transcript-activity-pulse"
+            title="Transcript incoming…"
+            aria-label="Transcript incoming…"
+          ></span>
+        {/if}
+      </button>
+    </div>
+  {/if}
+
+  {#if !collapsed && facet === "transcript"}
+    <TranscriptFacet
+      lines={transcriptLines}
+      annotations={turnAnnotations}
+      bind:turnsEl
+    />
+  {/if}
+
+  {#if !collapsed && facet === "annotations"}
     {#if canAskResearch}
       <form class="research-ask-form" on:submit|preventDefault={submitQuestion}>
         <input
@@ -374,7 +504,8 @@
       <div class="annotation-entries" bind:this={annotationsEl}>
         {#if annotations.length === 0}
           <p class="research-empty">
-            Highlight text in the notes to comment on it or run a prompt.
+            Highlight text in the notes — or a Transcript Turn — to comment
+            on it or run a prompt.
           </p>
         {:else}
           {#each annotations as annotation (annotation.id)}
@@ -554,6 +685,78 @@
   .research-panel-title-icon {
     display: inline-flex;
     color: var(--muted);
+  }
+
+  /* Transcript vs. Annotation feed. A per-browser view switch, so it reads
+     as a segmented control rather than as anything that could look
+     room-shared — no accent fill like the old .tab-pill.active had. */
+  .facet-toggle {
+    display: flex;
+    gap: 2px;
+    width: 100%;
+    flex-shrink: 0;
+  }
+
+  .facet-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+
+  .facet-btn.is-active {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  /* This browser's own recognizer health — moved here with the Transcript
+     itself (ticket 06). */
+  .transcription-status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+    background: var(--muted);
+  }
+  .transcription-status-dot[data-status="running"] {
+    background: var(--success);
+  }
+  .transcription-status-dot[data-status="starting"] {
+    background: var(--warn);
+  }
+  .transcription-status-dot[data-status="retrying"] {
+    background: var(--danger);
+    box-shadow: 0 0 4px var(--danger);
+  }
+
+  /* Room-shared "something's coming" signal — deliberately a different hue
+     and a pulse (not a solid fill) from transcription-status-dot above, so
+     "my mic's recognizer is healthy" and "someone's speech is being
+     processed right now" never read as the same fact at a glance. */
+  .transcript-activity-pulse {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+    background: var(--accent);
+    animation: transcript-activity-pulse 1s ease-in-out infinite;
+  }
+  @keyframes transcript-activity-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: scale(0.85);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.15);
+    }
   }
 
   .research-ask-form {

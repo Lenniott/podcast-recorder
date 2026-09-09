@@ -185,6 +185,16 @@ export function createRoomStateStore({
     if (!content.transcript) content.transcript = { lines: [] }
     if (!content.research) content.research = {}
     if (!content.annotations) content.annotations = {}
+    // A room saved by a pre-ticket-06 build can have been left with the
+    // reserved Transcript id as its activeTabId, back when that was a
+    // switchable room-shared view (ADR-0008 retired it). Nothing renders
+    // that any more, so heal it here — same one-shot, on-hydration
+    // normalisation as the backfills above, rather than making every
+    // reader defend against an activeTabId that names no tab.
+    const list = content.tabs?.list
+    if (Array.isArray(list) && list.length && !list.some((t) => t.id === content.tabs.activeTabId)) {
+      content.tabs.activeTabId = list[0].id
+    }
     hot.set(slug, content)
     return content
   }
@@ -225,16 +235,17 @@ export function createRoomStateStore({
   function switchTab(slug, tabId) {
     return withRoom(slug, (content) => {
       const id = String(tabId || '')
-      // The one exception to "must be a real entry in tabs.list": the
-      // reserved Transcript id is a valid *destination* to switch the
-      // room's shared view to, even though (by design — see ADR-0002 and
-      // createDefaultRoomContent) it is never itself an entry in
-      // tabs.list. This is what makes "which pill the room is looking at"
-      // genuinely room-shared for the Transcript too, broadcast the same
-      // way switching to any real tab already is — not a second,
-      // per-browser-only mechanism. closeTab/setTabText below still find
-      // nothing at this id and refuse it exactly as before.
-      if (id !== TRANSCRIPT_TAB_ID && findTabIndex(content, id) === -1) {
+      // Every destination must be a real entry in tabs.list — including
+      // the reserved Transcript id, which used to be the one exception
+      // (ADR-0008, ticket 06 retired it). The Transcript is no longer a
+      // room-shared *view* anyone can switch to: it is a facet of each
+      // participant's own right-hand panel, opened locally, never
+      // broadcast. The id itself lives on purely as the storage key for
+      // Turn-anchored Annotations (ticket 03's per-tab convention) — it is
+      // a key, not a place, so it needs no mention here at all: it now
+      // fails the same tabs.list lookup any unknown id does, exactly as
+      // closeTab/setTabText below have always failed it.
+      if (findTabIndex(content, id) === -1) {
         return { ok: false, error: 'Unknown tab' }
       }
       content.tabs.activeTabId = id
@@ -436,7 +447,16 @@ export function createRoomStateStore({
       if (!annotationId) return { ok: false, error: 'Invalid annotation id' }
 
       const tid = String(tabId || '')
-      if (findTabIndex(content, tid) === -1) return { ok: false, error: 'Unknown tab' }
+      // An Annotation may be anchored to a Notes tab OR to a Transcript Turn
+      // (ADR-0008). The Transcript is deliberately never an entry in
+      // tabs.list (ADR-0002), so a plain findTabIndex check would refuse
+      // every Turn-anchored Annotation — which is exactly what the reserved
+      // id exists to key. This is the ONE place that id is a legitimate
+      // destination, and it is a storage key, not a view: switchTab,
+      // closeTab and setTabText all still refuse it.
+      if (tid !== TRANSCRIPT_TAB_ID && findTabIndex(content, tid) === -1) {
+        return { ok: false, error: 'Unknown tab' }
+      }
 
       const annotationKind = ANNOTATION_KINDS.includes(kind) ? kind : null
       if (!annotationKind) return { ok: false, error: 'Unknown annotation kind' }

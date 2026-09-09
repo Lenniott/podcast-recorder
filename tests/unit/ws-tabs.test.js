@@ -168,7 +168,7 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
   })
 })
 
-describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 follow-up)', () => {
+describe('setupWss — the Transcript is not a tab_switch destination (ADR-0008, ticket 06)', () => {
   let wss, host, guest
 
   beforeEach(() => {
@@ -182,35 +182,51 @@ describe('setupWss — tab_switch to the Transcript (room-shared, ticket 01 foll
     wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
   })
 
-  it('a peer switching to the Transcript is room-shared — broadcast to every peer, not just the one who clicked it', async () => {
+  // The Transcript was briefly a valid tab_switch destination (ticket 01
+  // follow-up). ADR-0008/ticket 06 retired that: it is a personal, local
+  // facet of each participant's own right-hand panel now, so "I'm looking
+  // at the Transcript" is not a room-shared fact and never crosses the WS.
+  // The reserved id survives only as the storage key for Turn-anchored
+  // Annotations.
+
+  it('refuses a tab_switch naming the reserved Transcript id, even sent by hand over a live socket', async () => {
     const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    const before = latest(host, 'tabs_state').activeTabId
+    const sentBefore = guest.sent.length
     guest.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
+
+    // The refusal is explicit, and no new tabs_state was broadcast at all.
+    const since = guest.sent.slice(sentBefore)
+    expect(since.some((m) => m.type === 'error')).toBe(true)
+    expect(since.some((m) => m.type === 'tabs_state')).toBe(false)
+    // Nobody's view moved — the refusal is not a silent no-op that leaves
+    // one peer believing it switched.
     for (const ws of [host, guest]) {
-      expect(latest(ws, 'tabs_state').activeTabId).toBe(TRANSCRIPT_TAB_ID)
+      expect(latest(ws, 'tabs_state').activeTabId).toBe(before)
+      expect(latest(ws, 'tabs_state').activeTabId).not.toBe(TRANSCRIPT_TAB_ID)
     }
-    // The ordinary tabs list itself is untouched — the Transcript is a
-    // shared *view*, never an entry in tabs.list (see ADR-0002).
-    expect(latest(host, 'tabs_state').tabs).toHaveLength(1)
   })
 
-  it('switching away from the Transcript back to a real tab is also broadcast to every peer', async () => {
-    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+  it('switching between real tabs is still room-shared, exactly as before', async () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 'tab-second01' }))
     const realTabId = latest(host, 'tabs_state').tabs[0].id
-    host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
     host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: realTabId }))
     for (const ws of [host, guest]) {
       expect(latest(ws, 'tabs_state').activeTabId).toBe(realTabId)
     }
   })
 
-  it('a late joiner is replayed the Transcript as the room\'s current view, same as any real active tab', async () => {
+  it("a late joiner is never replayed the Transcript as the room's active view", async () => {
     const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
     host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
     guest.emit('close') // free a slot — room is capped at MAX_PEERS
 
     const late = mockWs()
     wss.connect(late, 'room1'); join(late, 'Late', 'c3')
-    expect(latest(late, 'tabs_state').activeTabId).toBe(TRANSCRIPT_TAB_ID)
+    const activeTabId = latest(late, 'tabs_state').activeTabId
+    expect(activeTabId).not.toBe(TRANSCRIPT_TAB_ID)
+    // And it names a tab that actually exists, rather than nothing at all.
+    expect(latest(late, 'tabs_state').tabs.map((t) => t.id)).toContain(activeTabId)
   })
 
   it('still refuses tab_close/tab_text for the reserved Transcript id even via the live WS handlers', async () => {
