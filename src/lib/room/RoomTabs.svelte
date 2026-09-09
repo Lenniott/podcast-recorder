@@ -16,10 +16,20 @@
     rectOfRange,
   } from "./selection-popup.js";
   import { createAnnotationOutbox } from "./annotation-outbox.js";
+  import { highlightSegments, needsQuoteRematch } from "./notes-highlights.js";
   import {
     makeAnnotationId,
     MAX_ANNOTATION_TEXT_LEN,
   } from "$lib/research/annotation-sync.js";
+  // The same two reducers ResearchPanel.svelte uses. Shared rather than
+  // re-implemented so "how a create/replay lands in the per-tab list" stays
+  // defined exactly once (see annotation-panel.js) — each component keeps
+  // its own copy of that list, fed only by the room's own broadcasts, never
+  // by reading another component's variable.
+  import {
+    applyAnnotationEntry as reduceAnnotationEntry,
+    applyAnnotationState as reduceAnnotationState,
+  } from "$lib/research/annotation-panel.js";
   import {
     getNotesTextSize,
     setNotesTextSize,
@@ -125,6 +135,17 @@
   // planInboundNotesUpdate — see notes-editor.js for why.
   let notesDomTabId = null;
   let unsentTabId = null;
+  // The text the Notes element is showing *right now*, which is not always
+  // the same as the shared model's `notesText`: planInboundNotesUpdate
+  // deliberately declines to paint a peer's edit over a live caret, so for
+  // up to one debounce the model holds their text while the screen holds
+  // ours. The highlight layer below mirrors the screen, so it has to be
+  // driven by this and never by the model — mirroring text the element
+  // isn't showing is precisely how a highlight ends up drawn in the wrong
+  // place. Updated wherever the element's content changes (a local
+  // keystroke or paint), and read back from the element itself so it can't
+  // drift from what is really there.
+  let notesDomText = "";
 
   // ─── Highlight → popup → Annotation (ADR-0008, ticket 03) ──────────────
   //
@@ -264,11 +285,46 @@
     clearSelectionPopup();
   }
 
+  // ─── Drawing the highlights back onto the Notes text (ticket 04) ───────
+  //
+  // tabId -> Annotation[], this component's own copy of the same room state
+  // ResearchPanel holds, fed only by the annotation_entry/annotation_state
+  // broadcasts the page routes in below. The panel lists them; this file
+  // paints their quotes back onto the text they were taken from.
+  let annotationsByTab = {};
+
+  // An Annotation's highlight is re-located from its frozen quote at render
+  // time, every single time, and nothing about the match is ever stored —
+  // see notes-highlights.js for why a persisted offset would be a lie
+  // waiting to happen, and for why a Turn-anchored Annotation (ticket 06)
+  // never needs this path at all. `needsQuoteRematch` is that gate: today
+  // it is belt-and-braces next to `!viewingTranscript` (the Transcript
+  // isn't a Notes surface, so its Annotations never reach here anyway), and
+  // it is what ticket 06 flips against when it renders Annotations on Turns.
+  $: notesAnnotations =
+    !viewingTranscript && activeTabId && needsQuoteRematch(activeTabId)
+      ? (annotationsByTab[activeTabId] ?? [])
+      : [];
+  // Driven by notesDomText (what the element shows), never by notesText
+  // (what the model says) — see notesDomText's comment above.
+  $: notesHighlights = highlightSegments(notesDomText, notesAnnotations);
+
   /** The server echoed one of our own Annotations back — it is room state
    *  now, so drop it from the outbox. Routed here by the page alongside
    *  ResearchPanel's own copy (see +page.svelte). */
   export function applyAnnotationEntry(msg) {
     if (msg?.entry?.id) annotationOutbox.acknowledge(msg.entry.id);
+    if (msg?.tabId && msg?.entry) {
+      annotationsByTab = reduceAnnotationEntry(annotationsByTab, msg);
+    }
+  }
+
+  /** One tab's full Annotation list, replayed on join/resync — what makes a
+   *  refresh redraw the highlights that were already there. */
+  export function applyAnnotationState(msg) {
+    if (msg?.tabId && Array.isArray(msg.entries)) {
+      annotationsByTab = reduceAnnotationState(annotationsByTab, msg);
+    }
   }
 
   /** Re-announce Comments the server never confirmed, on every successful
@@ -501,6 +557,10 @@
       unsentTabId = null;
     }
     notesDomTabId = tabId;
+    // Read back rather than assumed: on the write:false branch the element
+    // is still showing this browser's own uncommitted text, and that — not
+    // the model's — is what the highlight layer has to mirror.
+    notesDomText = readNotesText(el);
   }
 
   // ─── Outbound — shared text (last write wins) ───────────────────────────
@@ -516,6 +576,9 @@
     const text = readNotesText(e.currentTarget);
     tabTexts = { ...tabTexts, [tabId]: text };
     notesDomTabId = tabId;
+    // Keystroke by keystroke, so a highlight follows the text it is drawn
+    // over (or stops being drawn the moment its quote is typed away).
+    notesDomText = text;
     unsentTabId = tabId;
     clearTimeout(textDebounceTimer);
     textDebounceTimer = setTimeout(() => {
@@ -704,28 +767,50 @@
         </div>
 
 
-        <!-- The Notes editing surface. A contenteditable rather than a
-             <textarea> (ADR-0008) so a later ticket can anchor a popup to
-             an arbitrary highlighted span of it — see the `notesEl` block
-             at the top of this file for how to get hold of the element.
-             Its text is painted by syncNotesSurface(), never by a
-             `value={...}`-style binding. -->
-        <div
-          id="shared-notes-editor"
-          data-notes-editor
-          class="shared-notes-editor"
-          class:is-empty={notesText === ""}
-          style="font-size: {notesFontSize}px"
-          contenteditable="true"
-          role="textbox"
-          aria-multiline="true"
-          aria-label="Shared notes — visible to everyone in the room…"
-          aria-placeholder="Share notes between you and your guests…"
-          data-placeholder="Share notes between you and your guests…"
-          bind:this={notesEl}
-          on:input={onNotesInput}
-          on:paste={onNotesPaste}
-        ></div>
+        <!-- The Notes editing surface, plus the Annotation highlights drawn
+             behind it (ticket 04).
+
+             The highlights live in a separate, aria-hidden mirror layer
+             rather than as <mark> elements inside the contenteditable, on
+             purpose: the editable's content is the shared document (its
+             plain text is what gets broadcast on every keystroke), so
+             injecting markup into it would put a highlight between a
+             typist and their own caret and risk that markup escaping into
+             what peers receive. The mirror renders the exact same string
+             with the exact same typography and only paints backgrounds, so
+             it cannot alter a character of what is being edited.
+
+             The mirror's text is transparent — the real, selectable text is
+             the contenteditable sitting on top of it. -->
+        <div class="notes-surface">
+          <div
+            class="notes-highlight-layer"
+            data-testid="notes-highlight-layer"
+            aria-hidden="true"
+            style="font-size: {notesFontSize}px"
+          >
+            {#each notesHighlights as segment, i (i)}{#if segment.ids.length}<mark
+                  class="notes-highlight"
+                  data-annotation-ids={segment.ids.join(" ")}>{segment.text}</mark
+                >{:else}{segment.text}{/if}{/each}
+          </div>
+          <div
+            id="shared-notes-editor"
+            data-notes-editor
+            class="shared-notes-editor"
+            class:is-empty={notesText === ""}
+            style="font-size: {notesFontSize}px"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Shared notes — visible to everyone in the room…"
+            aria-placeholder="Share notes between you and your guests…"
+            data-placeholder="Share notes between you and your guests…"
+            bind:this={notesEl}
+            on:input={onNotesInput}
+            on:paste={onNotesPaste}
+          ></div>
+        </div>
       </div>
 
       <!-- Anchored to the highlight, not to this container — it is
@@ -998,7 +1083,44 @@
     outline: none;
     border-color: var(--accent);
   }
+  /* Stacking context for the highlight mirror and the editable that sits
+     on top of it. Sized entirely by the editable — the mirror is absolutely
+     positioned and can never make the surface taller than the text is. */
+  .notes-surface {
+    position: relative;
+    width: 100%;
+  }
+
+  /* The Annotation highlights (ticket 04). Every typographic property here
+     has to match .shared-notes-editor exactly, or a highlight would land
+     next to its words instead of on them — font-size is mirrored inline
+     from the same notesFontSize, and the rest is inherited or repeated
+     verbatim below. Never interactive: clicks, selection and the caret all
+     belong to the editable above it. */
+  .notes-highlight-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    user-select: none;
+    font-size: 16px;
+    line-height: 1.5;
+    font-family: inherit;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    color: transparent;
+  }
+
+  .notes-highlight {
+    background: color-mix(in srgb, var(--accent) 26%, transparent);
+    /* <mark>'s UA colour would paint a second, offset copy of the text
+       through the real one. */
+    color: transparent;
+    border-radius: 3px;
+  }
+
   .shared-notes-editor {
+    position: relative;
+    z-index: 1;
     width: 100%;
     min-height: 80vh;
     font-size: 16px;

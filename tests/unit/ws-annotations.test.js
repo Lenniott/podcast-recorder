@@ -167,6 +167,52 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     }
   })
 
+  it('stores exactly {id,tabId,kind,quote,text,author,at} — no anchor position of any kind (ticket 04)', () => {
+    const tabId = activeTabId(host)
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: 'we talked about the moon landing today' }))
+    comment(host, { tabId, id: 'a1', quote: 'the moon landing', text: 'check the date' })
+
+    // A client that tries to smuggle an offset in gets it dropped: the
+    // stored shape is fixed here, and the highlight is re-located from the
+    // frozen quote at render time instead (see notes-highlights.js).
+    host.emit('message', JSON.stringify({
+      type: 'annotation_create',
+      tabId,
+      id: 'a2',
+      kind: 'comment',
+      quote: 'today',
+      text: 'and this one',
+      start: 33,
+      end: 38,
+      offset: 33,
+      anchor: { start: 33 }
+    }))
+
+    const rejoiner = mockWs()
+    wss.connect(rejoiner, 'room1'); join(rejoiner, 'Guest', 'c2')
+    const entries = latest(rejoiner, 'annotation_state').entries
+    expect(entries).toHaveLength(2)
+    for (const entry of entries) {
+      expect(Object.keys(entry).sort()).toEqual(['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text'])
+    }
+  })
+
+  it('editing the tab text never touches a stored Annotation — the quote stays frozen (ticket 04)', () => {
+    const tabId = activeTabId(host)
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: 'we talked about the moon landing today' }))
+    comment(host, { tabId, id: 'a1', quote: 'the moon landing', text: 'check the date' })
+
+    // The phrase is edited away entirely — the Annotation is unchanged and
+    // still replays with its original quote; only the *drawing* of a
+    // highlight is affected, and that decision is never persisted.
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: 'we talked about something else' }))
+
+    const rejoiner = mockWs()
+    wss.connect(rejoiner, 'room1'); join(rejoiner, 'Guest', 'c2')
+    const [entry] = latest(rejoiner, 'annotation_state').entries
+    expect(entry).toMatchObject({ id: 'a1', quote: 'the moon landing', text: 'check the date' })
+  })
+
   it('files an Annotation under the tab it was highlighted in, not the room\'s current active tab', () => {
     const firstTab = activeTabId(host)
     host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 'tab-second' }))

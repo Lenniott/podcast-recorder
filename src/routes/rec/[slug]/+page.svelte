@@ -803,15 +803,19 @@
       if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
       if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
       if (msg.type === 'research_removed') researchPanel?.applyResearchRemove?.(msg)
-      // Annotations (ADR-0008) go to BOTH: the panel renders them, and
-      // RoomTabs — which is what sent the annotation_create — needs the echo
-      // to know the server has it and stop re-sending it on reconnect (see
-      // annotation-outbox.js).
+      // Annotations (ADR-0008) go to BOTH: the panel lists them, and
+      // RoomTabs draws their quotes back onto the Notes text they were
+      // taken from (ticket 04) — as well as needing the echo of its own
+      // annotation_create to know the server has it and stop re-sending it
+      // on reconnect (see annotation-outbox.js).
       if (msg.type === 'annotation_entry') {
         researchPanel?.applyAnnotationEntry?.(msg)
         roomTabs?.applyAnnotationEntry?.(msg)
       }
-      if (msg.type === 'annotation_state') researchPanel?.applyAnnotationState?.(msg)
+      if (msg.type === 'annotation_state') {
+        researchPanel?.applyAnnotationState?.(msg)
+        roomTabs?.applyAnnotationState?.(msg)
+      }
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'transcript_activity') roomTabs?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
