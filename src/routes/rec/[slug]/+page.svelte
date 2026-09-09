@@ -803,6 +803,15 @@
       if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
       if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
       if (msg.type === 'research_removed') researchPanel?.applyResearchRemove?.(msg)
+      // Annotations (ADR-0008) go to BOTH: the panel renders them, and
+      // RoomTabs — which is what sent the annotation_create — needs the echo
+      // to know the server has it and stop re-sending it on reconnect (see
+      // annotation-outbox.js).
+      if (msg.type === 'annotation_entry') {
+        researchPanel?.applyAnnotationEntry?.(msg)
+        roomTabs?.applyAnnotationEntry?.(msg)
+      }
+      if (msg.type === 'annotation_state') researchPanel?.applyAnnotationState?.(msg)
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       if (msg.type === 'transcript_activity') roomTabs?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
@@ -828,6 +837,15 @@
   })
   room.registerResync(() => {
     sendMicInfo(true)
+  })
+  room.registerResync(() => {
+    // A Comment submitted into a dropped socket is real, local, unsaved
+    // state the server has never heard of — room.send() drops it silently
+    // (see room-connection.js). Same class of bug as the stuck Recording
+    // pill AGENTS.md warns about, so it uses the same mechanism rather than
+    // a bespoke retry. Re-sending is safe: annotation_create is idempotent
+    // by id (see room-state-store.js's addAnnotation).
+    roomTabs?.resyncAnnotations?.()
   })
 
   $: micLabel = (

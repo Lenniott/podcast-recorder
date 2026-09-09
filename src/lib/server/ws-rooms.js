@@ -148,6 +148,44 @@
  *                                          Removes it from the tab's stored
  *                                          history so a late joiner never
  *                                          sees it again.
+ *   { type: 'annotation_create', tabId, id, kind, quote, text }
+ *                                        — create one Annotation (ADR-0008,
+ *                                          ticket 03). Unlike research_ask
+ *                                          there is no pending/resolve round
+ *                                          trip: a Comment's content is
+ *                                          already fully known client-side
+ *                                          (a person just typed it), so the
+ *                                          server validates, stores and
+ *                                          broadcasts the finished entry in
+ *                                          one step.
+ *                                          `id` is client-generated (like
+ *                                          research_ask's entryId) so the
+ *                                          creating browser can recognise
+ *                                          the server's echo of its own
+ *                                          Annotation; re-sending the same
+ *                                          id is idempotent (see
+ *                                          annotation-outbox.js — a create
+ *                                          sent into a dropped socket is
+ *                                          re-sent on reconnect).
+ *                                          `tabId` IS honoured here, unlike
+ *                                          research_ask's (which forces the
+ *                                          room's active tab): an Annotation
+ *                                          is anchored to the tab whose text
+ *                                          was highlighted, and someone
+ *                                          switching tabs between
+ *                                          highlighting and submitting must
+ *                                          not have it re-filed under a tab
+ *                                          that never held the quote. It is
+ *                                          still validated against the
+ *                                          room's real tabs, never trusted
+ *                                          blind.
+ *                                          `author` is NOT read off the
+ *                                          wire — the server stamps the
+ *                                          creating peer's own join name, so
+ *                                          nobody can post under someone
+ *                                          else's name.
+ *                                          Deliberately NOT gated by Guest
+ *                                          Research Access — see the handler.
  *
  * Protocol (server → client):
  *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
@@ -254,6 +292,37 @@
  *                                          reasoning as research_entry — the
  *                                          server is the single source of
  *                                          truth for the tab's history).
+ *   { type: 'annotation_entry', tabId, entry }
+ *                                        — one Annotation added, broadcast
+ *                                          to EVERY peer including the
+ *                                          sender (same reasoning as
+ *                                          research_entry: the panel has no
+ *                                          local optimistic row to protect,
+ *                                          and the sender's own copy of the
+ *                                          entry — id, author and `at`
+ *                                          included — should be the server's,
+ *                                          not a locally invented one).
+ *                                          Mirrors research_entry exactly.
+ *                                          `entry` is `{id, tabId, kind,
+ *                                          quote, text, author, at}`; `kind`
+ *                                          is 'comment' today ('card' joins
+ *                                          it in ticket 05 — see
+ *                                          ANNOTATION_KINDS). `quote` is the
+ *                                          exact text highlighted at
+ *                                          creation, frozen: it is never
+ *                                          recomputed or replaced by
+ *                                          anything, and an Annotation whose
+ *                                          quote has since been edited out
+ *                                          of Notes still exists and still
+ *                                          shows that quote.
+ *   { type: 'annotation_state', tabId, entries }
+ *                                        — one tab's full Annotation list so
+ *                                          far, in creation order; sent once
+ *                                          per tab that has any, on join and
+ *                                          on tabs_sync, always BEFORE any
+ *                                          live annotation_entry for that
+ *                                          connection. Mirrors
+ *                                          research_state exactly.
  *   { type: 'error',           message }
  *   { type: 'rejected',        message }
  */
@@ -274,8 +343,9 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 //         serverCopyTakeId, micLabel }
 const rooms = new Map()
 
-// A room's tabs/text/video, Transcript (ticket 01), and per-tab Research
-// Assistant entries (ticket 04) — all sibling content kinds, see ADR-0002 —
+// A room's tabs/text/video, Transcript (ticket 01), per-tab Research
+// Assistant entries (ticket 04), and per-tab Annotations (ADR-0008) — all
+// sibling content kinds, see ADR-0002 —
 // live entirely behind this one small interface now: while >=1 participant
 // is connected content stays in RAM only; the moment the last one
 // disconnects, a grace timer (ROOM_STATE_GRACE_MS, default 10s — see
@@ -420,6 +490,7 @@ function replayTabsTo(ws, content) {
   }
   replayTranscriptTo(ws, content)
   replayResearchTo(ws, content)
+  replayAnnotationsTo(ws, content)
 }
 
 // ── Transcript (append-only — see ADR-0002 and ticket 01) ─────────────────
@@ -439,6 +510,20 @@ function replayResearchTo(ws, content) {
   for (const tabId of Object.keys(content.research)) {
     const entries = content.research[tabId]
     if (entries.length) send(ws, { type: 'research_state', tabId, entries })
+  }
+}
+
+// ── Annotations (per-tab, shared — see ADR-0008 and ticket 03) ───────────
+
+/** Replays every tab's Annotations, in creation order, to one late
+ *  joiner/resyncer — one message per tab that has any, exactly as
+ *  replayResearchTo does. This is what makes "rejoining a room shows the
+ *  Annotations that were already there" true without any client-side
+ *  persistence. */
+function replayAnnotationsTo(ws, content) {
+  for (const tabId of Object.keys(content.annotations)) {
+    const entries = content.annotations[tabId]
+    if (entries.length) send(ws, { type: 'annotation_state', tabId, entries })
   }
 }
 
@@ -776,6 +861,36 @@ export function setupWss(wss) {
         }
         for (const p of room.values()) {
           send(p.ws, { type: 'research_removed', tabId: result.tabId, entryId: result.entryId })
+        }
+      }
+
+      if (msg.type === 'annotation_create' && clientId) {
+        // DELIBERATELY NOT gated by Guest Research Access, unlike
+        // research_ask/research_remove above. That gate exists to control
+        // who can spend a *Research Assistant* call on this room's behalf
+        // (see Guest Research Access in CONTEXT.md); a Comment is a plain
+        // human note typed by someone already trusted enough to be in the
+        // room and to type freely into the shared Notes surface itself. A
+        // guest who can rewrite every word of Notes but cannot attach a
+        // sentence about it would be an odd, unexplainable rule. Ticket
+        // 05's Custom Prompt annotations (kind 'card') DO run through the
+        // Research Assistant and WILL be gated by it — the gate belongs on
+        // the AI action, not on the Annotation concept, which is why this
+        // is an intentional omission and not a missing check.
+        const result = roomStateStore.addAnnotation(slug, msg.tabId, {
+          id: msg.id,
+          kind: msg.kind,
+          quote: msg.quote,
+          text: msg.text,
+          // Server-stamped from the peer's own join name — never msg.author.
+          author: peer.name
+        })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'annotation_entry', tabId: result.tabId, entry: result.entry })
         }
       }
 

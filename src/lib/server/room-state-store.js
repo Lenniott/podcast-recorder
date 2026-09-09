@@ -1,8 +1,8 @@
 /**
  * Room State Store — the deep module owning a room's shared content:
- * tabs/text/video, the Transcript (ticket 01), and per-tab Research
- * Assistant entries (ticket 04) — all same-shaped sibling content kinds,
- * see ADR-0002.
+ * tabs/text/video, the Transcript (ticket 01), per-tab Research
+ * Assistant entries (ticket 04), and per-tab Annotations (ADR-0008) — all
+ * same-shaped sibling content kinds, see ADR-0002.
  *
  * Lifecycle: while >=1 participant is connected, a room's content lives
  * only in the injected `hot` store (no disk I/O). The instant the last
@@ -21,6 +21,13 @@ import { MAX_TABS, MAX_TAB_TEXT_LEN, nextTabTitle } from '../room/tab-sync.js'
 import { MAX_TRANSCRIPT_LINE_LEN, MAX_TRANSCRIPT_SPEAKER_LEN, TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations } from '../research/research-sync.js'
 import { TURN_ACTION_IDS } from '../research/research-card.js'
+import {
+  ANNOTATION_KINDS,
+  MAX_ANNOTATION_TEXT_LEN,
+  MAX_ANNOTATION_AUTHOR_LEN,
+  normalizeQuote,
+  upsertAnnotation
+} from '../research/annotation-sync.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -71,7 +78,12 @@ function createDefaultRoomContent() {
     // history of research entries, in the order they were asked; a tab with
     // no entries yet simply has no key here rather than an empty array, so
     // a brand-new room's research map is `{}`.
-    research: {}
+    research: {},
+    // Sibling content, keyed by tab id — the same shape as `research` above
+    // and a parallel collection to it, not a field on it (see ADR-0008 and
+    // ticket 03). `annotations[tabId]` is the list of Annotations anchored
+    // to that tab, in creation order; a tab with none has no key here.
+    annotations: {}
   }
 }
 
@@ -170,6 +182,7 @@ export function createRoomStateStore({
     // content kind slots in without changing getRoom's shape or callers.
     if (!content.transcript) content.transcript = { lines: [] }
     if (!content.research) content.research = {}
+    if (!content.annotations) content.annotations = {}
     hot.set(slug, content)
     return content
   }
@@ -384,6 +397,71 @@ export function createRoomStateStore({
     })
   }
 
+  // ── Annotations (per-tab, shared — see ADR-0008 and ticket 03) ─────────
+
+  /**
+   * Records one Annotation against the tab its quote was highlighted in.
+   *
+   * Unlike addResearchEntry there is no pending/resolve lifecycle: a
+   * Comment's content is already complete the moment a person submits it,
+   * so this is the only mutation an Annotation ever gets — it is written
+   * once and thereafter read-only. `quote` in particular is frozen here and
+   * is never recomputed or replaced by any later call (ticket 04 re-finds
+   * it in current Notes text to draw a highlight; that is a read, and a
+   * failed match leaves the Annotation and its quote exactly as stored).
+   *
+   * `tabId` is validated against the room's real tabs but is otherwise
+   * taken from the caller — deliberately unlike research_ask, which forces
+   * the room's *currently active* tab. An Annotation is anchored to the tab
+   * whose text was highlighted; a peer switching tabs between the highlight
+   * and the submit must not silently re-file it under a tab whose Notes
+   * never contained the quote.
+   *
+   * `author` is passed in by ws-rooms.js from the creating peer's own join
+   * name — never read off the wire message, so nobody can post a Comment
+   * under someone else's name.
+   */
+  function addAnnotation(slug, tabId, { id, kind, quote, text, author } = {}) {
+    return withRoom(slug, (content) => {
+      const annotationId = String(id || '').slice(0, 64)
+      if (!annotationId) return { ok: false, error: 'Invalid annotation id' }
+
+      const tid = String(tabId || '')
+      if (findTabIndex(content, tid) === -1) return { ok: false, error: 'Unknown tab' }
+
+      const annotationKind = ANNOTATION_KINDS.includes(kind) ? kind : null
+      if (!annotationKind) return { ok: false, error: 'Unknown annotation kind' }
+
+      const cleanQuote = normalizeQuote(quote)
+      if (!cleanQuote) return { ok: false, error: 'An annotation needs the text it is anchored to' }
+
+      const cleanText = String(text || '').trim().slice(0, MAX_ANNOTATION_TEXT_LEN)
+      if (!cleanText) return { ok: false, error: 'A comment cannot be empty' }
+
+      const existing = (content.annotations[tid] || []).find((a) => a.id === annotationId)
+      if (existing) {
+        // Same id, already stored: this is a reconnecting client re-sending
+        // an annotation_create it never saw acknowledged (see
+        // annotation-outbox.js), not a second Comment. Re-broadcast what is
+        // already stored rather than storing a near-duplicate — the stored
+        // record, quote included, stays exactly as first written.
+        return { ok: true, room: content, entry: existing, tabId: tid, duplicate: true }
+      }
+
+      const entry = {
+        id: annotationId,
+        tabId: tid,
+        kind: annotationKind,
+        quote: cleanQuote,
+        text: cleanText,
+        author: String(author || '').trim().slice(0, MAX_ANNOTATION_AUTHOR_LEN) || 'Guest',
+        at: Date.now()
+      }
+      content.annotations[tid] = upsertAnnotation(content.annotations[tid], entry)
+      return { ok: true, room: content, entry, tabId: tid, duplicate: false }
+    })
+  }
+
   /** For tests only — clears hot content and cancels every pending grace
    *  timer, so each test starts clean (mirrors ws-rooms.js's own
    *  _resetRooms, since this Store now owns what that used to hold). */
@@ -407,6 +485,7 @@ export function createRoomStateStore({
     resolveResearchEntry,
     errorResearchEntry,
     removeResearchEntry,
+    addAnnotation,
     _resetForTests
   }
 }

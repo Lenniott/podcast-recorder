@@ -27,6 +27,11 @@
     makeResearchEntryId,
   } from "./research-panel.js";
   import { parseResearchCard } from "./research-card.js";
+  import {
+    applyAnnotationEntry as reduceAnnotationEntry,
+    applyAnnotationState as reduceAnnotationState,
+    visibleAnnotations,
+  } from "./annotation-panel.js";
 
   const TURN_ACTION_LABEL = {
     definition: "Definition",
@@ -85,6 +90,15 @@
 
   $: entries = visibleEntries(entriesByTab, activeTabId);
 
+  // Annotations (ADR-0008, ticket 03) — a parallel per-tab collection to
+  // entriesByTab above, fed by its own annotation_entry/annotation_state
+  // broadcasts. Deliberately a separate list rather than rows mixed into
+  // `entries`: a research entry has a pending/answered/errored lifecycle
+  // and a question, an Annotation has neither — it is written once and is
+  // then a permanent record of a quote plus a note.
+  let annotationsByTab = {};
+  $: annotations = visibleAnnotations(annotationsByTab, activeTabId);
+
   // Read by RecordingRoom.svelte via bind:doneActionsByTurn and passed down
   // into RoomTabs — same "computed here, bound up, handed down as a plain
   // prop" pattern this file's own `tabTexts` prop follows in reverse (see
@@ -100,6 +114,7 @@
 
   let questionInput = "";
   let entriesEl;
+  let annotationsEl;
 
   // entry.id -> boolean. One `showCitations` shared across every research
   // card would toggle citations on ALL of them at once when clicked on any
@@ -149,6 +164,23 @@
 
   export function applyResearchRemove(msg) {
     entriesByTab = reduceResearchRemove(entriesByTab, msg);
+  }
+
+  /** One Annotation added anywhere in the room (see ws-rooms.js's
+   *  annotation_entry). Reveals the panel the same way a new research card
+   *  would — a Comment a co-host just left is exactly the sort of thing a
+   *  collapsed panel would hide at the moment it matters. */
+  export function applyAnnotationEntry(msg) {
+    annotationsByTab = reduceAnnotationEntry(annotationsByTab, msg);
+    tick().then(() => {
+      if (annotationsEl) annotationsEl.scrollTop = 0;
+    });
+  }
+
+  /** One tab's full Annotation list, replayed on join/resync — this is what
+   *  makes rejoining a room show the Annotations that were already there. */
+  export function applyAnnotationState(msg) {
+    annotationsByTab = reduceAnnotationState(annotationsByTab, msg);
   }
 
   function removeEntry(entryId) {
@@ -321,6 +353,34 @@
         {customTitle}
       </button>
     {/if}
+    <!-- Annotations (ADR-0008, ticket 03) — the active tab's, newest first.
+         Not gated by canAskResearch: a Comment is a plain human note, not a
+         Research Assistant action, so Guest Research Access does not apply
+         to reading or writing one (see ws-rooms.js's annotation_create). -->
+    <section class="annotation-list" data-testid="annotation-list">
+      <h3 class="annotation-list-title">Annotations</h3>
+      <div class="annotation-entries" bind:this={annotationsEl}>
+        {#if annotations.length === 0}
+          <p class="research-empty">
+            Highlight text in the notes to comment on it.
+          </p>
+        {:else}
+          {#each annotations as annotation (annotation.id)}
+            <article class="annotation" data-kind={annotation.kind}>
+              <!-- The frozen quote — exactly the text that was highlighted
+                   when this Annotation was made, never recomputed from the
+                   notes as they stand now. -->
+              <blockquote class="annotation-quote">
+                {annotation.quote}
+              </blockquote>
+              <p class="annotation-text">{annotation.text}</p>
+              <p class="annotation-author">{annotation.author}</p>
+            </article>
+          {/each}
+        {/if}
+      </div>
+    </section>
+
     <div class="research-entries" bind:this={entriesEl}>
       {#if entries.length === 0}
         <p class="research-empty">No research yet for this tab.</p>
@@ -470,6 +530,69 @@
     flex-direction: column;
     gap: 10px;
     overflow-y: auto;
+  }
+
+  /* Annotations sit above the research entries and get their own bounded
+     scroll area, so a long Comment history can't push the research cards —
+     the thing you glance at mid-conversation — off the bottom of the panel. */
+  .annotation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    min-height: 0;
+    flex: 0 1 auto;
+    max-height: 45%;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .annotation-list-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .annotation-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+  }
+
+  .annotation {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .annotation-quote {
+    margin: 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--accent);
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  .annotation-text {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+
+  .annotation-author {
+    margin: 0;
+    font-size: 11px;
+    color: var(--muted);
   }
 
   .research-empty {

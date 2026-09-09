@@ -672,3 +672,90 @@ describe('createRoomStateStore — _resetForTests', () => {
     expect(store.getRoom('room1').tabs.list[0].title).toBe('Tab 1')
   })
 })
+
+describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
+  function storeWithRoom() {
+    const store = createRoomStateStore({ durable: fakeDurable(), ...fakeClock(), graceMs: 10_000 })
+    const content = store.getRoom('room1')
+    return { store, tabId: content.tabs.list[0].id }
+  }
+
+  const valid = { id: 'a1', kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host' }
+
+  it('a brand-new room has an empty annotations map, keyed per tab only once used', () => {
+    const { store, tabId } = storeWithRoom()
+    expect(store.getRoom('room1').annotations).toEqual({})
+    store.addAnnotation('room1', tabId, valid)
+    expect(Object.keys(store.getRoom('room1').annotations)).toEqual([tabId])
+  })
+
+  it('stores the whole Annotation shape ticket 04 depends on', () => {
+    const { store, tabId } = storeWithRoom()
+    const { ok, entry } = store.addAnnotation('room1', tabId, valid)
+    expect(ok).toBe(true)
+    expect(Object.keys(entry).sort()).toEqual(['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text'])
+    expect(entry).toMatchObject({
+      id: 'a1', tabId, kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host'
+    })
+    expect(typeof entry.at).toBe('number')
+  })
+
+  it("freezes the quote: rewriting the tab's text afterwards never touches it", () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, valid)
+    store.setTabText('room1', tabId, 'the notes have been rewritten entirely')
+    expect(store.getRoom('room1').annotations[tabId][0].quote).toBe('the moon landing')
+  })
+
+  it('is write-once: re-adding the same id returns the stored entry, marked duplicate', () => {
+    const { store, tabId } = storeWithRoom()
+    const first = store.addAnnotation('room1', tabId, valid)
+    const again = store.addAnnotation('room1', tabId, { ...valid, quote: 'something else', text: 'rewritten' })
+    expect(again.ok).toBe(true)
+    expect(again.duplicate).toBe(true)
+    expect(again.entry).toBe(first.entry)
+    expect(store.getRoom('room1').annotations[tabId]).toHaveLength(1)
+  })
+
+  it('refuses an unknown tab, an unknown kind, an empty quote, an empty comment and a missing id', () => {
+    const { store, tabId } = storeWithRoom()
+    expect(store.addAnnotation('room1', 'tab-nope', valid).ok).toBe(false)
+    // 'card' is ticket 05's kind — not valid until it joins ANNOTATION_KINDS.
+    expect(store.addAnnotation('room1', tabId, { ...valid, kind: 'card' }).ok).toBe(false)
+    expect(store.addAnnotation('room1', tabId, { ...valid, quote: '  ' }).ok).toBe(false)
+    expect(store.addAnnotation('room1', tabId, { ...valid, text: '  ' }).ok).toBe(false)
+    expect(store.addAnnotation('room1', tabId, { ...valid, id: '' }).ok).toBe(false)
+    expect(store.getRoom('room1').annotations).toEqual({})
+  })
+
+  it('falls back to a display name rather than storing an empty author', () => {
+    const { store, tabId } = storeWithRoom()
+    expect(store.addAnnotation('room1', tabId, { ...valid, author: '   ' }).entry.author).toBe('Guest')
+  })
+
+  it('backfills the annotations map for room content saved before this content kind existed', () => {
+    const durable = fakeDurable()
+    durable._map.set('room1', {
+      tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: '' }], activeTabId: 't1' }
+    })
+    const store = createRoomStateStore({ durable, ...fakeClock(), graceMs: 10_000 })
+    expect(store.getRoom('room1').annotations).toEqual({})
+    expect(store.addAnnotation('room1', 't1', valid).ok).toBe(true)
+  })
+
+  it('survives a flush-and-evict/rehydrate cycle, quote intact', () => {
+    const durable = fakeDurable()
+    const clock = fakeClock()
+    const store = createRoomStateStore({ durable, ...clock, graceMs: 10_000 })
+
+    const tabId = store.onParticipantJoined('room1').tabs.list[0].id
+    store.addAnnotation('room1', tabId, valid)
+    store.onParticipantLeft('room1')
+    clock.fire(1) // grace elapses, nobody reconnects — flush + evict
+
+    const restored = store.onParticipantJoined('room1')
+    expect(restored.annotations[tabId]).toEqual([
+      expect.objectContaining({ quote: 'the moon landing', text: 'check the date', kind: 'comment' })
+    ])
+  })
+})

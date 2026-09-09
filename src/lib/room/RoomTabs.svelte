@@ -1,14 +1,25 @@
 <script>
-  import { onMount, tick } from "svelte";
-  import { Plus } from "$lib/icons";
+  import { onMount, onDestroy, tick } from "svelte";
+  import { Plus, AnnotationPlus } from "$lib/icons";
   import TabVideoPlayer from "../TabVideoPlayer.svelte";
   import TranscriptTab from "./TranscriptTab.svelte";
+  import SelectionPopup from "./SelectionPopup.svelte";
   import { TRANSCRIPT_TAB_ID } from "./transcript-sync.js";
   import {
     readNotesText,
     selectionIsInside,
     planInboundNotesUpdate,
   } from "./notes-editor.js";
+  import {
+    selectionText,
+    selectionRect,
+    rectOfRange,
+  } from "./selection-popup.js";
+  import { createAnnotationOutbox } from "./annotation-outbox.js";
+  import {
+    makeAnnotationId,
+    MAX_ANNOTATION_TEXT_LEN,
+  } from "$lib/research/annotation-sync.js";
   import {
     getNotesTextSize,
     setNotesTextSize,
@@ -94,9 +105,10 @@
   export let tabTexts = {}; // tabId -> string
 
   // ─── The Notes editing surface (contenteditable, see ADR-0008) ─────────
-  // HOW TO GET AT THIS ELEMENT (ticket 03's selectionchange/mouseup
-  // listeners + window.getSelection() work): three equivalent handles, all
-  // pointing at the same element, pick whichever suits the caller —
+  // HOW TO GET AT THIS ELEMENT (this file's own refreshSelectionPopup is
+  // the first caller — see the highlight → Annotation block below): three
+  // equivalent handles, all pointing at the same element, pick whichever
+  // suits the caller —
   //   1. `bind:notesEl` on <RoomTabs> — this exported prop is the
   //      component's own `bind:this` target, so a parent binding it gets
   //      the live element (or null while the Transcript is showing, or
@@ -113,6 +125,158 @@
   // planInboundNotesUpdate — see notes-editor.js for why.
   let notesDomTabId = null;
   let unsentTabId = null;
+
+  // ─── Highlight → popup → Annotation (ADR-0008, ticket 03) ──────────────
+  //
+  // Highlighting Notes text raises a floating popup next to the highlight
+  // whose only action today is Comment; choosing it opens a short input,
+  // and submitting sends `annotation_create` (see ws-rooms.js). The popup
+  // itself is SelectionPopup.svelte — a presentational component that takes
+  // its actions as data, so ticket 05 adds Custom Prompt buttons to this
+  // same popup by appending to `selectionActions` below, without touching
+  // that component (its header comment spells out the contract).
+  //
+  // The quote is frozen the moment the highlight is captured and is what
+  // gets sent — it is never re-derived from the DOM at submit time, so
+  // editing Notes between highlighting and submitting cannot change what
+  // the Annotation claims was highlighted (CONTEXT.md's **Annotation**).
+
+  const SELECTION_ACTION_COMMENT = "comment";
+
+  // Extended, not replaced, by ticket 05's Custom Prompt buttons.
+  $: selectionActions = [
+    {
+      id: SELECTION_ACTION_COMMENT,
+      label: "Comment",
+      title: "Comment on the highlighted text",
+      icon: AnnotationPlus,
+    },
+  ];
+
+  // { quote, rect } — what the popup is anchored to, or null when nothing
+  // usable is highlighted. `quote` is the frozen text; `rect` is only
+  // geometry and may be re-measured freely.
+  let selectionAnchor = null;
+  // A clone of the highlighted Range, kept so the popup can stay anchored
+  // after the live selection is gone (clicking into the comment input
+  // collapses it). Geometry only — never a source of quote text.
+  let anchorRange = null;
+  // Which action's follow-up UI is open. While this is set the popup stops
+  // tracking the live selection, so focusing the input doesn't dismiss the
+  // very popup that input belongs to.
+  let openSelectionActionId = null;
+  let commentDraft = "";
+  let commentInputEl = null;
+
+  const annotationOutbox = createAnnotationOutbox();
+
+  function clearSelectionPopup() {
+    selectionAnchor = null;
+    anchorRange = null;
+    openSelectionActionId = null;
+    commentDraft = "";
+  }
+
+  function refreshSelectionPopup() {
+    // Frozen while an action's follow-up UI is open — see openSelectionActionId.
+    if (openSelectionActionId) return;
+    if (typeof window === "undefined") return;
+    const selection = window.getSelection?.();
+    if (!notesEl || !selectionIsInside(notesEl, selection)) {
+      selectionAnchor = null;
+      anchorRange = null;
+      return;
+    }
+    const quote = selectionText(selection);
+    const rect = selectionRect(selection);
+    if (!quote || !rect) {
+      selectionAnchor = null;
+      anchorRange = null;
+      return;
+    }
+    anchorRange = selection.getRangeAt(0).cloneRange();
+    selectionAnchor = { quote, rect };
+  }
+
+  /** Re-measures the anchor after a scroll/resize. The popup is
+   *  position:fixed in viewport coordinates, so a scroll that moves the
+   *  highlighted text would otherwise leave it pointing at nothing. */
+  function repositionSelectionPopup() {
+    if (!selectionAnchor || !anchorRange) return;
+    const rect = rectOfRange(anchorRange);
+    if (!rect) {
+      clearSelectionPopup();
+      return;
+    }
+    selectionAnchor = { ...selectionAnchor, rect };
+  }
+
+  async function onSelectionAction(actionId) {
+    if (actionId !== SELECTION_ACTION_COMMENT) return;
+    openSelectionActionId = SELECTION_ACTION_COMMENT;
+    commentDraft = "";
+    await tick();
+    commentInputEl?.focus();
+  }
+
+  function submitComment() {
+    const text = commentDraft.trim();
+    const anchor = selectionAnchor;
+    if (!text || !anchor?.quote || !activeTabId || viewingTranscript) return;
+    const payload = {
+      type: "annotation_create",
+      tabId: activeTabId,
+      id: makeAnnotationId(),
+      kind: "comment",
+      // The quote captured when the text was highlighted — deliberately
+      // not re-read from the DOM here.
+      quote: anchor.quote,
+      text,
+    };
+    // Tracked before the send, not after: send() is a no-op on a dropped
+    // socket (room-connection.js), and an untracked Comment lost that way
+    // would disappear with no error anywhere. See annotation-outbox.js.
+    annotationOutbox.track(payload);
+    send(payload);
+    clearSelectionPopup();
+    window.getSelection?.()?.removeAllRanges?.();
+  }
+
+  function onCommentKeydown(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      clearSelectionPopup();
+    }
+  }
+
+  function onDocumentKeydown(e) {
+    if (e.key === "Escape" && selectionAnchor) clearSelectionPopup();
+  }
+
+  /** A click that lands outside both the popup and the Notes surface means
+   *  the person has moved on — an open composer shouldn't follow them
+   *  around the page. */
+  function onDocumentPointerDown(e) {
+    if (!selectionAnchor) return;
+    const target = e.target;
+    if (target?.closest?.("[data-testid='selection-popup']")) return;
+    if (notesEl?.contains?.(target)) return;
+    clearSelectionPopup();
+  }
+
+  /** The server echoed one of our own Annotations back — it is room state
+   *  now, so drop it from the outbox. Routed here by the page alongside
+   *  ResearchPanel's own copy (see +page.svelte). */
+  export function applyAnnotationEntry(msg) {
+    if (msg?.entry?.id) annotationOutbox.acknowledge(msg.entry.id);
+  }
+
+  /** Re-announce Comments the server never confirmed, on every successful
+   *  connect — AGENTS.md's sync rule, registered via room.registerResync
+   *  in +page.svelte rather than hand-rolled here. */
+  export function resyncAnnotations() {
+    annotationOutbox.resync(send);
+  }
 
   // tabId -> YouTube title, filled from TabVideoPlayer's IFrame API once
   // getVideoData() returns one. Local to this browser (titles aren't on
@@ -164,7 +328,35 @@
   onMount(() => {
     send({ type: "tabs_sync" });
     notesFontSize = getNotesTextSize();
+    // `selectionchange` on document is the only event that fires for every
+    // way a selection can appear or vanish — mouse drag, shift-arrow,
+    // double-click, select-all, touch handles — so one listener replaces a
+    // pile of mouseup/keyup guesses. `true` on scroll to catch the Notes
+    // surface's own inner scrolling, not just the window's.
+    document.addEventListener("selectionchange", refreshSelectionPopup);
+    document.addEventListener("scroll", repositionSelectionPopup, true);
+    window.addEventListener("resize", repositionSelectionPopup);
+    document.addEventListener("keydown", onDocumentKeydown);
+    document.addEventListener("mousedown", onDocumentPointerDown, true);
   });
+
+  onDestroy(() => {
+    if (typeof document === "undefined") return;
+    document.removeEventListener("selectionchange", refreshSelectionPopup);
+    document.removeEventListener("scroll", repositionSelectionPopup, true);
+    window.removeEventListener("resize", repositionSelectionPopup);
+    document.removeEventListener("keydown", onDocumentKeydown);
+    document.removeEventListener("mousedown", onDocumentPointerDown, true);
+  });
+
+  // Switching tabs (or to the Transcript) reuses the same Notes element for
+  // entirely different text — a popup still anchored to the old tab's
+  // highlight would quote text that is no longer on screen.
+  let popupTabId = null;
+  $: if (activeTabId !== popupTabId) {
+    popupTabId = activeTabId;
+    clearSelectionPopup();
+  }
 
   // ─── Inbound — called by the page's ws.onmessage, one method per type ──
 
@@ -535,6 +727,49 @@
           on:paste={onNotesPaste}
         ></div>
       </div>
+
+      <!-- Anchored to the highlight, not to this container — it is
+           position: fixed in viewport coordinates (see SelectionPopup.svelte
+           / selection-popup.js). Ticket 05 adds its Custom Prompt buttons by
+           extending `selectionActions`, not by adding markup here. -->
+      <SelectionPopup
+        rect={selectionAnchor?.rect ?? null}
+        actions={selectionActions}
+        openActionId={openSelectionActionId}
+        onAction={onSelectionAction}
+        ariaLabel="Actions for the highlighted notes text"
+      >
+        {#if openSelectionActionId === SELECTION_ACTION_COMMENT}
+          <form
+            class="selection-comment"
+            on:submit|preventDefault={submitComment}
+          >
+            <p class="selection-comment-quote" title={selectionAnchor?.quote}>
+              “{selectionAnchor?.quote ?? ""}”
+            </p>
+            <div class="selection-comment-row">
+              <input
+                type="text"
+                class="selection-comment-input"
+                data-testid="selection-comment-input"
+                placeholder="Add a comment…"
+                aria-label="Comment on the highlighted text"
+                maxlength={MAX_ANNOTATION_TEXT_LEN}
+                bind:this={commentInputEl}
+                bind:value={commentDraft}
+                on:keydown={onCommentKeydown}
+              />
+              <button
+                type="submit"
+                class="btn-secondary btn-sm"
+                disabled={!commentDraft.trim()}
+              >
+                Comment
+              </button>
+            </div>
+          </form>
+        {/if}
+      </SelectionPopup>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
     {/if}
@@ -542,6 +777,51 @@
 </div>
 
 <style>
+  .selection-comment {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 240px;
+  }
+
+  /* The frozen quote, shown so it's obvious what the comment will be
+     attached to. Clamped rather than scrolled — the popup is a small
+     floating card, not a reading surface. */
+  .selection-comment-quote {
+    margin: 0;
+    padding: 0 2px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .selection-comment-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .selection-comment-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .selection-comment-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
   .room-tabs {
     display: flex;
     flex-direction: column;
