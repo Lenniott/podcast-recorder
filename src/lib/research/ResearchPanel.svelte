@@ -52,7 +52,7 @@
   //
   // Deliberately NOT a second copy fed by this component's own tab_text WS
   // listener: the tab_text broadcast (see ws-rooms.js) excludes the
-  // sender's own connection, on purpose, so RoomTabs' own textarea isn't
+  // sender's own connection, on purpose, so RoomTabs' own Notes surface isn't
   // clobbered by an echo of its own keystrokes mid-typing. RoomTabs itself
   // never needs the broadcast for its OWN edits (it already has them
   // locally) — but a second listener here reading only the broadcast would

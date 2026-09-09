@@ -5,6 +5,11 @@
   import TranscriptTab from "./TranscriptTab.svelte";
   import { TRANSCRIPT_TAB_ID } from "./transcript-sync.js";
   import {
+    readNotesText,
+    selectionIsInside,
+    planInboundNotesUpdate,
+  } from "./notes-editor.js";
+  import {
     getNotesTextSize,
     setNotesTextSize,
     SIZES as NOTES_TEXT_SIZES,
@@ -67,7 +72,7 @@
   // Flips true once the first tab_state WS message has been applied — the
   // real signal that this peer's shared room state is live, vs. inferring
   // readiness from a DOM element's rendered geometry (e2e tests wait on
-  // this rather than racing the textarea's visibility).
+  // this rather than racing the Notes surface's visibility).
   let wsReady = false;
 
   // Per-tab video/text is tracked for *every* tab, not just the active one,
@@ -84,9 +89,30 @@
   // peer's broadcast tab_text. ResearchPanel.svelte reads this directly as
   // a plain prop instead of keeping its own second listener on the
   // tab_text broadcast, which is deliberately asymmetric (excludes the
-  // sender, so a typist's own textarea isn't clobbered by an echo of its
-  // own keystrokes) — lossy for anyone who isn't RoomTabs itself.
+  // sender, so a typist's own Notes surface isn't clobbered by an echo of
+  // its own keystrokes) — lossy for anyone who isn't RoomTabs itself.
   export let tabTexts = {}; // tabId -> string
+
+  // ─── The Notes editing surface (contenteditable, see ADR-0008) ─────────
+  // HOW TO GET AT THIS ELEMENT (ticket 03's selectionchange/mouseup
+  // listeners + window.getSelection() work): three equivalent handles, all
+  // pointing at the same element, pick whichever suits the caller —
+  //   1. `bind:notesEl` on <RoomTabs> — this exported prop is the
+  //      component's own `bind:this` target, so a parent binding it gets
+  //      the live element (or null while the Transcript is showing, or
+  //      before the first tab_state lands). Same pattern as tabTexts.
+  //   2. `id="shared-notes-editor"` — a stable, unique document id.
+  //   3. `[data-notes-editor]` — for querying without hardcoding the id.
+  // It is a real HTMLElement, so getSelection()/getBoundingClientRect()
+  // behave normally; `notesEl.contains(selection.anchorNode)` is the
+  // "is this selection ours" test (selectionIsInside in notes-editor.js).
+  export let notesEl = null;
+
+  // Which tab's text the DOM currently holds, and which tab (if any) has
+  // keystrokes still sitting in the outbound debounce. Both feed
+  // planInboundNotesUpdate — see notes-editor.js for why.
+  let notesDomTabId = null;
+  let unsentTabId = null;
 
   // tabId -> YouTube title, filled from TabVideoPlayer's IFrame API once
   // getVideoData() returns one. Local to this browser (titles aren't on
@@ -250,22 +276,99 @@
     send({ type: "tab_close", tabId });
   }
 
+  // ─── Inbound — painting the shared text onto the Notes surface ──────────
+  // The <textarea> this replaced had a `value={...}` binding, which only
+  // touched the DOM when the bound value actually changed — so an unrelated
+  // peer's broadcast landing mid-keystroke never disturbed a typist. A
+  // contenteditable gets no such binding: assigning on every inbound
+  // broadcast would fight the local cursor. planInboundNotesUpdate() is
+  // that guard, made explicit and testable (see notes-editor.js).
+
+  $: notesText =
+    !viewingTranscript && activeTabId ? (tabTexts[activeTabId] ?? "") : "";
+  // `notesEl` is listed so this re-runs the moment bind:this fills it in.
+  $: syncNotesSurface(notesEl, activeTabId, notesText);
+
+  function syncNotesSurface(el, tabId, text) {
+    if (!el || !tabId) return;
+    const tabChanged = tabId !== notesDomTabId;
+    const { write, cancelUnsent } = planInboundNotesUpdate({
+      domText: readNotesText(el),
+      nextText: text,
+      tabChanged,
+      hasUnsentLocalEdit: unsentTabId === tabId,
+      selectionInside: selectionIsInside(
+        el,
+        typeof window === "undefined" ? null : window.getSelection?.(),
+      ),
+    });
+    if (write) el.textContent = text;
+    if (cancelUnsent) {
+      clearTimeout(textDebounceTimer);
+      textDebounceTimer = null;
+      unsentTabId = null;
+    }
+    notesDomTabId = tabId;
+  }
+
   // ─── Outbound — shared text (last write wins) ───────────────────────────
   // Debounced so typing doesn't flood the socket. The server never echoes a
-  // tab_text back to its sender, so this browser's own textarea is never
-  // clobbered mid-keystroke; a concurrent edit from the *other* peer can
-  // still overwrite unsent local keystrokes — an accepted trade-off for a
-  // basic, no-save-state shared textarea (no operational transform here).
+  // tab_text back to its sender, so this browser's own Notes surface is
+  // never clobbered mid-keystroke; a concurrent edit from the *other* peer
+  // can still overwrite unsent local keystrokes — an accepted trade-off for
+  // a basic, no-save-state shared surface (no operational transform here).
 
-  function onTextInput(e) {
-    const text = e.currentTarget.value;
-    tabTexts = { ...tabTexts, [activeTabId]: text };
-    clearTimeout(textDebounceTimer);
+  function onNotesInput(e) {
     const tabId = activeTabId;
-    textDebounceTimer = setTimeout(
-      () => send({ type: "tab_text", tabId, text }),
-      TEXT_DEBOUNCE_MS,
-    );
+    if (!tabId) return;
+    const text = readNotesText(e.currentTarget);
+    tabTexts = { ...tabTexts, [tabId]: text };
+    notesDomTabId = tabId;
+    unsentTabId = tabId;
+    clearTimeout(textDebounceTimer);
+    textDebounceTimer = setTimeout(() => {
+      textDebounceTimer = null;
+      if (unsentTabId === tabId) unsentTabId = null;
+      send({ type: "tab_text", tabId, text });
+      // We just made this the last write, so the model has to agree with
+      // what we broadcast. Without this, a peer edit that landed mid-typing
+      // (and was deliberately not painted over the caret) would linger in
+      // `tabTexts` — the room would hold our text while ResearchPanel and a
+      // later re-render still read theirs.
+      tabTexts = { ...tabTexts, [tabId]: text };
+    }, TEXT_DEBOUNCE_MS);
+  }
+
+  // A textarea only ever held plain text. A contenteditable would happily
+  // swallow pasted HTML — fonts, colours, links — and then broadcast that
+  // markup's rendered text while showing something else. Force plain text
+  // so pasting looks exactly like it did before.
+  function onNotesPaste(e) {
+    const text = e.clipboardData?.getData("text/plain");
+    if (text == null) return;
+    e.preventDefault();
+    // Deprecated, but the only cross-browser insert that keeps both the
+    // caret and the native undo stack — and it fires `input`, so the
+    // debounced send above runs as usual.
+    const inserted = document.execCommand?.("insertText", false, text);
+    if (inserted) return;
+    // Fallback for a host without execCommand: splice the text in by hand,
+    // then drive the same outbound path the input event would have.
+    const sel = window.getSelection?.();
+    const el = e.currentTarget;
+    if (sel?.rangeCount) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      el.textContent = readNotesText(el) + text;
+    }
+    onNotesInput({ currentTarget: el });
   }
 
   // ─── Outbound — hold-to-talk (room-wide, not per-tab) ───────────────────
@@ -352,7 +455,7 @@
         onTurnAction={handleTurnAction}
       />
     {:else if activeTabId}
-      <div class="shared-textarea">
+      <div class="shared-notes">
         
         <div class="notes-toolbar-2">
           {#key activeTabId}
@@ -409,14 +512,28 @@
         </div>
 
 
-        <textarea
-          class="shared-textarea-textarea"
+        <!-- The Notes editing surface. A contenteditable rather than a
+             <textarea> (ADR-0008) so a later ticket can anchor a popup to
+             an arbitrary highlighted span of it — see the `notesEl` block
+             at the top of this file for how to get hold of the element.
+             Its text is painted by syncNotesSurface(), never by a
+             `value={...}`-style binding. -->
+        <div
+          id="shared-notes-editor"
+          data-notes-editor
+          class="shared-notes-editor"
+          class:is-empty={notesText === ""}
           style="font-size: {notesFontSize}px"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
           aria-label="Shared notes — visible to everyone in the room…"
-          placeholder="Share notes between you and your guests…"
-          value={tabTexts[activeTabId] ?? ""}
-          on:input={onTextInput}
-        ></textarea>
+          aria-placeholder="Share notes between you and your guests…"
+          data-placeholder="Share notes between you and your guests…"
+          bind:this={notesEl}
+          on:input={onNotesInput}
+          on:paste={onNotesPaste}
+        ></div>
       </div>
     {:else}
       <p class="tab-content-empty">Connecting…</p>
@@ -584,7 +701,7 @@
     color: var(--text);
   }
 
-  .shared-textarea {
+  .shared-notes {
     padding: 16px;
     border-radius: 10px;
     border: 1px solid var(--border);
@@ -597,16 +714,13 @@
     gap: 8px;
   }
 
-  .shared-textarea:focus-within {
+  .shared-notes:focus-within {
     outline: none;
     border-color: var(--accent);
   }
-  .shared-textarea-textarea {
+  .shared-notes-editor {
     width: 100%;
     min-height: 80vh;
-    field-sizing: content;
-    resize: none;
-    overflow: hidden;
     font-size: 16px;
     line-height: 1.5;
     font-family: inherit;
@@ -614,9 +728,22 @@
     background: transparent;
     border: none;
     outline: none;
+    cursor: text;
+    /* A textarea wrapped long lines and honoured every newline the user
+       typed; a plain block would collapse both. */
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
   }
-  .shared-textarea-textarea:focus-within {
+  .shared-notes-editor:focus-within {
     outline: none;
     border-color: var(--accent);
+  }
+  /* The `placeholder` attribute a textarea had. Driven by a class rather
+     than :empty — a contenteditable the user has emptied usually still
+     holds a stray <br>, which :empty would not match. */
+  .shared-notes-editor.is-empty::before {
+    content: attr(data-placeholder);
+    color: var(--muted);
+    pointer-events: none;
   }
 </style>
