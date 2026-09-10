@@ -1,6 +1,13 @@
 /**
  * Research Assistant Client — one entry point, `askResearchAssistant(request)`,
- * turns a lookup into `{ answer, citations }`. Callers never see prompt text.
+ * turns a lookup into `{ answer, citations, blocks }`. Callers never see
+ * prompt text. `blocks` (ticket 01 of the structured-output line, see
+ * `.scratch/structured-research-output/`) is a parsed Block array only for
+ * a `custom` request whose `outputFormat` is `'blocks'`, and null for every
+ * other request — including a blocks-format request whose reply had
+ * nothing to report. `answer` is always populated (a flattened-text
+ * fallback for a blocks reply), so an existing caller that only reads
+ * `answer` keeps working unchanged.
  *
  * Deliberately `process.env`, not `$env/dynamic/private` — same reasoning as
  * auth.js's getSecret(): this module is loaded from ws-rooms.js (ADR-0008,
@@ -14,6 +21,7 @@
  * read in a way that actually works everywhere this module runs.
  */
 import { serializeResearchCard } from '../research/research-card.js'
+import { blocksResponseSchema, parseBlocks, flattenBlocksToText } from '../research/research-blocks.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 import { recordResearchUsage } from './db.js'
 
@@ -144,13 +152,20 @@ function resolveConditionalBlocks(template, resolved) {
  *
  * Returns null for an unknown/blank template: the caller decides whether
  * that's an error worth surfacing.
+ *
+ * `outputFormat` (ticket 01 of the structured-output line, see
+ * `.scratch/structured-research-output/`) is a separate axis from all of
+ * the above — it decides *how the reply is shaped* (typed Blocks vs. free
+ * text), never what the prompt is allowed to know. Defaults to `'text'` so
+ * every existing Custom Prompt keeps behaving exactly as it does today.
  */
 export function buildCustomPromptRequest({
   template,
   selection = '',
   currentTab = '',
   transcript = '',
-  videoTitle = ''
+  videoTitle = '',
+  outputFormat = 'text'
 } = {}) {
   const instruction = String(template ?? '').trim()
   if (!instruction) return null
@@ -172,7 +187,8 @@ export function buildCustomPromptRequest({
     videoTitle: wants('video_title') ? cap(videoTitle).trim() : '',
     // Logged unsubstituted, so the Eval Log shows the template behind the
     // call and not only what went to the model.
-    researchPrompt: instruction
+    researchPrompt: instruction,
+    outputFormat: outputFormat === 'blocks' ? 'blocks' : 'text'
   }
 }
 
@@ -265,6 +281,15 @@ function researchPromptForLog(request) {
   return String(request.researchPrompt ?? '')
 }
 
+// A request asks for structured output the same way ADR-0008's own
+// grounding rule works: opt-in, never a hardcoded policy. Only a `custom`
+// request with `outputFormat: 'blocks'` gets the schema attached — typed
+// Ask and every `'text'`-format Custom Prompt get exactly today's plain
+// `messages` body, byte-identical to before this field existed.
+function wantsBlocks(request) {
+  return request.kind === 'custom' && request.outputFormat === 'blocks'
+}
+
 function buildRequestBody(request, pressTime) {
   const { mode, messages } = buildMessages(request, pressTime)
   return {
@@ -277,7 +302,8 @@ function buildRequestBody(request, pressTime) {
       // Asks OpenRouter to report actual cost on `usage.cost` — see
       // ADR-0007 — so the Usage Dashboard doesn't need to price each model
       // itself from a maintained table.
-      usage: { include: true }
+      usage: { include: true },
+      ...(wantsBlocks(request) ? { response_format: blocksResponseSchema() } : {})
     }
   }
 }
@@ -343,6 +369,21 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     cost: usageMeta.usage?.cost ?? null
   })
 
+  // A `'blocks'`-format request's raw reply is the schema's JSON, not prose
+  // — parse it into typed Blocks instead of treating it as the takeaway
+  // itself. `blocks` is null for "nothing to report" (parseBlocks' own
+  // empty-means-null convention, mirroring normalizeEmptyCard's empty-
+  // mainTakeaway rule below) as well as for every non-blocks request.
+  const blocks = wantsBlocks(request) ? parseBlocks(raw) : null
+  // The Eval Log's `card`/`raw` fields only know how to hold a flat string,
+  // so a structured reply still gets a flattened-text fallback there — see
+  // ticket 01's own note that carrying both is simplest. Note this reads
+  // `wantsBlocks(request)`, not `blocks` itself: an empty/unparseable
+  // blocks reply must still flatten to '' ("nothing to report," same
+  // convention as every other freeform mode), not fall back to raw JSON
+  // that was never meant to be read as prose.
+  const mainTakeaway = wantsBlocks(request) ? flattenBlocksToText(blocks) : raw
+
   // Every mode is freeform now (ADR-0008/ticket 07) — the model's raw reply
   // *is* the takeaway, with none of the retired structured modes' score-
   // threshold suppression to apply.
@@ -350,7 +391,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     provenInTranscript: 0,
     ubiquitousKnowledge: 0,
     outputType: mode,
-    mainTakeaway: raw
+    mainTakeaway
   }
   await appendResearchEvalLog({
     kind: request.kind,
@@ -363,5 +404,5 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     suppressReason: null,
     usable: true
   })
-  return { answer: serializeResearchCard(card), citations }
+  return { answer: serializeResearchCard(card), citations, blocks }
 }

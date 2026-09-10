@@ -26,10 +26,32 @@
 
 **Hands off to the next ticket:** Ticket 02 needs to know exactly what field name carries the output-format choice on a request, and exactly what shape `askResearchAssistant` returns when it's `'blocks'` (a `blocks` array key, its exact location in the return value) — state this plainly in your commit/PR.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The three block types are defined and schema-validated end to end against a real (or realistically mocked) OpenRouter `strict: true` response.
-- [ ] A `'text'`-format request is completely unaffected — same request shape, same response shape as today.
-- [ ] A `'blocks'`-format request attaches the schema and returns a parsed `blocks` array.
-- [ ] An empty `blocks: []` reply is treated as "nothing to report," consistent with today's empty-`mainTakeaway` convention.
-- [ ] Unit tests cover both format paths, mirroring the rigor of `research-assistant.test.js`'s existing `buildCustomPromptRequest` suite.
+- [x] The three block types are defined and schema-validated end to end against a real (or realistically mocked) OpenRouter `strict: true` response.
+- [x] A `'text'`-format request is completely unaffected — same request shape, same response shape as today.
+- [x] A `'blocks'`-format request attaches the schema and returns a parsed `blocks` array.
+- [x] An empty `blocks: []` reply is treated as "nothing to report," consistent with today's empty-`mainTakeaway` convention.
+- [x] Unit tests cover both format paths, mirroring the rigor of `research-assistant.test.js`'s existing `buildCustomPromptRequest` suite.
+
+**Implementation notes for ticket 02 (exact field names/shapes to build on):**
+- The schema/parse/flatten module is `src/lib/research/research-blocks.js` —
+  `blocksResponseSchema()`, `parseBlocks(raw)`, `flattenBlocksToText(blocks)`.
+- `buildCustomPromptRequest({..., outputFormat = 'text'})` — pass
+  `outputFormat: 'blocks'` to request structured output on a `custom`
+  request. Anything other than the literal string `'blocks'` normalizes to
+  `'text'`. The returned request object carries this back as
+  `request.outputFormat`.
+- `askResearchAssistant(request, opts)` returns `{ answer, citations, blocks }`.
+  `blocks` is a real (non-empty) array only when `request.kind === 'custom'`
+  and `request.outputFormat === 'blocks'` and the model's reply had
+  something to report; it is `null` for every other case, including a
+  blocks-format request whose reply was empty/unparseable. `answer` is
+  always the existing serialized-card JSON string (`JSON.parse(answer).mainTakeaway`
+  to read it) — for a blocks-format request this is a flattened-text
+  fallback (`flattenBlocksToText`) instead of raw model prose, and is `''`
+  when `blocks` is `null`, matching the existing empty-`mainTakeaway`
+  convention. `runAnnotationAsk` (ws-rooms.js) can therefore keep reading
+  `answer` unchanged for a `'text'` prompt, and read `result.blocks` for a
+  `'blocks'` one — ticket 02 is what decides which prompts pass
+  `outputFormat: 'blocks'` in the first place.

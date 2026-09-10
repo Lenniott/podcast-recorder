@@ -787,4 +787,144 @@ describe('buildCustomPromptRequest — a prompt only ever receives what it asked
       expect(value.length).toBe(20_000)
     }
   })
+
+  // outputFormat (structured-output ticket 01) is a separate axis from what
+  // ingredients a prompt receives — defaulting it here is what keeps every
+  // Custom Prompt written before this field existed behaving unchanged.
+  it('defaults outputFormat to "text" when not specified', () => {
+    expect(buildCustomPromptRequest({ template: 'Define {selection}', ...everything }).outputFormat)
+      .toBe('text')
+  })
+
+  it('carries outputFormat "blocks" through when requested, and rejects anything else as "text"', () => {
+    expect(buildCustomPromptRequest({ template: 'Define {selection}', outputFormat: 'blocks', ...everything }).outputFormat)
+      .toBe('blocks')
+    expect(buildCustomPromptRequest({ template: 'Define {selection}', outputFormat: 'bogus', ...everything }).outputFormat)
+      .toBe('text')
+  })
+})
+
+// ─── Structured Block output (structured-research-output ticket 01) ───────
+//
+// A `custom` request can ask for typed Blocks instead of free text. The
+// schema itself (research-blocks.js) already has its own unit coverage —
+// what belongs here is the request/response wiring: does the schema attach
+// when asked, does a text-format request stay byte-identical to before this
+// existed, and does the parsed reply reach the caller as `blocks`.
+describe('askResearchAssistant — structured Block output', () => {
+  beforeEach(() => {
+    process.env.OPENROUTER_API_KEY = 'test-api-key'
+  })
+
+  function blocksReplyBody(blocks) {
+    return okResponse({
+      choices: [{ message: { content: JSON.stringify({ blocks }), annotations: [] } }]
+    })
+  }
+
+  it('a "blocks"-format Custom Prompt attaches the strict json_schema response_format', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      blocksReplyBody([{ type: 'paragraph', text: null, items: null, label: null, value: null }])
+    )
+
+    await askResearchAssistant(
+      { kind: 'custom', instruction: 'Summarize {selection}', selection: 'x', outputFormat: 'blocks' },
+      { fetchImpl }
+    )
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    expect(body.response_format).toEqual({
+      type: 'json_schema',
+      json_schema: expect.objectContaining({ name: 'research_blocks', strict: true })
+    })
+  })
+
+  it('a "text"-format Custom Prompt sends no response_format at all — unaffected by this field existing', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant(
+      { kind: 'custom', instruction: 'Summarize {selection}', selection: 'x', outputFormat: 'text' },
+      { fetchImpl }
+    )
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    expect(body.response_format).toBeUndefined()
+  })
+
+  it('a typed Ask never attaches response_format, even if outputFormat somehow leaked onto the request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant(
+      { kind: 'voice', query: 'x', context: '', notes: '', outputFormat: 'blocks' },
+      { fetchImpl }
+    )
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    expect(body.response_format).toBeUndefined()
+  })
+
+  it('parses a well-formed blocks reply into result.blocks, and flattens it into result.answer as a fallback', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      blocksReplyBody([
+        { type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.', items: null, label: null, value: null },
+        { type: 'list', text: null, items: ['More options', 'Slower decisions'], label: null, value: null },
+        { type: 'stat', text: null, items: null, label: 'Formula', value: 'T = b · log2(n + 1)' }
+      ])
+    )
+
+    const result = await askResearchAssistant(
+      { kind: 'custom', instruction: 'Explain {selection}', selection: 'Hicks Law', outputFormat: 'blocks' },
+      { fetchImpl }
+    )
+
+    expect(result.blocks).toEqual([
+      { type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.' },
+      { type: 'list', items: ['More options', 'Slower decisions'] },
+      { type: 'stat', label: 'Formula', value: 'T = b · log2(n + 1)' }
+    ])
+    expect(JSON.parse(result.answer).mainTakeaway).toBe(
+      'Hicks Law relates choice count to reaction time.\n\n• More options\n• Slower decisions\n\nFormula: T = b · log2(n + 1)'
+    )
+  })
+
+  it('an empty blocks: [] reply means "nothing to report" — result.blocks is null, same as an empty mainTakeaway', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(blocksReplyBody([]))
+
+    const result = await askResearchAssistant(
+      { kind: 'custom', instruction: 'Explain {selection}', selection: 'x', outputFormat: 'blocks' },
+      { fetchImpl }
+    )
+
+    expect(result.blocks).toBe(null)
+    expect(JSON.parse(result.answer).mainTakeaway).toBe('')
+  })
+
+  it('result.blocks is null for every non-"blocks" request — typed Ask and "text"-format Custom alike', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    const askResult = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+    expect(askResult.blocks).toBe(null)
+
+    const customResult = await askResearchAssistant(
+      { kind: 'custom', instruction: 'Summarize {selection}', selection: 'x', outputFormat: 'text' },
+      { fetchImpl }
+    )
+    expect(customResult.blocks).toBe(null)
+  })
+
+  it('logs a flattened, readable mainTakeaway to the Eval Log for a structured reply, alongside the raw JSON', async () => {
+    appendResearchEvalLog.mockClear()
+    const fetchImpl = vi.fn().mockResolvedValue(
+      blocksReplyBody([{ type: 'paragraph', text: 'A plain reading.', items: null, label: null, value: null }])
+    )
+
+    await askResearchAssistant(
+      { kind: 'custom', instruction: 'Explain {selection}', selection: 'x', outputFormat: 'blocks' },
+      { fetchImpl }
+    )
+
+    const [entry] = appendResearchEvalLog.mock.calls[0]
+    expect(entry.raw).toBe(JSON.stringify({ blocks: [{ type: 'paragraph', text: 'A plain reading.', items: null, label: null, value: null }] }))
+    expect(entry.card.mainTakeaway).toBe('A plain reading.')
+  })
 })
