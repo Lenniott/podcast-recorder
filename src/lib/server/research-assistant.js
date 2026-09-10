@@ -22,8 +22,11 @@
  */
 import { serializeResearchCard } from '../research/research-card.js'
 import { blocksResponseSchema, parseBlocks, flattenBlocksToText } from '../research/research-blocks.js'
+import { PLACEHOLDERS, PLACEHOLDER_NAMES, referencedPlaceholders } from '../research/placeholders.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 import { recordResearchUsage } from './db.js'
+
+export { PLACEHOLDER_NAMES, referencedPlaceholders }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const DEFAULT_MODEL = 'openai/gpt-4o-mini'
@@ -39,27 +42,6 @@ export class ResearchAssistantError extends Error {
     this.code = code
   }
 }
-
-// Placeholder substitution (see CONTEXT.md) — the one place every
-// Placeholder gets resolved, so every free-text field that accepts them (a
-// Custom Prompt's template, an Ask question) goes through this same rule
-// rather than each caller splicing strings its own way. A placeholder with
-// no value supplied (e.g. `{transcript}` before any transcript exists, or
-// `{selection}` when the prompt wasn't triggered from a highlight) resolves
-// to '' — silently, not an error: the prompt's own author is what decides
-// whether that's worth noting. Text that isn't a known placeholder is left
-// exactly as written, so prose containing braces survives untouched.
-const PLACEHOLDERS = {
-  current_tab: 'currentTab',
-  transcript: 'transcript',
-  selection: 'selection',
-  video_title: 'videoTitle',
-  current_time: 'currentTime',
-  latest_transcript: 'latestTranscript'
-}
-
-/** The Placeholder names a prompt author can write, for UI/docs to list. */
-export const PLACEHOLDER_NAMES = Object.keys(PLACEHOLDERS)
 
 // `{latest_transcript}`'s window (see CONTEXT.md) — a bounded *recent* slice,
 // deliberately distinct from `{transcript}`'s everything-so-far. 700 words is
@@ -85,27 +67,6 @@ export function latestTranscriptWindow(transcript, wordLimit = LATEST_TRANSCRIPT
  *  ingredient it accepts — one bound, applied wherever a request is built,
  *  rather than a second number that could drift from the route's. */
 const MAX_PLACEHOLDER_VALUE_LEN = 20_000
-
-/**
- * The Placeholder names a template actually writes (unknown `{words}` are
- * ignored, exactly as applyPlaceholders leaves them alone). Counts a name
- * used only inside a `{#if name}` condition (see resolveConditionalBlocks)
- * as referenced too — evaluating that condition needs the ingredient just
- * as much as interpolating `{name}` does, and skipping it here would mean
- * buildCustomPromptRequest silently withholds the one value the condition
- * needs to ever come out true.
- */
-export function referencedPlaceholders(template) {
-  const text = String(template || '')
-  const names = new Set()
-  for (const [, name] of text.matchAll(/\{(\w+)\}/g)) {
-    if (PLACEHOLDERS[name]) names.add(name)
-  }
-  for (const [, name] of text.matchAll(/\{#if\s+(\w+)\}/g)) {
-    if (PLACEHOLDERS[name]) names.add(name)
-  }
-  return names
-}
 
 /**
  * `{#if name}...{/if}` — keeps the block's text when `name`'s Placeholder

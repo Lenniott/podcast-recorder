@@ -42,23 +42,33 @@ export function parsePromptActionId(actionId) {
 }
 
 /**
- * One SelectionPopup action descriptor per configured Custom Prompt — the
- * `{id, label, title, disabled}` shape SelectionPopup.svelte's header
- * comment specifies (it never branches on an id, so this is data, not
- * markup).
+ * One SelectionPopup action descriptor per configured Custom Prompt that
+ * actually runs on a highlight — the `{id, label, title, disabled}` shape
+ * SelectionPopup.svelte's header comment specifies (it never branches on an
+ * id, so this is data, not markup).
  *
- * Every configured prompt gets a button, including when the viewer cannot
+ * Only a prompt whose own template references `{selection}` (`usesSelection`
+ * on the summary — see db.js's listCustomPromptSummaries) gets a button
+ * here: one that doesn't has nothing to run against a highlight, so it has
+ * no business appearing in a menu that only exists because something is
+ * highlighted. That prompt instead gets a standalone button in the Research
+ * panel — see research-panel.js's panelPromptButtons, the mirror image of
+ * this function. A prompt is never offered in both places, and never in
+ * neither: usesSelection is a plain boolean, not a judgment call either
+ * function makes twice.
+ *
+ * Every *eligible* prompt gets a button, including when the viewer cannot
  * run it: without Guest Research Access the buttons render `disabled` with
  * an explanatory title rather than vanishing, so a guest can see the show's
  * prompts exist and why they can't fire one — the same reasoning behind
  * showing a gated participant the research panel at all.
  *
- * @param {{id:string,title:string}[]} prompts — listCustomPromptSummaries()
+ * @param {{id:string,title:string,usesSelection?:boolean}[]} prompts — listCustomPromptSummaries()
  * @param {{canRun?:boolean, icon?:any}} options
  */
 export function customPromptActions(prompts, { canRun = false, icon = null } = {}) {
   return (prompts || [])
-    .filter((p) => p?.id && String(p?.title ?? '').trim())
+    .filter((p) => p?.id && p.usesSelection && String(p?.title ?? '').trim())
     .map((p) => {
       const label = String(p.title).trim()
       return {

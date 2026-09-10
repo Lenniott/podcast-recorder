@@ -9,10 +9,14 @@ import {
   formatTranscriptForPrompt
 } from '../../src/lib/room/selection-annotations.js'
 
+// Every fixture here references {selection} — these tests are about the
+// popup's own behavior once a prompt is eligible for it. The usesSelection
+// split itself (which prompts even reach this function) has its own
+// dedicated describe block below.
 const PROMPTS = [
-  { id: 'cp_a', title: 'Fact check' },
-  { id: 'cp_b', title: 'Define it' },
-  { id: 'cp_c', title: 'Give me a follow-up question' }
+  { id: 'cp_a', title: 'Fact check', usesSelection: true },
+  { id: 'cp_b', title: 'Define it', usesSelection: true },
+  { id: 'cp_c', title: 'Give me a follow-up question', usesSelection: true }
 ]
 
 describe('customPromptActions — one popup button per configured Custom Prompt', () => {
@@ -33,12 +37,12 @@ describe('customPromptActions — one popup button per configured Custom Prompt'
   it("never collides with a built-in action id — 'comment' is not a prompt", () => {
     expect(parsePromptActionId('comment')).toBe(null)
     // Even a prompt whose id is literally "comment" stays namespaced.
-    const [action] = customPromptActions([{ id: 'comment', title: 'Comment-ish' }], { canRun: true })
+    const [action] = customPromptActions([{ id: 'comment', title: 'Comment-ish', usesSelection: true }], { canRun: true })
     expect(action.id).not.toBe('comment')
     expect(parsePromptActionId(action.id)).toBe('comment')
   })
 
-  it('still lists every prompt without Research Access, but disabled and explained', () => {
+  it('still lists every eligible prompt without Research Access, but disabled and explained', () => {
     const actions = customPromptActions(PROMPTS, { canRun: false })
     expect(actions).toHaveLength(3)
     expect(actions.every((a) => a.disabled === true)).toBe(true)
@@ -46,8 +50,25 @@ describe('customPromptActions — one popup button per configured Custom Prompt'
   })
 
   it('skips a prompt with no usable title — there is no button to render', () => {
-    expect(customPromptActions([{ id: 'cp_a', title: '   ' }, { title: 'no id' }], { canRun: true })).toEqual([])
+    expect(customPromptActions([{ id: 'cp_a', title: '   ', usesSelection: true }, { title: 'no id', usesSelection: true }], { canRun: true })).toEqual([])
     expect(customPromptActions(null, { canRun: true })).toEqual([])
+  })
+
+  // The split itself (structured-research-output panel-buttons feature) —
+  // a prompt whose template never references {selection} has nothing to
+  // run against a highlight, so it never gets a button here at all,
+  // regardless of title/canRun. It gets a panel button instead — see
+  // research-panel.js's panelPromptButtons.
+  it('excludes a prompt that does not reference {selection} — it belongs in the panel, not the popup', () => {
+    const mixed = [
+      { id: 'cp_a', title: 'Fact check', usesSelection: true },
+      { id: 'cp_z', title: 'Daily recap', usesSelection: false }
+    ]
+    expect(customPromptActions(mixed, { canRun: true }).map((a) => a.label)).toEqual(['Fact check'])
+  })
+
+  it('a prompt with usesSelection missing entirely (an old/unexpected shape) is excluded, not assumed eligible', () => {
+    expect(customPromptActions([{ id: 'cp_a', title: 'No flag' }], { canRun: true })).toEqual([])
   })
 })
 

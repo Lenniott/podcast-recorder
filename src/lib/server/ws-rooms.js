@@ -151,6 +151,37 @@
  *                                          Removes it from the tab's stored
  *                                          history so a late joiner never
  *                                          sees it again.
+ *   { type: 'research_prompt_ask', entryId, customPromptId,
+ *     currentTab?, transcript?, videoTitle? }
+ *                                        — fire one Custom Prompt with no
+ *                                          highlight involved (structured-
+ *                                          research-output panel-buttons
+ *                                          feature) — the panel-button
+ *                                          mirror of annotation_ask below,
+ *                                          for a Custom Prompt whose
+ *                                          template does not reference
+ *                                          `{selection}` (see db.js's
+ *                                          listCustomPromptSummaries). Fully
+ *                                          server-resolved exactly like
+ *                                          annotation_ask — customPromptId
+ *                                          names the prompt, the template
+ *                                          itself is NEVER on the wire, and
+ *                                          currentTab/transcript/videoTitle
+ *                                          are Placeholder ingredients only
+ *                                          (the server keeps just what the
+ *                                          template references). Unlike
+ *                                          annotation_ask there is no quote
+ *                                          to anchor to, so the result is a
+ *                                          research entry (pending ->
+ *                                          answered/errored via
+ *                                          research_entry, exactly like
+ *                                          research_ask), not an Annotation
+ *                                          — filed under the room's CURRENT
+ *                                          active tab, server-determined,
+ *                                          same rule research_ask uses.
+ *                                          Gated by Guest Research Access
+ *                                          exactly like every other Research
+ *                                          Assistant action.
  *   { type: 'annotation_create', tabId, id, kind, quote, text }
  *                                        — create one Annotation (ADR-0008,
  *                                          ticket 03). Unlike research_ask
@@ -521,17 +552,21 @@ function broadcast(slug, msg, excludeClientId = null) {
 
 // The Research Assistant's failure codes, as something a participant can
 // actually read. Same job as research-panel.js's describeResearchError,
-// which does this for the HTTP path — a Card that failed must always show
-// why, never sit pending forever.
-const ANNOTATION_ASK_ERRORS = {
+// which does this for the HTTP path — a Card or a panel-triggered research
+// entry that failed must always show why, never sit pending forever. Shared
+// by runAnnotationAsk (a highlight-triggered Card) and runResearchPromptAsk
+// (a panel-triggered research entry) below — both are "run this Custom
+// Prompt's Research Assistant call," differing only in where the result is
+// stored, so one error vocabulary serves both.
+const CUSTOM_PROMPT_ASK_ERRORS = {
   NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
   TIMEOUT: 'The Research Assistant took too long to respond. Try again.',
   UPSTREAM_ERROR: 'The Research Assistant could not be reached. Try again.',
   EMPTY_ANSWER: 'The Research Assistant had no answer for that. Try rephrasing.',
-  INVALID_REQUEST: 'That prompt could not be run on the highlighted text.'
+  INVALID_REQUEST: 'That prompt could not be run.'
 }
 
-const ANNOTATION_ASK_GENERIC_ERROR = 'Something went wrong running that prompt.'
+const CUSTOM_PROMPT_ASK_GENERIC_ERROR = 'Something went wrong running that prompt.'
 
 // Test seam for the one outbound call this module makes. askResearchAssistant
 // already takes an injected `fetchImpl` (that is how research-assistant.js's
@@ -596,11 +631,56 @@ async function runAnnotationAsk(slug, { annotationId, template, selection, curre
     }
     // An empty takeaway is a failed lookup, not a blank Card: resolving to
     // nothing would leave a row that says nothing and explains nothing.
-    const message = ANNOTATION_ASK_ERRORS.EMPTY_ANSWER
+    const message = CUSTOM_PROMPT_ASK_ERRORS.EMPTY_ANSWER
     finish(roomStateStore.errorAnnotation(slug, annotationId, { message }), message)
   } catch (e) {
-    const message = ANNOTATION_ASK_ERRORS[e?.code] || ANNOTATION_ASK_GENERIC_ERROR
+    const message = CUSTOM_PROMPT_ASK_ERRORS[e?.code] || CUSTOM_PROMPT_ASK_GENERIC_ERROR
     finish(roomStateStore.errorAnnotation(slug, annotationId, { message }), message)
+  }
+}
+
+/**
+ * Runs one Custom Prompt for a pending, panel-triggered research entry, and
+ * broadcasts the outcome — the panel-button mirror of runAnnotationAsk
+ * above. A Custom Prompt whose template does not reference `{selection}`
+ * (see db.js's listCustomPromptSummaries / research/placeholders.js's
+ * promptReferencesSelection) has no highlight to anchor to, so it is never
+ * an Annotation — it lands in the per-tab research entries list instead,
+ * the same "no anchor, just a lookup filed under a tab" shape a typed Ask
+ * already uses (see research_ask below). Fire-and-forget for the same
+ * reason runAnnotationAsk is: the socket must not block for the length of
+ * an LLM call, and the pending entry is already broadcast state by the time
+ * this starts.
+ */
+async function runResearchPromptAsk(slug, { entryId, template, currentTab, transcript, videoTitle, outputFormat }) {
+  const finish = (result) => {
+    if (!result.ok) return
+    broadcast(slug, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
+  }
+
+  try {
+    const request = buildCustomPromptRequest({ template, currentTab, transcript, videoTitle, outputFormat })
+    if (!request) {
+      finish(roomStateStore.errorResearchEntry(slug, entryId, { message: 'That prompt is no longer configured.' }))
+      return
+    }
+    const { answer, citations } = await askResearchAssistant(request, {
+      roomSlug: slug,
+      fetchImpl: researchFetchImpl ?? undefined
+    })
+    // Same "an empty takeaway is a failed lookup" rule runAnnotationAsk
+    // applies to a Card — resolveResearchEntry itself does not refuse an
+    // empty answer (a typed Ask's own client-driven path never produces
+    // one), so this function is the one that must catch it here instead.
+    const text = parseResearchCard(answer)?.mainTakeaway ?? ''
+    if (!text) {
+      finish(roomStateStore.errorResearchEntry(slug, entryId, { message: CUSTOM_PROMPT_ASK_ERRORS.EMPTY_ANSWER }))
+      return
+    }
+    finish(roomStateStore.resolveResearchEntry(slug, entryId, { answer, citations }))
+  } catch (e) {
+    const message = CUSTOM_PROMPT_ASK_ERRORS[e?.code] || CUSTOM_PROMPT_ASK_GENERIC_ERROR
+    finish(roomStateStore.errorResearchEntry(slug, entryId, { message }))
   }
 }
 
@@ -994,6 +1074,55 @@ export function setupWss(wss) {
         for (const p of room.values()) {
           send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
         }
+      }
+
+      if (msg.type === 'research_prompt_ask' && clientId) {
+        // Same Guest Research Access gate as annotation_ask/research_ask — a
+        // Custom Prompt spends a Research Assistant call on the room's
+        // behalf whether it needs a highlight or not.
+        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+          send(ws, { type: 'error', message: 'Only the host can run a prompt in this room.' })
+          return
+        }
+
+        // Resolved server-side from the id, exactly like annotation_ask —
+        // the prompt's template text is never on the wire and never in a
+        // participant's browser.
+        const customPrompt = getCustomPrompt(msg.customPromptId)
+        if (!customPrompt) {
+          send(ws, { type: 'error', message: 'Unknown prompt.' })
+          return
+        }
+
+        // Filed under the room's CURRENT active tab — server-determined,
+        // exactly like research_ask, never trusting a client-supplied tabId.
+        // There is no highlight to anchor this to (that's the whole point
+        // of a panel button existing), so "which tab" falls back to the
+        // same rule a typed Ask already uses.
+        const activeTabId = roomStateStore.getRoom(slug).tabs.activeTabId
+        const result = roomStateStore.addResearchEntry(slug, activeTabId, {
+          id: msg.entryId,
+          // No typed question exists for a panel-triggered prompt — its
+          // title stands in for one, the same way a Card's author is the
+          // prompt's title rather than the highlighter's name.
+          question: customPrompt.title
+        })
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
+        }
+
+        void runResearchPromptAsk(slug, {
+          entryId: result.entry.id,
+          template: customPrompt.prompt,
+          currentTab: msg.currentTab,
+          transcript: msg.transcript,
+          videoTitle: msg.videoTitle,
+          outputFormat: customPrompt.outputFormat
+        })
       }
 
       if (msg.type === 'research_resolve' && clientId) {

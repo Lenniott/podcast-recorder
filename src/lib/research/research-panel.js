@@ -174,6 +174,40 @@ export function hasUsableResearchAnswer(answer) {
   return !!parseResearchCard(answer)
 }
 
+/**
+ * One panel-button descriptor per configured Custom Prompt that does NOT
+ * run against a highlight — the mirror image of selection-annotations.js's
+ * customPromptActions, which handles the ones that do. `usesSelection` on
+ * each summary (see db.js's listCustomPromptSummaries) is the one fact that
+ * decides which list a prompt lands in: it references `{selection}` and
+ * belongs only in the highlight popup, or it doesn't and belongs only here.
+ * Never both, never neither.
+ *
+ * Same "always show it, disabled with a reason, rather than hide it"
+ * philosophy as customPromptActions — a guest without Guest Research
+ * Access should see the show's prompts exist, not wonder if they vanished.
+ *
+ * @param {{id:string,title:string,usesSelection?:boolean}[]} prompts — listCustomPromptSummaries()
+ * @param {{canRun?:boolean}} options
+ */
+export function panelPromptButtons(prompts, { canRun = false } = {}) {
+  return (prompts || [])
+    // Strictly `=== false`, not just falsy: a summary with no usesSelection
+    // at all (an old/unexpected shape) is excluded from BOTH lists rather
+    // than defaulting into one — see customPromptActions' mirroring
+    // `=== true`/truthy check just above its own doc comment.
+    .filter((p) => p?.id && p.usesSelection === false && String(p?.title ?? '').trim())
+    .map((p) => {
+      const label = String(p.title).trim()
+      return {
+        id: p.id,
+        label,
+        disabled: !canRun,
+        title: canRun ? `Run “${label}”` : 'Only the host can run a prompt in this room'
+      }
+    })
+}
+
 // Maps the research endpoint's error codes (see
 // src/routes/rec/[slug]/research/+server.js's mapErrorReason) to a short,
 // user-visible explanation — a failed ask must always resolve to a visible

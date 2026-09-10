@@ -38,9 +38,10 @@ export function normalizeOutputFormat(value) {
 
 /**
  * The Placeholders a prompt author can write, with the one-line description
- * the editor shows. Kept in step with the substitution engine's own set by
- * a unit test rather than by hand — research-assistant.js is server-only
- * (it imports $env/dynamic/private), so this list can't just import it.
+ * the editor shows. The *names* live in research/placeholders.js
+ * (PLACEHOLDER_NAMES) — this list carries the description text too, which
+ * that module has no reason to know, so it's hand-written here and kept in
+ * step with PLACEHOLDER_NAMES by a unit test rather than generated from it.
  */
 export const PLACEHOLDER_HELP = [
   { name: 'selection', description: 'the excerpt that triggered this prompt' },

@@ -183,8 +183,8 @@ describe('rec/[slug]/+page.server', () => {
 
     // ADR-0008, ticket 05: every configured Custom Prompt becomes its own
     // one-click button in the selection popup, so the page has to ship the
-    // whole list — but only id + title.
-    it('ships every configured Custom Prompt as id + title, never the template text', async () => {
+    // whole list — but only id + title (+ usesSelection).
+    it('ships every configured Custom Prompt as id + title + usesSelection, never the template text', async () => {
       const passwordHash = await seedRoom()
       const { load } = await loadPage()
       const cookies = makeCookies({
@@ -194,11 +194,14 @@ describe('rec/[slug]/+page.server', () => {
       expect((await load({ params: { slug: SLUG }, cookies })).customPrompts).toEqual([])
 
       createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
-      createCustomPrompt({ title: 'Define it', prompt: 'Define {selection}.' })
+      createCustomPrompt({ title: 'Daily recap', prompt: 'Summarize {transcript} so far.' })
 
       const data = await load({ params: { slug: SLUG }, cookies })
-      expect(data.customPrompts.map((p) => p.title)).toEqual(['Fact check', 'Define it'])
+      expect(data.customPrompts.map((p) => p.title)).toEqual(['Fact check', 'Daily recap'])
       expect(data.customPrompts.every((p) => typeof p.id === 'string' && p.id)).toBe(true)
+      // usesSelection is what the room's clients use to split a prompt
+      // between the highlight popup and a standalone panel button.
+      expect(data.customPrompts.map((p) => p.usesSelection)).toEqual([true, false])
       // The show's prompt wording stays on the server — the browser only
       // ever names a prompt by id (see ws-rooms.js's annotation_ask).
       expect(JSON.stringify(data.customPrompts)).not.toContain('Fact-check {selection}')

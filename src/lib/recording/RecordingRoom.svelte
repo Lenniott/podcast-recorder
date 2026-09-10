@@ -46,8 +46,11 @@
   export let slug = "";
   export let isHostClaim = false;
   export let guestCanAskResearch = false;
-  // [{id, title}] — every configured Custom Prompt, for the selection
-  // popup's one-button-per-prompt row (ADR-0008, ticket 05).
+  // [{id, title, usesSelection}] — every configured Custom Prompt. Passed to
+  // both RoomTabs (the selection popup's one-button-per-prompt row,
+  // ADR-0008 ticket 05 — only the usesSelection ones) and ResearchPanel
+  // (a standalone panel button per prompt — only the ones that are NOT
+  // usesSelection, since they have no highlight to run against).
   export let customPrompts = [];
   export let roomPassword = "";
   export let wsStatus = "disconnected";
@@ -172,6 +175,7 @@
     {guestCanAskResearch}
     {transcriptLines}
     {transcriptionStatus}
+    {customPrompts}
     bind:facet={researchFacet}
     bind:turnsEl={transcriptEl}
     bind:collapsed={researchCollapsed}

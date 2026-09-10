@@ -153,15 +153,28 @@ describe('normalizeOutputFormat', () => {
 })
 
 describe('the seams ticket 05 triggers a Custom Prompt through', () => {
-  it('listCustomPromptSummaries gives id + title only, no template text', () => {
+  it('listCustomPromptSummaries gives id + title + usesSelection, no template text', () => {
     createCustomPrompt({ title: 'Interpret', prompt: 'secret template' })
     createCustomPrompt({ title: 'Fact check', prompt: 'another template' })
 
     const summaries = listCustomPromptSummaries()
     expect(summaries.map((p) => p.title)).toEqual(['Interpret', 'Fact check'])
     for (const summary of summaries) {
-      expect(Object.keys(summary).sort()).toEqual(['id', 'title'])
+      expect(Object.keys(summary).sort()).toEqual(['id', 'title', 'usesSelection'])
     }
+  })
+
+  // usesSelection (the panel-button-vs-popup split) is derived from the
+  // template — never shipped itself, never a stand-in for the template text.
+  it('usesSelection reflects whether the template references {selection}', () => {
+    const selectionOne = createCustomPrompt({ title: 'Define', prompt: 'Define {selection}.' })
+    const conditionalOne = createCustomPrompt({ title: 'Maybe', prompt: '{#if selection}About: {selection}{/if}' })
+    const noSelection = createCustomPrompt({ title: 'Recap', prompt: 'Summarize {transcript} so far.' })
+
+    const byId = Object.fromEntries(listCustomPromptSummaries().map((p) => [p.id, p]))
+    expect(byId[selectionOne.id].usesSelection).toBe(true)
+    expect(byId[conditionalOne.id].usesSelection).toBe(true)
+    expect(byId[noSelection.id].usesSelection).toBe(false)
   })
 
   it('getCustomPromptTemplate resolves one prompt by id', () => {

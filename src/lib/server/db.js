@@ -5,6 +5,7 @@ import { dirname } from 'path'
 import { isRoomExpired } from './room-lifetime.js'
 import { removeServerCopiesForRoom } from './server-copy-storage.js'
 import { normalizeOutputFormat } from '../home/custom-prompts.js'
+import { promptReferencesSelection } from '../research/placeholders.js'
 
 let _db = null
 
@@ -236,15 +237,27 @@ export function listCustomPrompts() {
 }
 
 /**
- * Custom Prompt id + title only — what a selection popup needs to render one
- * button per prompt, without shipping every prompt's template text to every
- * participant. This is the "list all Custom Prompts" seam other surfaces call.
+ * Custom Prompt id + title (+ usesSelection), never the template text
+ * itself — what a room's clients need to render one button per prompt,
+ * without shipping every prompt's instructions to every participant. This
+ * is the "list all Custom Prompts" seam other surfaces call.
+ *
+ * `usesSelection` (computed here, from `prompt`, and never returned itself)
+ * is what splits a prompt between the two places its button can appear: a
+ * template that references `{selection}` only ever means something run
+ * against a highlighted excerpt, so it belongs in the highlight popup and
+ * nowhere else; one that doesn't has no excerpt to run against, so it
+ * belongs in the Research panel as a standalone button instead. See
+ * `promptReferencesSelection` (research/placeholders.js) for the exact
+ * rule — same one `buildCustomPromptRequest` already uses to decide what a
+ * template is handed, so a prompt can never end up in a place its own
+ * template disagrees with.
  */
 export function listCustomPromptSummaries() {
   return getDb()
-    .prepare('SELECT id, title FROM custom_prompts ORDER BY position ASC, created_at ASC')
+    .prepare('SELECT id, title, prompt FROM custom_prompts ORDER BY position ASC, created_at ASC')
     .all()
-    .map((row) => ({ id: row.id, title: row.title }))
+    .map((row) => ({ id: row.id, title: row.title, usesSelection: promptReferencesSelection(row.prompt) }))
 }
 
 /** One Custom Prompt by its stable id — null when there's no such prompt. */

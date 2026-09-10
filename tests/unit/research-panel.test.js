@@ -13,7 +13,8 @@ import {
   isSkimVisibleEntry,
   describeResearchError,
   makeResearchEntryId,
-  dedupeCitationsByHost
+  dedupeCitationsByHost,
+  panelPromptButtons
 } from '../../src/lib/research/research-panel.js'
 import { TRANSCRIPT_TAB_ID } from '../../src/lib/room/transcript-sync.js'
 
@@ -267,5 +268,50 @@ describe('dedupeCitationsByHost', () => {
   it('handles a missing/empty citations list', () => {
     expect(dedupeCitationsByHost(undefined)).toEqual([])
     expect(dedupeCitationsByHost([])).toEqual([])
+  })
+})
+
+// panelPromptButtons — the mirror image of selection-annotations.js's
+// customPromptActions: a Custom Prompt that does NOT reference {selection}
+// has nothing to run against a highlight, so it gets a standalone button
+// here instead of a popup entry. See selection-annotations.test.js's own
+// "excludes a prompt that does not reference {selection}" for the popup's
+// half of this split.
+describe('panelPromptButtons', () => {
+  const PROMPTS = [
+    { id: 'cp_recap', title: 'Daily recap', usesSelection: false },
+    { id: 'cp_fact', title: 'Fact check', usesSelection: true },
+    { id: 'cp_time', title: 'What time is it', usesSelection: false }
+  ]
+
+  it('includes only prompts that do not reference {selection}, in configured order', () => {
+    const buttons = panelPromptButtons(PROMPTS, { canRun: true })
+    expect(buttons.map((b) => b.id)).toEqual(['cp_recap', 'cp_time'])
+    expect(buttons.map((b) => b.label)).toEqual(['Daily recap', 'What time is it'])
+  })
+
+  it('every button is enabled and unexplained when canRun is true', () => {
+    const buttons = panelPromptButtons(PROMPTS, { canRun: true })
+    expect(buttons.every((b) => b.disabled === false)).toBe(true)
+  })
+
+  it('lists eligible prompts disabled, with an explanation, when canRun is false — never hidden', () => {
+    const buttons = panelPromptButtons(PROMPTS, { canRun: false })
+    expect(buttons).toHaveLength(2)
+    expect(buttons.every((b) => b.disabled === true)).toBe(true)
+    expect(buttons[0].title).toMatch(/host/i)
+  })
+
+  it('skips a prompt with no usable title', () => {
+    expect(panelPromptButtons([{ id: 'cp_a', title: '   ', usesSelection: false }], { canRun: true })).toEqual([])
+  })
+
+  it('a prompt with usesSelection missing entirely is excluded, not assumed panel-eligible', () => {
+    expect(panelPromptButtons([{ id: 'cp_a', title: 'No flag' }], { canRun: true })).toEqual([])
+  })
+
+  it('handles a missing/empty prompt list', () => {
+    expect(panelPromptButtons(undefined, { canRun: true })).toEqual([])
+    expect(panelPromptButtons([], { canRun: true })).toEqual([])
   })
 })

@@ -225,7 +225,10 @@ describe('highlighting a Turn produces a correctly Transcript-anchored Annotatio
   it('the popup a Turn raises carries the SAME actions Notes gets — Comment plus every Custom Prompt', () => {
     // customPromptActions is surface-blind: RoomTabs builds one
     // `selectionActions` list and both surfaces raise it unchanged.
-    const prompts = [{ id: 'cp_a', title: 'Fact check' }, { id: 'cp_b', title: 'Define it' }]
+    const prompts = [
+      { id: 'cp_a', title: 'Fact check', usesSelection: true },
+      { id: 'cp_b', title: 'Define it', usesSelection: true }
+    ]
     const actions = customPromptActions(prompts, { canRun: true })
     expect(actions.map((a) => a.label)).toEqual(['Fact check', 'Define it'])
     expect(ROOM_TABS).toMatch(/id: SELECTION_ACTION_COMMENT/)

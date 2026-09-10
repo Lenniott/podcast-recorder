@@ -134,8 +134,7 @@ reader hitting old references to "Custom prompt" meaning the one global
 instruction should read **Custom Prompt** (capitalized as a term) below.
 
 **Custom Prompt**:
-One saved `{title, prompt text}` pair a participant can trigger from a
-highlighted selection (on Notes text or a Transcript Turn) — replaces
+One saved `{title, prompt text}` pair a participant can trigger — replaces
 Definition/Facts/Answer and the old singular Research Prompt/Custom
 (ADR-0008). Written using **Placeholders**, fires immediately with no
 extra input once triggered — the prompt's own text is the whole request.
@@ -147,6 +146,19 @@ rule of its own. Also carries a per-prompt reply format, "Freeform text"
 (default) or "Structured blocks" — the latter asks for typed **Block**s
 instead of prose; see the reply-shape Block entry below for what that
 constrains and, just as importantly, what it does not.
+
+**Where a prompt's button appears is derived, never configured**: a
+template that references `{selection}` can only ever mean something run
+against a highlighted excerpt (on Notes text or a Transcript Turn), so it
+appears in the highlight popup and nowhere else; a template that doesn't
+has no excerpt to run against, so it gets a standalone button in the
+Research panel instead. Never both, never neither — one plain fact
+(`usesSelection`, computed server-side from the template, in
+`db.js`'s `listCustomPromptSummaries`) decides which, using the same rule
+`buildCustomPromptRequest` already uses to decide what a template is
+handed. A panel-triggered prompt has no quote to anchor to, so its result
+is a research entry (the same shape a typed Ask produces, filed under the
+room's active tab), never an **Annotation** — see the entry below.
 _Avoid_: Turn Action, Definition/Facts/Answer, Quick Action, Interpret,
 Interpretation Mode (all retired terms this replaces — see above)
 

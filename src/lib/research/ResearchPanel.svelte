@@ -19,6 +19,7 @@
     activeTabVideoTitle,
     describeResearchError,
     makeResearchEntryId,
+    panelPromptButtons,
   } from "./research-panel.js";
   import { parseResearchCard } from "./research-card.js";
   import {
@@ -30,6 +31,7 @@
     isCardAnnotation,
     annotationStatus,
   } from "./annotation-panel.js";
+  import { formatTranscriptForPrompt } from "$lib/room/selection-annotations.js";
   import TranscriptFacet from "./TranscriptFacet.svelte";
   import { TRANSCRIPT_TAB_ID } from "$lib/room/transcript-sync.js";
 
@@ -126,6 +128,14 @@
   export let guestCanAskResearch = false;
 
   $: canAskResearch = isHostClaim || guestCanAskResearch;
+
+  // [{id, title, usesSelection}] — every configured Custom Prompt (see
+  // RecordingRoom.svelte's own doc comment). Only the ones that do NOT
+  // reference {selection} get a button here — the ones that do belong only
+  // in the highlight popup (RoomTabs.svelte's selectionActions), since they
+  // have no excerpt to run against without one. See panelPromptButtons.
+  export let customPrompts = [];
+  $: panelPrompts = panelPromptButtons(customPrompts, { canRun: canAskResearch });
 
   let activeTabId = null;
   let entriesByTab = {};
@@ -236,6 +246,33 @@
   function removeEntry(entryId) {
     if (!canAskResearch) return; // same gate as ws-rooms.js's research_remove
     send({ type: "research_remove", entryId });
+  }
+
+  // ─── Outbound — a panel-button Custom Prompt (structured-research-output
+  //     panel-buttons feature) — fully server-resolved, like annotation_ask,
+  //     unlike the client-driven research_ask/publishResearchResult flow
+  //     just below: there is no template to keep off the wire here beyond
+  //     what annotation_ask already keeps off it, so this reuses that same
+  //     "resolve by id, server-side" discipline rather than the HTTP-POST
+  //     one. Result lands as a research entry (ws-rooms.js's
+  //     runResearchPromptAsk), rendered by the exact same `entries` markup
+  //     below — no separate rendering path needed. ────────────────────────
+
+  function runPanelPrompt(customPromptId) {
+    if (!canAskResearch) return; // same gate as ws-rooms.js's research_prompt_ask
+    const entryId = makeResearchEntryId();
+    send({
+      type: "research_prompt_ask",
+      entryId,
+      customPromptId,
+      // Placeholder ingredients only — the server keeps just what this
+      // prompt's own template references and drops the rest (same
+      // reasoning as buildAnnotationAskPayload's payload).
+      currentTab: notesText,
+      transcript: formatTranscriptForPrompt(transcriptLines),
+      videoTitle,
+    });
+    revealPanel();
   }
 
   // ─── Outbound — manual ask (ticket 04; Quick Actions/Voice Trigger,
@@ -391,6 +428,27 @@
   {/if}
 
   {#if !collapsed && facet === "annotations"}
+    <!-- Panel-button Custom Prompts (structured-research-output feature) —
+         every configured prompt that does NOT reference {selection}, one
+         button each, always shown (disabled + explained without Guest
+         Research Access, same philosophy as the highlight popup's own
+         Custom Prompt buttons — see selection-annotations.js). -->
+    {#if panelPrompts.length}
+      <div class="panel-prompt-row" role="group" aria-label="Custom Prompts">
+        {#each panelPrompts as prompt (prompt.id)}
+          <button
+            type="button"
+            class="btn-secondary btn-sm panel-prompt-btn"
+            disabled={prompt.disabled}
+            title={prompt.title}
+            on:click={() => runPanelPrompt(prompt.id)}
+          >
+            {prompt.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     {#if canAskResearch}
       <form class="research-ask-form" on:submit|preventDefault={submitQuestion}>
         <input
@@ -675,6 +733,20 @@
       opacity: 1;
       transform: scale(1.15);
     }
+  }
+
+  /* One button per panel-eligible Custom Prompt — wraps rather than
+     scrolling, since a host is expected to configure a handful of these,
+     not a long list. */
+  .panel-prompt-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .panel-prompt-btn {
+    flex: 0 0 auto;
   }
 
   .research-ask-form {
