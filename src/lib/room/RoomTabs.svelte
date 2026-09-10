@@ -1030,12 +1030,6 @@
     touch-action: none;
   }
 
-  .notes-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
   .notes-toolbar-label {
     font-size: 12px;
     color: var(--muted);

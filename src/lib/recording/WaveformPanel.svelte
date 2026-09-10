@@ -4,14 +4,12 @@
     METER_MIN,
     METER_TICKS,
     dbToMeterPct,
-    formatMeterReadout,
     meterGradientCss,
   } from "./meter.js";
 
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
-  export let dbLevel = METER_MIN;
   export let peakHoldDb = METER_MIN;
   export let isClipping = false;
   export let lastClapFrom = null;
@@ -46,8 +44,6 @@
         {/each}
       </div>
       <div class="db-readout">
-        <!-- <span class="db-value">{formatMeterReadout(dbLevel)} dBFS</span>
-        <span class="db-peak-label">pk: {formatMeterReadout(peakHoldDb)}</span> -->
         {#if isClipping}<span class="clip-badge">CLIP</span>{/if}
       </div>
     {/if}

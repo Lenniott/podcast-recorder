@@ -181,15 +181,12 @@
   let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
 
   // ─── dBFS meter ──────────────────────────────────────────────────────
-  let dbLevel      = METER_MIN  // current RMS in dBFS (numeric readout)
-  /** Smoothed RMS for the green bar — same quantity as the readout, so the
-   *  gradient color always matches the numbers. Peak only drives the hold line. */
+  /** Smoothed RMS for the green bar. Peak only drives the hold line. */
   let meterFillDb  = METER_MIN
   let peakHoldDb   = METER_MIN  // peak-hold value (resets after 2s)
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   const levelMeter = createLevelMeter({
     onState(state) {
-      dbLevel = state.dbLevel
       meterFillDb = state.meterFillDb
       peakHoldDb = state.peakHoldDb
       isClipping = state.isClipping
@@ -1058,7 +1055,6 @@
     onGainInput={updateGain}
     {meterPct}
     {peakPct}
-    {dbLevel}
     {peakHoldDb}
     {isClipping}
     {lastClapFrom}

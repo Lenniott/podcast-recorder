@@ -31,7 +31,6 @@
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
-  export let dbLevel;
   export let peakHoldDb;
   export let isClipping = false;
   export let lastClapFrom = null;
@@ -97,7 +96,6 @@
         bind:canvasEl
         {meterPct}
         {peakPct}
-        {dbLevel}
         {peakHoldDb}
         {isClipping}
         {lastClapFrom}

@@ -67,7 +67,6 @@
   export let onGainInput = () => {};
   export let meterPct = 0;
   export let peakPct = 0;
-  export let dbLevel = -60;
   export let peakHoldDb = -60;
   export let isClipping = false;
   export let lastClapFrom = null;
@@ -122,7 +121,6 @@
     bind:canvasEl
     {meterPct}
     {peakPct}
-    {dbLevel}
     {peakHoldDb}
     {isClipping}
     {lastClapFrom}
