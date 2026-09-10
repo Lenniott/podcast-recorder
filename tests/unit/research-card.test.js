@@ -93,6 +93,73 @@ describe('parseResearchCard', () => {
     )
     expect(card).toBeNull()
   })
+
+  // A Custom Prompt's reply is always rendered as plain text (see
+  // ResearchPanel.svelte) — none of these ever become real HTML, so raw
+  // markdown syntax always shows up as literal asterisks/hashes to a
+  // reader, no matter what the prompt asked for. These are real failures a
+  // live Custom Prompt run turned up.
+  it('strips **bold** and __bold__ markers, keeping the wrapped text', () => {
+    const card = parseResearchCard(
+      JSON.stringify({ outputType: 'ask', mainTakeaway: '**Verdict**\nThe claim is __false__.' })
+    )
+    expect(card.mainTakeaway).toBe('Verdict\nThe claim is false.')
+  })
+
+  it('strips a bracket-only citation stub (a bare domain, not a real [label](url) link)', () => {
+    const card = parseResearchCard(
+      JSON.stringify({ outputType: 'ask', mainTakeaway: 'Reproductive messages rose in 2009 [pmc.ncbi.nlm.nih.gov].' })
+    )
+    expect(card.mainTakeaway).toBe('Reproductive messages rose in 2009.')
+  })
+
+  it('does not touch a bracket that is not a bare-domain stub', () => {
+    const card = parseResearchCard(JSON.stringify({ outputType: 'ask', mainTakeaway: 'She said [laughs] it was fine.' }))
+    expect(card.mainTakeaway).toBe('She said [laughs] it was fine.')
+  })
+
+  it('converts a markdown list marker to a real bullet character', () => {
+    const card = parseResearchCard(
+      JSON.stringify({ outputType: 'ask', mainTakeaway: 'Key facts:\n*   First point.\n-   Second point.' })
+    )
+    expect(card.mainTakeaway).toBe('Key facts:\n• First point.\n• Second point.')
+  })
+
+  it('strips a markdown heading marker, keeping the heading text on its own line', () => {
+    const card = parseResearchCard(JSON.stringify({ outputType: 'ask', mainTakeaway: '## Conclusion\nIt is false.' }))
+    expect(card.mainTakeaway).toBe('Conclusion\nIt is false.')
+  })
+
+  // The exact shape of a real Custom Prompt reply that prompted this fix
+  // (ADR-0008 follow-up) — bold headers, a bulleted list, and bracket-only
+  // citation stubs all in one reply, none of which the panel can render.
+  it('cleans up a realistic markdown-heavy reply end to end', () => {
+    const raw = [
+      '**Verdict**',
+      'The statement is **false**. Not every song is about sex.',
+      '',
+      '**Key Facts**',
+      '*   **Most popular songs** often have sexual themes.',
+      '*   **In 2009**, 92% of top songs had reproductive messages [pmc.ncbi.nlm.nih.gov].',
+      '',
+      '**Conclusion**',
+      'Sex is a common topic in popular music.'
+    ].join('\n')
+    const card = parseResearchCard(JSON.stringify({ outputType: 'custom', mainTakeaway: raw }))
+    expect(card.mainTakeaway).toBe(
+      [
+        'Verdict',
+        'The statement is false. Not every song is about sex.',
+        '',
+        'Key Facts',
+        '• Most popular songs often have sexual themes.',
+        '• In 2009, 92% of top songs had reproductive messages.',
+        '',
+        'Conclusion',
+        'Sex is a common topic in popular music.'
+      ].join('\n')
+    )
+  })
 })
 
 describe('serializeResearchCard', () => {

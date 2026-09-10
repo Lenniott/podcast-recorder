@@ -39,18 +39,31 @@ const FIELD_LABELS = [
   ['mainTakeaway', 'MAIN TAKEAWAY']
 ]
 
-// The prompt tells the model never to cite inline (citations are reported
-// separately, from the web-search plugin's own annotations — see
-// research-assistant.js), but that's a request, not a guarantee: models
-// keep dropping a markdown link or bare URL into mainTakeaway anyway. Strip
-// it app-side rather than trust compliance.
-function stripInlineCitations(value) {
-  // Keep line breaks (every mode is freeform now). Collapse only
-  // spaces/tabs on a line so a markdown-link strip doesn't leave ragged
-  // indent.
+// A Custom Prompt's reply is always rendered as plain text (see
+// ResearchPanel.svelte's `.research-interpretation`/`.annotation-text` —
+// neither parses markdown), so any markdown syntax the model emits is
+// always wrong to leave in, no matter what a given prompt's own author
+// asked for. Same discipline as the citation stripping below: an app-side
+// guard the caller can check deterministically beats hoping every prompt
+// remembers to say "plain text, no markdown, no inline citations" and that
+// the model actually complies. This function was previously citations-only
+// (stripInlineCitations); it grew to cover the other markdown a live
+// Custom Prompt run turned up — see the eval log entries that flagged
+// **bold**, `* ` bullets, and bracket-only citation stubs like
+// `[example.com]` (a bare domain, not a real `[label](url)` link) all
+// coming through unrendered.
+function stripUnrenderedMarkup(value) {
   return String(value || '')
     .replace(/\[[^\]]*\]\((?:https?:\/\/|www\.)[^)]+\)/gi, '') // [label](url) citation, whole thing
     .replace(/\(?\bhttps?:\/\/\S+\)?/gi, '') // bare URL, with an optional wrapping paren
+    .replace(/\[\s*(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*\]/gi, '') // [bare.domain] citation stub, no real link
+    .replace(/\*\*(.+?)\*\*/gs, '$1') // **bold** -> bold
+    .replace(/__(.+?)__/gs, '$1') // __bold__ -> bold
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '') // markdown heading marker, text kept as its own line
+    .replace(/^[ \t]*[*+-][ \t]+/gm, '• ') // markdown list marker -> a real bullet character
+    // Keep line breaks (every mode is freeform now). Collapse only
+    // spaces/tabs on a line so stripping the above doesn't leave ragged
+    // indent or a lone space before punctuation.
     .replace(/[^\S\n]+/g, ' ')
     .replace(/ *([.,;:!?])/g, '$1')
     .replace(/[^\S\n]+\n/g, '\n')
@@ -144,7 +157,7 @@ export function sanitizeResearchCard(raw) {
     provenInTranscript: toScore(raw?.provenInTranscript),
     ubiquitousKnowledge: toScore(raw?.ubiquitousKnowledge),
     outputType: MODES.includes(raw?.outputType) ? raw.outputType : null,
-    mainTakeaway: stripInlineCitations(raw?.mainTakeaway)
+    mainTakeaway: stripUnrenderedMarkup(raw?.mainTakeaway)
   }
 }
 

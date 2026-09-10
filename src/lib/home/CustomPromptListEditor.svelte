@@ -26,11 +26,22 @@
 
   let creating = promptErrorId === "new" && !!promptError;
 
-  function submitting(id) {
+  // A successful save's server action ends in `redirect(303, '/')`, which
+  // `enhance`'s `update()` follows with a client-side data refresh rather
+  // than remounting this component — so `editingId`/`creating`, being local
+  // state that only ever gets SET (never read back from a prop), would
+  // otherwise stay however the click that opened the form last left them,
+  // forever. `result.type` is 'failure' only on a rejected save (see
+  // +page.server.js's fail() calls) — anything else (redirect included)
+  // means it went through, so that's when the caller's onDone fires and
+  // the row drops back to view mode. On failure, deliberately do nothing:
+  // the error banner needs the form to stay open to show it against.
+  function submitting(id, onDone) {
     saving = id;
-    return async ({ update }) => {
+    return async ({ result, update }) => {
       await update();
       saving = "";
+      if (result.type !== "failure" && onDone) onDone();
     };
   }
 </script>
@@ -68,7 +79,7 @@
         <form
           method="POST"
           action="?/update_custom_prompt"
-          use:enhance={() => submitting(customPrompt.id)}
+          use:enhance={() => submitting(customPrompt.id, () => (editingId = ""))}
         >
           <input type="hidden" name="custom-prompt-id" value={customPrompt.id} />
           <div class="field">
@@ -143,7 +154,7 @@
     <form
       method="POST"
       action="?/create_custom_prompt"
-      use:enhance={() => submitting("new")}
+      use:enhance={() => submitting("new", () => (creating = false))}
     >
       <div class="field">
         <label for="new-custom-prompt-title">Title</label>
