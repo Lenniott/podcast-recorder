@@ -44,6 +44,13 @@ Don't hand-build a fix for a new flag; register it on the existing mechanism.
 
 ## Running things here
 
+- `npm run check:standalone` — confirms `ws-rooms.js` loads under plain Node
+  with no Vite/SvelteKit involved (`server.js`/`server-ws-dev.js` both load it
+  that way). Runs automatically before `npm test`. `npx vitest run` alone
+  won't catch a module in that import graph reaching for a SvelteKit-only
+  virtual import (`$env/*`, `$app/*`) — vitest itself runs through Vite, so
+  those always resolve there regardless of whether real startup would crash.
+  If you add a new import to anything `ws-rooms.js` pulls in, run this.
 - `npx vitest run` — unit tests, fast, no server needed.
 - `npm run test:coverage` — same unit tests plus a `coverage/` HTML report.
 - `npx svelte-check` — run `npx svelte-kit sync` first if `.svelte-kit/` is missing.

@@ -1,8 +1,18 @@
 /**
  * Research Assistant Client — one entry point, `askResearchAssistant(request)`,
  * turns a lookup into `{ answer, citations }`. Callers never see prompt text.
+ *
+ * Deliberately `process.env`, not `$env/dynamic/private` — same reasoning as
+ * auth.js's getSecret(): this module is loaded from ws-rooms.js (ADR-0008,
+ * ticket 05's annotation_ask calls askResearchAssistant directly, server-side)
+ * as well as from the research route. ws-rooms.js is only ever loaded by
+ * server.js/server-ws-dev.js — plain Node processes outside Vite/SvelteKit's
+ * module graph — where `$env/dynamic/private` is not a real package and
+ * cannot resolve at all (`ERR_MODULE_NOT_FOUND`), not even to an empty
+ * object. `$env/dynamic/private` is just a proxy over `process.env` at
+ * runtime in every context that does support it, so this is the same values,
+ * read in a way that actually works everywhere this module runs.
  */
-import { env } from '$env/dynamic/private'
 import { serializeResearchCard } from '../research/research-card.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 import { recordResearchUsage } from './db.js'
@@ -261,7 +271,7 @@ function buildRequestBody(request, pressTime) {
     mode,
     messages,
     body: {
-      model: env.OPENROUTER_MODEL || DEFAULT_MODEL,
+      model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
       messages,
       plugins: [{ id: 'web' }],
       // Asks OpenRouter to report actual cost on `usage.cost` — see
@@ -273,7 +283,7 @@ function buildRequestBody(request, pressTime) {
 }
 
 export async function askResearchAssistant(request, { fetchImpl = fetch, pressTime = new Date(), roomSlug = null } = {}) {
-  const apiKey = env.OPENROUTER_API_KEY
+  const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
     throw new ResearchAssistantError('NOT_CONFIGURED', 'OPENROUTER_API_KEY is not configured')
   }
@@ -284,7 +294,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
-  const requestedModel = env.OPENROUTER_MODEL || DEFAULT_MODEL
+  const requestedModel = process.env.OPENROUTER_MODEL || DEFAULT_MODEL
   const startedAt = performance.now()
   let res
   try {
@@ -352,6 +362,6 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     card,
     suppressReason: null,
     usable: true
-  }, { env })
+  })
   return { answer: serializeResearchCard(card), citations }
 }

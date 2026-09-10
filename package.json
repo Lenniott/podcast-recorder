@@ -10,6 +10,8 @@
     "rooms": "node scripts/rooms.js list",
     "rooms:delete": "node scripts/rooms.js delete",
     "research:eval": "node --env-file=.env scripts/research-eval.js",
+    "check:standalone": "node scripts/check-standalone-server-imports.mjs",
+    "pretest": "npm run check:standalone",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
