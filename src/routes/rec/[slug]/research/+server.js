@@ -3,16 +3,14 @@
  */
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { verifySessionToken, getHostClaim } from '$lib/server/auth.js'
-import { getActiveRoomBySlug, listCustomPrompts } from '$lib/server/db.js'
+import { verifySessionToken } from '$lib/server/auth.js'
+import { getActiveRoomBySlug } from '$lib/server/db.js'
 import { askResearchAssistant, ResearchAssistantError } from '$lib/server/research-assistant.js'
-import { TURN_ACTION_IDS } from '$lib/research/research-card.js'
 
 const AUTH_COOKIE = (slug) => `pr_auth_${slug}`
 
 const MAX_QUERY_LENGTH = 500
 const MAX_TEXT_LENGTH = 20_000
-const TURN_ACTION_ID_SET = new Set(TURN_ACTION_IDS)
 
 function isOptionalString(value, maxLength) {
   return value == null || (typeof value === 'string' && value.length <= maxLength)
@@ -47,26 +45,13 @@ function validateRequestBody(body) {
     }
   }
 
-  if (body.kind === 'turnAction') {
-    if (!TURN_ACTION_ID_SET.has(body.actionId)) return null
-    if (typeof body.focus !== 'string' || body.focus.length === 0 || body.focus.length > MAX_TEXT_LENGTH) return null
-    if (!isOptionalString(body.grounding, MAX_TEXT_LENGTH)) return null
-    return { kind: 'turnAction', actionId: body.actionId, focus: body.focus, grounding: body.grounding ?? '' }
-  }
-
-  if (body.kind === 'custom') {
-    if (typeof body.text !== 'string' || body.text.length === 0 || body.text.length > MAX_TEXT_LENGTH) return null
-    if (!isOptionalString(body.transcript, MAX_TEXT_LENGTH)) return null
-    if (!isOptionalString(body.videoTitle, MAX_TEXT_LENGTH)) return null
-    if (!isOptionalString(body.selection, MAX_TEXT_LENGTH)) return null
-    return {
-      kind: 'custom',
-      text: body.text,
-      transcript: body.transcript ?? '',
-      videoTitle: body.videoTitle ?? '',
-      selection: body.selection ?? ''
-    }
-  }
+  // `turnAction` (the fixed Definition/Facts/Answer path) and this route's
+  // own `custom` kind (the single global Custom button that ran the first
+  // configured prompt against the whole active tab) are both retired —
+  // ADR-0008, ticket 07. A Custom Prompt triggered from a highlight is
+  // resolved and run entirely server-side from the `annotation_ask` WS
+  // message (see ws-rooms.js) — it never reaches this HTTP route at all.
+  // Typed Ask (`voice`, above) is the only kind this route still accepts.
 
   return null
 }
@@ -90,24 +75,6 @@ export async function POST({ params, request, cookies, fetch }) {
   }
   const validated = validateRequestBody(body)
   if (!validated) return json({ error: 'invalid-request' }, { status: 400 })
-
-  // Stamped onto every lookup so the Research Eval Log can record the prompt
-  // text behind it even when this call did not send one (Turn Actions / Ask).
-  // Still the *first* Custom Prompt rather than a requested id: this route's
-  // `custom` kind is the retired single-Custom-button path (ticket 07), and
-  // choosing a prompt by id arrives with the highlight trigger in ticket 05.
-  validated.researchPrompt = listCustomPrompts()[0]?.prompt ?? ''
-
-  if (validated.kind === 'custom') {
-    // Same gate as ws-rooms.js's research_ask/research_remove — Guest
-    // Research Access covers Custom exactly like Ask and Turn Actions, no
-    // special-case host-only rule of its own (see CONTEXT.md).
-    const isHost = !!getHostClaim(slug, cookies, room, env.SECRET)
-    if (!isHost && !room.guest_ai_allowed) {
-      return json({ error: 'forbidden' }, { status: 403 })
-    }
-    validated.instruction = validated.researchPrompt
-  }
 
   try {
     const { answer, citations } = await askResearchAssistant(validated, { fetchImpl: fetch, roomSlug: slug })

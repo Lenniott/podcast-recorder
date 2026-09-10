@@ -14,7 +14,6 @@ import db, {
 } from '../../src/lib/server/db.js'
 import {
   CUSTOM_PROMPT_TITLE_MAX_LENGTH,
-  isCustomPromptRunnable,
   validateCustomPrompt
 } from '../../src/lib/home/custom-prompts.js'
 
@@ -138,19 +137,6 @@ describe('validateCustomPrompt', () => {
     const title = 'x'.repeat(CUSTOM_PROMPT_TITLE_MAX_LENGTH + 1)
     expect(validateCustomPrompt({ title, prompt: 'text' })).toMatch(/Title too long/)
     expect(validateCustomPrompt({ title: 'x'.repeat(CUSTOM_PROMPT_TITLE_MAX_LENGTH), prompt: 'text' })).toBe('')
-  })
-})
-
-describe('isCustomPromptRunnable', () => {
-  it('is true only when both halves have text', () => {
-    expect(isCustomPromptRunnable({ title: 'Interpret', prompt: 'Read it.' })).toBe(true)
-    expect(isCustomPromptRunnable({ title: '', prompt: 'Read it.' })).toBe(false)
-    expect(isCustomPromptRunnable({ title: 'Interpret', prompt: '  ' })).toBe(false)
-  })
-
-  it('is false for no prompt at all — an empty list has nothing to run', () => {
-    expect(isCustomPromptRunnable(undefined)).toBe(false)
-    expect(isCustomPromptRunnable(null)).toBe(false)
   })
 })
 

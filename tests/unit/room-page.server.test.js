@@ -6,7 +6,6 @@ import db, {
   createCustomPrompt,
   createRoom,
   getRoomBySlug,
-  updateCustomPrompt,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -180,26 +179,6 @@ describe('rec/[slug]/+page.server', () => {
       const data = await load({ params: { slug: SLUG }, cookies })
       expect(data.isHostClaim).toBe(false)
       expect(data.roomPassword).toBeNull()
-    })
-
-    // The room's single Custom button runs the first Custom Prompt in the
-    // list until ticket 05 lets a highlight pick one by id, and ticket 07
-    // retires the button entirely.
-    it('keeps Custom off until a usable Custom Prompt exists, then runs the first one', async () => {
-      await seedRoom()
-      const { load } = await loadPage()
-      const empty = await load({ params: { slug: SLUG }, cookies: makeCookies() })
-      expect(empty.customEnabled).toBe(false)
-      expect(empty.customTitle).toBe('')
-
-      const created = createCustomPrompt({ title: 'Interpret', prompt: 'Read {current_tab}.' })
-      const configured = await load({ params: { slug: SLUG }, cookies: makeCookies() })
-      expect(configured.customEnabled).toBe(true)
-      expect(configured.customTitle).toBe('Interpret')
-
-      updateCustomPrompt(created.id, { title: 'Interpret', prompt: '   ' })
-      const blankTemplate = await load({ params: { slug: SLUG }, cookies: makeCookies() })
-      expect(blankTemplate.customEnabled).toBe(false)
     })
 
     // ADR-0008, ticket 05: every configured Custom Prompt becomes its own

@@ -12,14 +12,13 @@
  * copying or re-deriving another component's local variable, the same
  * discipline RoomTabs.svelte's `viewingTranscript` now follows.
  */
-import { parseResearchCard, TURN_ACTION_IDS } from './research-card.js'
+import { parseResearchCard } from './research-card.js'
 import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
 import { MAX_TAB_TEXT_LEN } from '../room/tab-sync.js'
 import { TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 
-export { makeResearchEntryId, TURN_ACTION_IDS }
+export { makeResearchEntryId }
 
-const TURN_ACTION_ID_SET = new Set(TURN_ACTION_IDS)
 const RESEARCH_TRANSCRIPT_BUDGET = MAX_TAB_TEXT_LEN
 
 /** Applies a `research_entry` (create/update) broadcast into entriesByTab. */
@@ -117,26 +116,6 @@ function joinTranscriptLines(lines) {
   return (lines || []).map(formatTranscriptLine).join('\n')
 }
 
-/** Two Turns before the Focus Turn, plus one after if it already exists. */
-export function groundingLinesForFocus(transcriptLines, focusTurnId) {
-  const lines = transcriptLines || []
-  const index = lines.findIndex((line) => line.id === focusTurnId)
-  if (index < 0) return []
-  const before = lines.slice(Math.max(0, index - 2), index)
-  const after = lines.slice(index + 1, index + 2)
-  return [...before, ...after]
-}
-
-export function buildTurnActionRequest(transcriptLines, focusTurnId, actionId) {
-  if (!TURN_ACTION_ID_SET.has(actionId)) return null
-  const lines = transcriptLines || []
-  const focus = lines.find((line) => line.id === focusTurnId)
-  if (!focus || !String(focus.text || '').trim()) return null
-  const grounding = joinTranscriptLines(groundingLinesForFocus(lines, focusTurnId)).slice(0, RESEARCH_TRANSCRIPT_BUDGET)
-  const focusText = formatTranscriptLine(focus).slice(0, RESEARCH_TRANSCRIPT_BUDGET)
-  return { kind: 'turnAction', actionId, focus: focusText, grounding }
-}
-
 /** Collapses a card's citations to one per source site, shown as its bare
  *  host (e.g. "en.wikipedia.org") rather than the page title — a research
  *  card can cite the same domain twice (two different Wikipedia pages, a
@@ -164,26 +143,6 @@ function hostOf(url) {
   }
 }
 
-/** Which Turn Action icons should stay disabled because they've already
- *  been run — room-shared (derived from `entriesByTab`, the same
- *  research_entry state every peer replays on join) rather than a local
- *  "I clicked this in my browser" flag, so it survives a refresh and is
- *  consistent for every participant. Scans every tab's entries, not just
- *  the active one — a Turn Action's entry is filed under whichever tab was
- *  active *when it was asked* (see ws-rooms.js's research_ask handler),
- *  which may not be the tab that's active now. */
-export function deriveDoneActionsByTurn(entriesByTab) {
-  const result = {}
-  for (const list of Object.values(entriesByTab || {})) {
-    for (const entry of list || []) {
-      if (!entry?.turnId || !TURN_ACTION_ID_SET.has(entry.actionId)) continue
-      const done = result[entry.turnId] || (result[entry.turnId] = [])
-      if (!done.includes(entry.actionId)) done.push(entry.actionId)
-    }
-  }
-  return result
-}
-
 /**
  * The currently active notes tab's whole text (never the Transcript —
  * Custom does not run on Turns).
@@ -209,17 +168,6 @@ export function formatCurrentTabContext(notesText = '', videoTitle = '') {
   const notesBody = notes.trim() ? notes : ''
   if (!title) return notes
   return notesBody ? `Video: ${title}\n\n${notesBody}` : `Video: ${title}`
-}
-
-export function hasCustomText(text, videoTitle = '') {
-  return !!formatCurrentTabContext(text, videoTitle).trim()
-}
-
-export function buildCustomRequest(text, transcriptLines, videoTitle = '') {
-  const trimmed = formatCurrentTabContext(text, videoTitle).trim().slice(0, MAX_TAB_TEXT_LEN)
-  if (!trimmed) return null
-  const transcript = joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET)
-  return { kind: 'custom', text: trimmed, transcript, videoTitle: String(videoTitle || '').trim() }
 }
 
 export function hasUsableResearchAnswer(answer) {

@@ -14,9 +14,9 @@ Also decide and implement what a Custom Prompt call writes to the **Research Eva
 
 **Blocked by:** 05, 06 (both must be fully working first — this ticket has nothing to fall back on if it turns out something still depended on the old path).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] No code path can produce a Definition/Facts/Answer-shaped result any more.
-- [ ] Full test suite is green after removal — obsolete tests are deleted, not skipped or left failing.
-- [ ] A Custom Prompt call writes a Research Eval Log entry when logging is enabled, with a documented field set.
-- [ ] `CONTEXT.md`'s Research Eval Log entry (and Transcript Activity entry, if ticket 06 didn't already fix it) match reality — no remaining mentions of Focus Turn, Grounding, or a "Transcript Tab pill" as if they still exist.
+- [x] No code path can produce a Definition/Facts/Answer-shaped result any more.
+- [x] Full test suite is green after removal — obsolete tests are deleted, not skipped or left failing.
+- [x] A Custom Prompt call writes a Research Eval Log entry when logging is enabled, with a documented field set (inherited from the freeform logging path every mode now shares — no new logging code needed).
+- [x] `CONTEXT.md`'s Research Eval Log entry (Transcript Activity was already fixed by ticket 06) matches reality — no remaining mentions of Focus Turn, Grounding, or a suppress verdict.

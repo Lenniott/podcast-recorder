@@ -153,8 +153,8 @@
   // position:fixed in viewport coordinates and the selection listeners are
   // on `document`, so hosting has nothing to do with containment. The
   // element flows sideways (ResearchPanel -> RecordingRoom -> here),
-  // exactly as tabVideoTitles/doneActionsByTurn already do between these
-  // same two components.
+  // exactly as tabVideoTitles already does between these same two
+  // components.
 
   const SELECTION_ACTION_COMMENT = "comment";
 

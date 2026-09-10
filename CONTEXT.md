@@ -158,9 +158,11 @@ usage page
 
 **Research Eval Log**:
 An append-only, gitignored record of live Research Assistant calls
-(prompt, Focus Turn, Grounding, raw reply, parsed card, suppress,
-latency), written only when enabled. Rooms still expire; the log is what
-survives for prompt work after a show.
+(the Custom Prompt or Ask question behind the call, the resolved
+messages actually sent, raw reply, model/usage/latency), written only
+when enabled. Rooms still expire; the log is what survives for prompt
+work after a show. Every call is freeform now (ADR-0008) — there is no
+more Focus Turn/Grounding split or suppress verdict to record.
 _Avoid_: keeping rooms, immortal rooms, eval-runs as the only corpus (that's canned)
 
 **Annotation** _(ADR-0008)_:

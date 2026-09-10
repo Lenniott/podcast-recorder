@@ -15,7 +15,7 @@ vi.mock('../../src/lib/server/research-assistant.js', async () => {
 })
 
 import { hashPassword, makeSessionToken } from '../../src/lib/server/auth.js'
-import db, { createRoom, _resetDb, createCustomPrompt } from '../../src/lib/server/db.js'
+import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
 import { askResearchAssistant } from '../../src/lib/server/research-assistant.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
@@ -89,12 +89,12 @@ describe('POST /rec/[slug]/research — auth gating', () => {
 })
 
 describe('POST /rec/[slug]/research — success', () => {
-  it('calls askResearchAssistant with the request body and event.fetch, returning its answer/citations', async () => {
+  it('calls askResearchAssistant with the validated request body and event.fetch, returning its answer/citations', async () => {
     const cookies = await authedCookies()
     const { POST } = await loadRoute()
     askResearchAssistant.mockResolvedValue({ answer: 'The answer.', citations: [{ url: 'https://x.test', title: 'X' }] })
 
-    const body = { kind: 'turnAction', actionId: 'definition', focus: 'Host: hello', grounding: '' }
+    const body = { kind: 'voice', query: 'hello', context: '', notes: '' }
     const res = await POST({
       params: { slug: SLUG },
       cookies,
@@ -106,62 +106,19 @@ describe('POST /rec/[slug]/research — success', () => {
     expect(await res.json()).toEqual({ answer: 'The answer.', citations: [{ url: 'https://x.test', title: 'X' }] })
     expect(askResearchAssistant).toHaveBeenCalledTimes(1)
     const [passedRequest, options] = askResearchAssistant.mock.calls[0]
-    expect(passedRequest).toEqual({ ...body, researchPrompt: '' })
+    // No researchPrompt stamped on — that stopgap (running the first
+    // configured Custom Prompt against every lookup) is retired along with
+    // this route's own `custom`/`turnAction` kinds (ADR-0008, ticket 07). A
+    // Custom Prompt is resolved by id server-side from `annotation_ask`
+    // (see ws-rooms.js), never through this HTTP route.
+    expect(passedRequest).toEqual({
+      ...body,
+      currentTab: '',
+      transcript: '',
+      videoTitle: '',
+      selection: ''
+    })
     expect(options.fetchImpl).toBe(fakeFetch)
-  })
-
-  it('stamps the first Custom Prompt onto every lookup so the eval log can record it', async () => {
-    createCustomPrompt({ title: 'Interpret', prompt: 'Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.' })
-    const cookies = await authedCookies()
-    const { POST } = await loadRoute()
-    askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
-
-    await POST({
-      params: { slug: SLUG },
-      cookies,
-      fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'turnAction', actionId: 'facts', focus: 'Host: hello', grounding: '' }) }
-    })
-
-    const [passedRequest] = askResearchAssistant.mock.calls[0]
-    expect(passedRequest.researchPrompt).toBe('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
-    expect(passedRequest.kind).toBe('turnAction')
-  })
-})
-
-describe('POST /rec/[slug]/research — Custom gated by Guest Research Access', () => {
-  it('rejects (403) Custom from a non-host when Guest Research Access is off', async () => {
-    createCustomPrompt({ title: 'Summarise', prompt: 'Summarise the notes.' })
-    const cookies = await authedCookies() // guestAiAllowed defaults to false
-    const { POST } = await loadRoute()
-
-    const res = await POST({
-      params: { slug: SLUG },
-      cookies,
-      fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'custom', text: 'some notes' }) }
-    })
-
-    expect(res.status).toBe(403)
-    expect(askResearchAssistant).not.toHaveBeenCalled()
-  })
-
-  it('allows Custom from a non-host when the room has Guest Research Access on, sending the stored prompt', async () => {
-    createCustomPrompt({ title: 'Summarise', prompt: 'Summarise the notes.' })
-    const cookies = await authedCookies({ guestAiAllowed: true })
-    const { POST } = await loadRoute()
-    askResearchAssistant.mockResolvedValue({ answer: 'ok', citations: [] })
-
-    const res = await POST({
-      params: { slug: SLUG },
-      cookies,
-      fetch: fakeFetch,
-      request: { json: async () => ({ kind: 'custom', text: 'some notes' }) }
-    })
-
-    expect(res.status).toBe(200)
-    const [passedRequest] = askResearchAssistant.mock.calls[0]
-    expect(passedRequest.instruction).toBe('Summarise the notes.')
   })
 })
 
@@ -169,9 +126,11 @@ describe('POST /rec/[slug]/research — request validation', () => {
   it.each([
     ['missing kind', {}],
     ['unknown kind', { kind: 'bogus' }],
-    ['turnAction with an unknown actionId', { kind: 'turnAction', actionId: 'bogus', focus: 'Host: hi', grounding: '' }],
-    ['turnAction with empty focus', { kind: 'turnAction', actionId: 'facts', focus: '', grounding: '' }],
-    ['turnAction with oversized focus', { kind: 'turnAction', actionId: 'facts', focus: 'x'.repeat(20_001), grounding: '' }],
+    // Both retired (ADR-0008, ticket 07): a Turn Action's icons are gone,
+    // and a Custom Prompt is resolved by id server-side from
+    // `annotation_ask` (see ws-rooms.js), never posted to this route.
+    ['turnAction is a retired kind, whatever shape the body has', { kind: 'turnAction', actionId: 'facts', focus: 'Host: hi', grounding: '' }],
+    ['custom is a retired kind, whatever shape the body has', { kind: 'custom', text: 'notes' }],
     ['voice with an oversized query', { kind: 'voice', query: 'x'.repeat(501), context: '', notes: '' }],
     ['voice with a non-string context', { kind: 'voice', query: 'x', context: 42, notes: '' }],
     ['voice with an oversized notes field', { kind: 'voice', query: 'x', context: '', notes: 'x'.repeat(20_001) }],
@@ -179,8 +138,7 @@ describe('POST /rec/[slug]/research — request validation', () => {
     ['voice with an oversized transcript', { kind: 'voice', query: 'x', context: '', notes: '', transcript: 'x'.repeat(20_001) }],
     ['voice with a non-string selection', { kind: 'voice', query: 'x', context: '', notes: '', selection: 42 }],
     ['voice with an oversized selection', { kind: 'voice', query: 'x', context: '', notes: '', selection: 'x'.repeat(20_001) }],
-    ['voice with a non-string videoTitle', { kind: 'voice', query: 'x', context: '', notes: '', videoTitle: 42 }],
-    ['custom with a non-string selection', { kind: 'custom', text: 'notes', selection: 42 }]
+    ['voice with a non-string videoTitle', { kind: 'voice', query: 'x', context: '', notes: '', videoTitle: 42 }]
   ])('rejects (400) a request body: %s', async (_label, body) => {
     const cookies = await authedCookies()
     const { POST } = await loadRoute()

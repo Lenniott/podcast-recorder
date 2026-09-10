@@ -10,7 +10,6 @@ import {
   ResearchAssistantError
 } from '../../src/lib/server/research-assistant.js'
 import { PLACEHOLDER_HELP } from '../../src/lib/home/custom-prompts.js'
-import { serializeResearchCard } from '../../src/lib/research/research-card.js'
 import { appendResearchEvalLog } from '../../src/lib/server/research-eval-log.js'
 import { recordResearchUsage } from '../../src/lib/server/db.js'
 
@@ -109,18 +108,6 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     expect(body.plugins).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'web' })]))
   })
 
-  it('forces structured JSON output matching the mode, so the model cannot echo a different outputType', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
-
-    await askResearchAssistant({ kind: 'turnAction', actionId: 'facts', focus: 'Host: hi', grounding: '' }, { fetchImpl })
-
-    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    expect(body.response_format.type).toBe('json_schema')
-    expect(body.response_format.json_schema.strict).toBe(true)
-    expect(body.response_format.json_schema.schema.properties.outputType.enum).toEqual(['facts'])
-    expect(body.response_format.json_schema.schema.additionalProperties).toBe(false)
-  })
-
   it('defaults to a cheap model when OPENROUTER_MODEL is not set', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
@@ -201,36 +188,6 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
     const userContent = body.messages.find((m) => m.role === 'user').content
     expect(userContent).toContain('Notes: the guest mentioned tariffs earlier.')
-  })
-})
-
-describe('askResearchAssistant — Turn Actions', () => {
-  beforeEach(() => {
-    process.env.OPENROUTER_API_KEY = 'test-api-key'
-  })
-
-  it.each(['definition', 'facts', 'answer'])('builds a well-formed request for the %s Turn Action', async (actionId) => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: fieldAnswer(actionId) })))
-
-    await askResearchAssistant(
-      { kind: 'turnAction', actionId, focus: 'Host: jesus laid in a manager', grounding: 'Host: earlier line' },
-      { fetchImpl }
-    )
-
-    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const system = body.messages.find((m) => m.role === 'system').content
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(system).toContain(`MODE: ${actionId}`)
-    expect(userContent).toContain('FOCUS TURN:')
-    expect(userContent).toContain('Host: jesus laid in a manager')
-    expect(userContent).toContain('GROUNDING:')
-    expect(userContent).toContain('Host: earlier line')
-  })
-
-  it('rejects an unknown Turn Action id', async () => {
-    await expect(
-      askResearchAssistant({ kind: 'turnAction', actionId: 'bogus', focus: 'Host: hi', grounding: '' }, { fetchImpl: vi.fn() })
-    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
   })
 })
 
@@ -496,7 +453,7 @@ describe('askResearchAssistant — response shaping', () => {
     expect(entry.durationMs).toBeGreaterThanOrEqual(0)
   })
 
-  it('logs the unsubstituted Research Prompt even when the call itself is Ask or a Turn Action', async () => {
+  it('logs the unsubstituted Custom Prompt even when the call itself is a plain Ask', async () => {
     appendResearchEvalLog.mockClear()
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
@@ -517,7 +474,7 @@ describe('askResearchAssistant — response shaping', () => {
     expect(entry.messages.some((m) => String(m.content).includes('AI TSIA'))).toBe(false)
   })
 
-  it('logs the Research Prompt template for Custom, not the placeholder-substituted message', async () => {
+  it('logs the Custom Prompt template, not the placeholder-substituted message', async () => {
     appendResearchEvalLog.mockClear()
     const fetchImpl = vi.fn().mockResolvedValue(
       okResponse({
@@ -541,72 +498,21 @@ describe('askResearchAssistant — response shaping', () => {
     expect(entry.messages[0].content).not.toContain('{current_tab}')
   })
 
-  it('discards the answer and citations when the model returns nothing (no claim survived selection)', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: 'nothing useful here, no fields at all' })))
-
-    const result = await askResearchAssistant(
-      { kind: 'turnAction', actionId: 'facts', focus: 'Host: hi', grounding: '' },
-      { fetchImpl }
-    )
-
-    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
-  })
-
-  it('suppresses (score-threshold guard) an answer already proven in the transcript, even with citations present', async () => {
+  // ADR-0008/ticket 07 retired the score-threshold and mode-match guards
+  // along with the fixed Turn Action modes they only ever policed — every
+  // reply is now used as-is, whatever the model actually said, with
+  // nothing left that could discard it.
+  it('uses the model reply as-is, with no suppression guard left to discard it', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(
-        successBody({
-          answer: fieldAnswer('facts', { provenInTranscript: 95 }),
-          citations: [{ url: 'https://example.com/x', title: 'X' }]
-        })
-      )
+      okResponse({ choices: [{ message: { content: 'A plain, unlabeled answer.', annotations: [] } }] })
     )
 
     const result = await askResearchAssistant(
-      { kind: 'turnAction', actionId: 'facts', focus: 'Host: x', grounding: '' },
+      { kind: 'voice', query: 'x', context: '', notes: '' },
       { fetchImpl }
     )
 
-    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
-  })
-
-  it('does not suppress ubiquitous knowledge for facts (only definition uses that hide-rule)', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(successBody({ answer: fieldAnswer('facts', { ubiquitousKnowledge: 90 }) }))
-    )
-
-    const result = await askResearchAssistant(
-      { kind: 'turnAction', actionId: 'facts', focus: 'Host: x', grounding: '' },
-      { fetchImpl }
-    )
-
-    expect(JSON.parse(result.answer).mainTakeaway).toBe('The actual answer, stated as fact.')
-  })
-
-  it('suppresses ubiquitous knowledge for definition', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(successBody({ answer: fieldAnswer('definition', { ubiquitousKnowledge: 90 }) }))
-    )
-
-    const result = await askResearchAssistant(
-      { kind: 'turnAction', actionId: 'definition', focus: 'Host: TV', grounding: '' },
-      { fetchImpl }
-    )
-
-    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
-  })
-
-  it('discards (mode-match guard) an answer whose OUTPUT TYPE does not match the requested mode', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse(successBody({ answer: fieldAnswer('facts') }))
-    )
-
-    const result = await askResearchAssistant(
-      { kind: 'turnAction', actionId: 'definition', focus: 'Host: x', grounding: '' },
-      { fetchImpl }
-    )
-
-    expect(result).toEqual({ answer: serializeResearchCard(null), citations: [] })
+    expect(JSON.parse(result.answer).mainTakeaway).toBe('A plain, unlabeled answer.')
   })
 })
 

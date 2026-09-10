@@ -23,36 +23,14 @@
  * prose fallback and renders the raw `{"provenInTranscript":...}` blob
  * instead of the card — try JSON first, always.
  *
- * This module also owns the two app-side guards the findings doc calls out
- * as not safe to leave to the prompt alone: score-threshold suppression
- * (`shouldSuppress`) and mode-match verification (`matchesMode`). Both are
- * things the caller can check deterministically, so neither is left to the
- * model to police itself.
+ * ADR-0008/ticket 07: the fixed Definition/Facts/Answer Turn Actions, their
+ * MODE_RULES, and the app-side suppression guards that policed them
+ * (shouldSuppress/matchesMode) are retired — every lookup is now a
+ * user-authored Custom Prompt, freeform like Ask always was. There is no
+ * remaining non-freeform card shape, so this module no longer distinguishes
+ * one: every mode in MODES is freeform.
  */
-export const SUPPRESS_THRESHOLD = 80 // tunable client-side constant, not baked into the prompt
-
-// Shared-system-prompt rules only (see research-assistant.js's
-// buildSystemPrompt): Turn Actions. Typed Ask and Custom are freeform —
-// the Ask box / Research Prompt *is* the request, so they are not here.
-// `MODES` is the card outputType allowlist: Turn Action keys plus those two.
-export const MODE_RULES = {
-  definition:
-    'Explain an obscure word, name, or reference in the FOCUS TURN, including a plausible mishear if the transcript likely garbled it. include how to pronounce it phonetically if it is not a common word. If nothing needs defining, output nothing.',
-  facts:
-    'Surface general background about what the FOCUS TURN is talking about. Do not say whether the speaker was right. Grounding is only for references — never the subject.',
-  answer:
-    'Reply to a question asked in the FOCUS TURN itself. If that Turn is not a question, output nothing rather than answering a different, easier question.'
-}
-
-export const TURN_ACTION_IDS = ['definition', 'facts', 'answer']
-export const FREEFORM_MODES = ['custom', 'ask']
-export const MODES = [...Object.keys(MODE_RULES), ...FREEFORM_MODES]
-
-export function isFreeformMode(mode) {
-  return FREEFORM_MODES.includes(mode)
-}
-
-const MAX_TAKEAWAY_WORDS = 35
+export const MODES = ['custom', 'ask']
 
 const FIELD_LABELS = [
   ['provenInTranscript', 'PROVEN IN TRANSCRIPT'],
@@ -61,34 +39,22 @@ const FIELD_LABELS = [
   ['mainTakeaway', 'MAIN TAKEAWAY']
 ]
 
-function clipWords(value, maxWords) {
-  const words = String(value || '').trim().split(/\s+/).filter(Boolean)
-  return words.slice(0, maxWords).join(' ')
-}
-
 // The prompt tells the model never to cite inline (citations are reported
 // separately, from the web-search plugin's own annotations — see
 // research-assistant.js), but that's a request, not a guarantee: models
 // keep dropping a markdown link or bare URL into mainTakeaway anyway. Strip
-// it app-side rather than trust compliance, same reasoning as
-// shouldSuppress/matchesMode below.
-function stripInlineCitations(value, { preserveNewlines = false } = {}) {
-  let text = String(value || '')
+// it app-side rather than trust compliance.
+function stripInlineCitations(value) {
+  // Keep line breaks (every mode is freeform now). Collapse only
+  // spaces/tabs on a line so a markdown-link strip doesn't leave ragged
+  // indent.
+  return String(value || '')
     .replace(/\[[^\]]*\]\((?:https?:\/\/|www\.)[^)]+\)/gi, '') // [label](url) citation, whole thing
     .replace(/\(?\bhttps?:\/\/\S+\)?/gi, '') // bare URL, with an optional wrapping paren
-  if (preserveNewlines) {
-    // Keep line breaks (Custom / Ask freeform). Collapse only spaces/tabs
-    // on a line so a markdown-link strip doesn't leave ragged indent.
-    return text
-      .replace(/[^\S\n]+/g, ' ')
-      .replace(/ *([.,;:!?])/g, '$1')
-      .replace(/[^\S\n]+\n/g, '\n')
-      .replace(/\n[^\S\n]+/g, '\n')
-      .trim()
-  }
-  return text
-    .replace(/\s+([.,;:!?])/g, '$1')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *([.,;:!?])/g, '$1')
+    .replace(/[^\S\n]+\n/g, '\n')
+    .replace(/\n[^\S\n]+/g, '\n')
     .trim()
 }
 
@@ -178,34 +144,10 @@ export function sanitizeResearchCard(raw) {
     provenInTranscript: toScore(raw?.provenInTranscript),
     ubiquitousKnowledge: toScore(raw?.ubiquitousKnowledge),
     outputType: MODES.includes(raw?.outputType) ? raw.outputType : null,
-    mainTakeaway: isFreeformMode(raw?.outputType)
-      ? stripInlineCitations(raw?.mainTakeaway, { preserveNewlines: true })
-      : clipWords(stripInlineCitations(raw?.mainTakeaway), MAX_TAKEAWAY_WORDS)
+    mainTakeaway: stripInlineCitations(raw?.mainTakeaway)
   }
 }
 
 export function serializeResearchCard(card) {
   return JSON.stringify(card ? sanitizeResearchCard(card) : null)
-}
-
-/** Score-threshold suppression (findings doc, "App-side logic required" #1)
- *  — the model always returns full output; the app decides whether to
- *  render it. Kept as a plain function of a tunable threshold, not baked
- *  into the prompt, so it can be adjusted without a prompt change. */
-export function shouldSuppress(card, mode, threshold = SUPPRESS_THRESHOLD) {
-  if (!card) return true
-  if ((card.provenInTranscript ?? 0) > threshold) return true
-  // Ubiquitous knowledge is only a hide-rule for Definition — Facts is
-  // often common background, and Ask/Answer/Custom are explicit requests.
-  if (mode === 'definition' && (card.ubiquitousKnowledge ?? 0) > threshold) return true
-  return false
-}
-
-/** Mode-match verification (findings doc, "App-side logic required" #2) —
- *  the model can silently swap OUTPUT TYPE to an easier mode than the one
- *  requested (Bug 1). The prompt now instructs against this but is
- *  best-effort, not guaranteed, so the app checks directly rather than
- *  trusting the model to police itself. */
-export function matchesMode(card, requestedMode) {
-  return !!card && card.outputType === requestedMode
 }

@@ -13,14 +13,10 @@
     applyResearchState as reduceResearchState,
     applyResearchRemove as reduceResearchRemove,
     visibleEntries,
-    deriveDoneActionsByTurn,
     dedupeCitationsByHost,
     buildManualAskRequest,
-    buildTurnActionRequest,
-    buildCustomRequest,
     activeNotesTabText,
     activeTabVideoTitle,
-    hasCustomText,
     describeResearchError,
     makeResearchEntryId,
   } from "./research-panel.js";
@@ -36,12 +32,6 @@
   } from "./annotation-panel.js";
   import TranscriptFacet from "./TranscriptFacet.svelte";
   import { TRANSCRIPT_TAB_ID } from "$lib/room/transcript-sync.js";
-
-  const TURN_ACTION_LABEL = {
-    definition: "Definition",
-    facts: "Facts",
-    answer: "Answer",
-  };
 
   // (payload) => void — JSON-sends over the room's single WebSocket
   // connection, owned by the page (same contract as RoomTabs.svelte's send).
@@ -132,18 +122,10 @@
 
   // Guest Research Access (see CONTEXT.md) — a per-room flag set at room
   // creation. Off by default. One gate for every Research Assistant
-  // action: Ask, Turn Actions, and Custom/Interpret alike, no per-action
-  // carve-out (see canCustom below, which layers customEnabled on top of
-  // this same canAskResearch, not a separate host check).
+  // action: Ask and every Custom Prompt alike, no per-action carve-out.
   export let guestCanAskResearch = false;
 
   $: canAskResearch = isHostClaim || guestCanAskResearch;
-
-  // Whether Custom is configured at all (Research Prompt + Title — see
-  // CONTEXT.md). Set on the create-room page, not per-room. Custom stays
-  // disabled (regardless of canAskResearch) until both are set.
-  export let customEnabled = false;
-  export let customTitle = "";
 
   let activeTabId = null;
   let entriesByTab = {};
@@ -167,16 +149,8 @@
   // Just the Transcript's, for drawing highlights back onto the Turns.
   $: turnAnnotations = visibleAnnotations(annotationsByTab, TRANSCRIPT_TAB_ID);
 
-  // Read by RecordingRoom.svelte via bind:doneActionsByTurn and passed down
-  // into RoomTabs — same "computed here, bound up, handed down as a plain
-  // prop" pattern this file's own `tabTexts` prop follows in reverse (see
-  // this file's `export let tabTexts` doc comment above).
-  export let doneActionsByTurn = {};
-  $: doneActionsByTurn = deriveDoneActionsByTurn(entriesByTab);
-
   $: notesText = activeNotesTabText(tabTexts, activeTabId);
   $: videoTitle = activeTabVideoTitle(tabVideoTitles, activeTabId);
-  $: canCustom = canAskResearch && customEnabled && hasCustomText(notesText, videoTitle);
 
   let questionInput = "";
   let entriesEl;
@@ -284,49 +258,6 @@
       entryId,
       buildManualAskRequest(question, notesText, transcriptLines, videoTitle),
     );
-  }
-
-  function runCustom() {
-    if (!canAskResearch || !customEnabled) return;
-    const request = buildCustomRequest(notesText, transcriptLines, videoTitle);
-    if (!request) return;
-    const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question: customTitle });
-    revealPanel();
-    publishResearchResult(entryId, request);
-  }
-
-  export async function runTurnAction(actionId, turnId) {
-    if (!canAskResearch) return; // same gate as ws-rooms.js's research_ask
-    const request = buildTurnActionRequest(transcriptLines, turnId, actionId);
-    if (!request) return;
-    const entryId = makeResearchEntryId();
-    // turnId/actionId ride along so every peer's `entriesByTab` can derive
-    // "this Turn Action already ran" (see deriveDoneActionsByTurn) — a
-    // manual ask/Custom never sets these, only Turn Actions do.
-    send({
-      type: "research_ask",
-      entryId,
-      question: TURN_ACTION_LABEL[actionId] || actionId,
-      turnId,
-      actionId,
-    });
-    revealPanel();
-    const posted = await postResearch(request);
-    if (!posted.ok) {
-      send({
-        type: "research_error",
-        entryId,
-        message: describeResearchError(posted.body),
-      });
-      return;
-    }
-    send({
-      type: "research_resolve",
-      entryId,
-      answer: posted.body?.answer ?? "",
-      citations: posted.body?.citations ?? [],
-    });
   }
 
   async function postResearch(requestBody) {
@@ -479,19 +410,6 @@
       </form>
     {/if}
 
-    {#if canAskResearch && customEnabled}
-      <button
-        type="button"
-        class="btn-secondary btn-sm"
-        disabled={!canCustom}
-        title={canCustom
-          ? "Run the Research Prompt against this tab and the transcript"
-          : "Custom runs on a notes tab (video title and/or notes — not the Transcript tab)"}
-        on:click={runCustom}
-      >
-        {customTitle}
-      </button>
-    {/if}
     <!-- Annotations (ADR-0008, tickets 03 and 05) — the active tab's,
          newest first. Comments (human) and Cards (a Custom Prompt's answer)
          share ONE list on purpose: they are the same concept, both anchored

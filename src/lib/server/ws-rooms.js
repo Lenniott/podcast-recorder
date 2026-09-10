@@ -102,25 +102,22 @@
  *                                          survive in a stable (arrival)
  *                                          order instead of one silently
  *                                          overwriting the other.
- *   { type: 'research_ask', entryId, question, turnId?, actionId? }
- *                                        — manual "ask a question" (ticket 04;
- *                                          Quick Actions/Voice Trigger, tickets
- *                                          05/06, will reuse this same message).
- *                                          turnId/actionId are set only for a
- *                                          Turn Action ask (TextBlock.svelte's
- *                                          icon row) — carried onto the entry
- *                                          so every peer's `entries` can derive
- *                                          "this Turn Action already ran on
- *                                          this Block" (deriveDoneActionsByTurn
- *                                          in research-panel.js) and keep that
- *                                          icon disabled after a refresh.
+ *   { type: 'research_ask', entryId, question }
+ *                                        — manual "ask a question" (ticket 04).
+ *                                          The Definition/Facts/Answer Turn
+ *                                          Actions that once rode this same
+ *                                          message with a turnId/actionId are
+ *                                          retired (ADR-0008, ticket 07) —
+ *                                          every lookup but typed Ask is now
+ *                                          a Custom Prompt, triggered from a
+ *                                          highlight via annotation_ask
+ *                                          below, never this message.
  *                                          Host-only by default — a guest
  *                                          peer is refused with `error` and
  *                                          no entry is created — unless
  *                                          Guest Research Access is on for
- *                                          this room (see CONTEXT.md);
- *                                          covers Ask, Turn Actions, and
- *                                          Custom alike, one gate.
+ *                                          this room (see CONTEXT.md); the
+ *                                          same gate covers annotation_ask.
  *                                          entryId is client-generated (like
  *                                          tab_create's tabId) so the asking
  *                                          browser can correlate its own later
@@ -960,11 +957,11 @@ export function setupWss(wss) {
 
       if (msg.type === 'research_ask' && clientId) {
         // Host-only by default — a guest can view the panel but not create
-        // an entry (see ResearchPanel.svelte, which hides the ask
-        // form/Turn Actions/Custom from a non-host the same way). One
-        // gate for every Research Assistant action, Custom included — see
-        // Guest Research Access in CONTEXT.md — cached on the peer at
-        // connect (see `guestAiAllowed` above), not re-read per message.
+        // an entry (see ResearchPanel.svelte, which hides the ask form from
+        // a non-host the same way). Same gate as every other Research
+        // Assistant action (annotation_ask included) — see Guest Research
+        // Access in CONTEXT.md — cached on the peer at connect (see
+        // `guestAiAllowed` above), not re-read per message.
         if (peer.role !== 'host' && !peer.guestAiAllowed) {
           send(ws, { type: 'error', message: 'Only the host can ask the Research Assistant.' })
           return
@@ -976,9 +973,7 @@ export function setupWss(wss) {
         const activeTabId = roomStateStore.getRoom(slug).tabs.activeTabId
         const result = roomStateStore.addResearchEntry(slug, activeTabId, {
           id: msg.entryId,
-          question: msg.question,
-          turnId: msg.turnId,
-          actionId: msg.actionId
+          question: msg.question
         })
         if (!result.ok) {
           send(ws, { type: 'error', message: result.error })

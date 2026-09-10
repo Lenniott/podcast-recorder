@@ -7,19 +7,9 @@
 /** Capped so a title still fits the small button a prompt is triggered from. */
 export const CUSTOM_PROMPT_TITLE_MAX_LENGTH = 40
 
-/** A prompt is only runnable when both halves have text — a template with no
- *  title has no button to trigger it from, and a titled empty template has
- *  nothing to send. */
-export function isCustomPromptRunnable(customPrompt) {
-  return (
-    String(customPrompt?.prompt ?? '').trim() !== '' && String(customPrompt?.title ?? '').trim() !== ''
-  )
-}
-
 /**
  * Validates one submitted Custom Prompt. Returns a user-facing message, or
- * '' when the pair is fine. Same rule as isCustomPromptRunnable plus the
- * length cap the input's maxlength enforces in the browser.
+ * '' when the pair is fine.
  */
 export function validateCustomPrompt({ title, prompt }) {
   const cleanTitle = String(title ?? '').trim()

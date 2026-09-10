@@ -3,14 +3,16 @@
  * turns a lookup into `{ answer, citations }`. Callers never see prompt text.
  */
 import { env } from '$env/dynamic/private'
-import { isFreeformMode, matchesMode, MODE_RULES, parseResearchCard, serializeResearchCard, shouldSuppress } from '../research/research-card.js'
+import { serializeResearchCard } from '../research/research-card.js'
 import { appendResearchEvalLog } from './research-eval-log.js'
 import { recordResearchUsage } from './db.js'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const DEFAULT_MODEL = 'openai/gpt-4o-mini'
-const REQUEST_TIMEOUT_MS = 20_000
-const CUSTOM_REQUEST_TIMEOUT_MS = 45_000
+// Every request is freeform now (ADR-0008/ticket 07 retired the fixed
+// Turn Action modes, which used a shorter timeout for their smaller,
+// structured-schema replies) — one timeout for every call.
+const REQUEST_TIMEOUT_MS = 45_000
 
 export class ResearchAssistantError extends Error {
   constructor(code, message) {
@@ -18,27 +20,6 @@ export class ResearchAssistantError extends Error {
     this.name = 'ResearchAssistantError'
     this.code = code
   }
-}
-
-function buildSystemPrompt(pressTimeIso, mode) {
-  return `You are a research assistant. When you receive a FOCUS TURN, that Turn is the subject of your answer. GROUNDING is nearby Turns for resolving references only — never answer about Grounding instead of the Focus Turn.
-
-PRESS_TIME: ${pressTimeIso}
-MODE: ${mode}
-
-Mode-specific rule for ${mode}: ${MODE_RULES[mode]}
-
-Reply with the structured fields the response schema asks for:
-
-provenInTranscript: 0-100. How directly this has already been confirmed, corrected, or settled in Grounding. 0 = never touched on, 100 = already fully resolved on the record.
-ubiquitousKnowledge: 0-100. How well a reasonably informed adult would already know this. 0 = genuinely obscure, 100 = common knowledge.
-outputType: always "${mode}" — the mode you were given above.
-mainTakeaway: max 35 words. One paragraph. Stated as fact. No hedging.
-
-Hard rules:
-- No preamble, no restating the question, no closing remarks.
-- Never cite a source inline — no URLs, no markdown links, no "according to X". Sources you used are reported separately and automatically; naming or linking one yourself is redundant and against the word limit.
-- If nothing survives the mode rule, leave mainTakeaway an empty string and the scores 0 — that combination means "nothing to report".`
 }
 
 // Placeholder substitution (see CONTEXT.md) — the one place every
@@ -188,25 +169,6 @@ function placeholderValues(request, pressTimeIso) {
 function buildMessages(request, pressTime = new Date()) {
   const pressTimeIso = pressTime.toISOString()
 
-  if (request.kind === 'turnAction') {
-    if (!['definition', 'facts', 'answer'].includes(request.actionId)) {
-      throw new ResearchAssistantError('INVALID_REQUEST', `Unknown Turn Action id: ${request.actionId}`)
-    }
-    const mode = request.actionId
-    return {
-      mode,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(pressTimeIso, mode) },
-        {
-          role: 'user',
-          content: [`FOCUS TURN:\n${request.focus}`, request.grounding ? `GROUNDING:\n${request.grounding}` : '']
-            .filter(Boolean)
-            .join('\n\n')
-        }
-      ]
-    }
-  }
-
   if (request.kind === 'custom') {
     // A Custom Prompt's template (see CONTEXT.md) is the whole request — no
     // hardcoded stage structure wraps it any more (see ADR-0006). Whatever
@@ -249,40 +211,10 @@ function buildMessages(request, pressTime = new Date()) {
   throw new ResearchAssistantError('INVALID_REQUEST', `Unknown request kind: ${request?.kind}`)
 }
 
-// Structured-output schema for Turn Actions only — Custom and typed Ask
-// send freeform text (see askResearchAssistant's `isFreeformMode`
-// branch), not parsed field-by-field, so they aren't forced through this.
-// Forcing the shape here (rather than just asking for it in the prompt
-// text) is what stops the model from e.g. echoing a placeholder/wrong
-// value for outputType. There is no `sources` field: the card doesn't
-// self-report citations — `citations` (below, from the web-search plugin's
-// own annotations) is the ground-truth list of what was actually fetched,
-// and asking the model to also name sources just produced a second,
-// looser list that duplicated or contradicted the first.
-function researchCardSchema(mode) {
-  return {
-    type: 'json_schema',
-    json_schema: {
-      name: 'research_card',
-      strict: true,
-      schema: {
-        type: 'object',
-        properties: {
-          provenInTranscript: { type: 'integer', minimum: 0, maximum: 100 },
-          ubiquitousKnowledge: { type: 'integer', minimum: 0, maximum: 100 },
-          outputType: { type: 'string', enum: [mode] },
-          mainTakeaway: { type: 'string' }
-        },
-        required: ['provenInTranscript', 'ubiquitousKnowledge', 'outputType', 'mainTakeaway'],
-        additionalProperties: false
-      }
-    }
-  }
-}
-
-// The unsubstituted Research Prompt (see CONTEXT.md) — logged even when
-// this call did not send it (Turn Actions / Ask), so the Eval Log is a
-// snapshot of what was configured, not only what went to the model.
+// The unsubstituted prompt behind this call (see CONTEXT.md's Custom
+// Prompt) — logged even when it was Ask (no saved prompt at all), so the
+// Eval Log is a snapshot of what was configured, not only what went to
+// the model.
 function researchPromptForLog(request) {
   if (request.kind === 'custom') return String(request.instruction || '')
   return String(request.researchPrompt ?? '')
@@ -300,21 +232,9 @@ function buildRequestBody(request, pressTime) {
       // Asks OpenRouter to report actual cost on `usage.cost` — see
       // ADR-0007 — so the Usage Dashboard doesn't need to price each model
       // itself from a maintained table.
-      usage: { include: true },
-      ...(isFreeformMode(mode) ? {} : { response_format: researchCardSchema(mode) })
+      usage: { include: true }
     }
   }
-}
-
-function suppressReason(card, mode) {
-  if (!card) return 'empty-or-unparseable'
-  if (!matchesMode(card, mode)) return 'mode-mismatch'
-  if (shouldSuppress(card, mode)) {
-    if ((card.provenInTranscript ?? 0) > 80) return 'proven-in-transcript'
-    if (mode === 'definition') return 'ubiquitous-knowledge'
-    return 'suppressed'
-  }
-  return null
 }
 
 export async function askResearchAssistant(request, { fetchImpl = fetch, pressTime = new Date(), roomSlug = null } = {}) {
@@ -327,7 +247,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
   const body = JSON.stringify(requestBody)
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), isFreeformMode(mode) ? CUSTOM_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   const requestedModel = env.OPENROUTER_MODEL || DEFAULT_MODEL
   const startedAt = performance.now()
@@ -378,31 +298,15 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     cost: usageMeta.usage?.cost ?? null
   })
 
-  if (isFreeformMode(mode)) {
-    const card = {
-      provenInTranscript: 0,
-      ubiquitousKnowledge: 0,
-      outputType: mode,
-      mainTakeaway: raw
-    }
-    await appendResearchEvalLog({
-      kind: request.kind,
-      mode,
-      ...usageMeta,
-      researchPrompt: researchPromptForLog(request),
-      messages,
-      raw,
-      card,
-      suppressReason: null,
-      usable: true
-    }, { env })
-    return { answer: serializeResearchCard(card), citations }
+  // Every mode is freeform now (ADR-0008/ticket 07) — the model's raw reply
+  // *is* the takeaway, with none of the retired structured modes' score-
+  // threshold suppression to apply.
+  const card = {
+    provenInTranscript: 0,
+    ubiquitousKnowledge: 0,
+    outputType: mode,
+    mainTakeaway: raw
   }
-
-  const card = parseResearchCard(raw)
-  const reason = suppressReason(card, mode)
-  const usable = !reason
-
   await appendResearchEvalLog({
     kind: request.kind,
     mode,
@@ -411,9 +315,8 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     messages,
     raw,
     card,
-    suppressReason: reason,
-    usable
+    suppressReason: null,
+    usable: true
   }, { env })
-
-  return { answer: serializeResearchCard(usable ? card : null), citations: usable ? citations : [] }
+  return { answer: serializeResearchCard(card), citations }
 }

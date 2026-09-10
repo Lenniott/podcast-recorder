@@ -5,18 +5,14 @@ import {
   applyResearchRemove,
   visibleEntries,
   buildManualAskRequest,
-  buildTurnActionRequest,
-  buildCustomRequest,
   applyTranscriptState,
   applyTranscriptLine,
   activeNotesTabText,
   activeTabVideoTitle,
   formatCurrentTabContext,
-  hasCustomText,
   isSkimVisibleEntry,
   describeResearchError,
   makeResearchEntryId,
-  deriveDoneActionsByTurn,
   dedupeCitationsByHost
 } from '../../src/lib/research/research-panel.js'
 import { TRANSCRIPT_TAB_ID } from '../../src/lib/room/transcript-sync.js'
@@ -189,68 +185,15 @@ describe('applyTranscriptState/applyTranscriptLine', () => {
   })
 })
 
-describe('buildTurnActionRequest', () => {
-  const lines = [
-    { id: 't1', speaker: 'Host', text: 'I only watch TV shows in the summer.', at: 1 },
-    { id: 't2', speaker: 'Guest', text: 'Sometimes I like to watch things on TV and then other times I don\'t.', at: 2 },
-    { id: 't3', speaker: 'Host', text: 'jesus laid in a manager', at: 3 },
-    { id: 't4', speaker: 'Guest', text: 'wait what', at: 4 }
-  ]
-
-  it('uses the Focus Turn as focus and two before plus one after as Grounding', () => {
-    expect(buildTurnActionRequest(lines, 't3', 'facts')).toEqual({
-      kind: 'turnAction',
-      actionId: 'facts',
-      focus: 'Host: jesus laid in a manager',
-      grounding:
-        "Host: I only watch TV shows in the summer.\nGuest: Sometimes I like to watch things on TV and then other times I don't.\nGuest: wait what"
-    })
-  })
-
-  it('omits after-Grounding when the Focus Turn is last', () => {
-    const result = buildTurnActionRequest(lines, 't4', 'definition')
-    expect(result.focus).toBe('Guest: wait what')
-    expect(result.grounding).toBe(
-      "Guest: Sometimes I like to watch things on TV and then other times I don't.\nHost: jesus laid in a manager"
-    )
-  })
-
-  it('returns null for an unknown action or missing Turn', () => {
-    expect(buildTurnActionRequest(lines, 't3', 'bogus')).toBeNull()
-    expect(buildTurnActionRequest(lines, 'missing', 'facts')).toBeNull()
-  })
-})
-
-describe('activeNotesTabText / Custom', () => {
+describe('activeNotesTabText', () => {
   it('returns an ordinary tab\'s own tab_text, never another tab\'s', () => {
     const tabTexts = { tabA: 'Tab A content', tabB: 'Tab B content' }
     expect(activeNotesTabText(tabTexts, 'tabA')).toBe('Tab A content')
     expect(activeNotesTabText(tabTexts, 'tabB')).toBe('Tab B content')
   })
 
-  it('returns empty string for the Transcript tab — Custom does not run on Turns', () => {
+  it('returns empty string for the Transcript tab — a Custom Prompt anchored to a Turn is a separate Annotation path, not this one', () => {
     expect(activeNotesTabText({ [TRANSCRIPT_TAB_ID]: 'nope', tabA: 'notes' }, TRANSCRIPT_TAB_ID)).toBe('')
-  })
-
-  it('buildCustomRequest uses the notes text as lyrics and the Transcript as Stage 2', () => {
-    expect(buildCustomRequest('  hello  ')).toEqual({
-      kind: 'custom',
-      text: 'hello',
-      transcript: '',
-      videoTitle: ''
-    })
-    expect(buildCustomRequest('lyrics', [{ speaker: 'Host', text: 'this is about grief' }])).toEqual({
-      kind: 'custom',
-      text: 'lyrics',
-      transcript: 'Host: this is about grief',
-      videoTitle: ''
-    })
-    expect(buildCustomRequest('')).toBeNull()
-  })
-
-  it('hasCustomText is true only for non-whitespace', () => {
-    expect(hasCustomText('notes')).toBe(true)
-    expect(hasCustomText('   ')).toBe(false)
   })
 })
 
@@ -280,16 +223,6 @@ describe('formatCurrentTabContext / video title', () => {
     expect(activeTabVideoTitle(titles, 'tabA')).toBe('Song A')
     expect(activeTabVideoTitle(titles, 'tabB')).toBe('Song B')
     expect(activeTabVideoTitle(titles, TRANSCRIPT_TAB_ID)).toBe('')
-  })
-
-  it('Custom runs on a video-only tab (title, no notes)', () => {
-    expect(hasCustomText('', 'Never Gonna Give You Up')).toBe(true)
-    expect(buildCustomRequest('', [], 'Never Gonna Give You Up')).toEqual({
-      kind: 'custom',
-      text: 'Video: Never Gonna Give You Up',
-      transcript: '',
-      videoTitle: 'Never Gonna Give You Up'
-    })
   })
 })
 
@@ -334,26 +267,5 @@ describe('dedupeCitationsByHost', () => {
   it('handles a missing/empty citations list', () => {
     expect(dedupeCitationsByHost(undefined)).toEqual([])
     expect(dedupeCitationsByHost([])).toEqual([])
-  })
-})
-
-describe('deriveDoneActionsByTurn', () => {
-  it('groups turn-action entries by turnId, ignoring manual/custom asks with no turnId', () => {
-    const entriesByTab = {
-      transcript: [
-        { id: 'e1', turnId: 't1', actionId: 'definition' },
-        { id: 'e2', turnId: 't1', actionId: 'facts' },
-        { id: 'e3', question: 'a manual question' } // no turnId/actionId
-      ],
-      notesTab: [{ id: 'e4', turnId: 't2', actionId: 'answer' }]
-    }
-    expect(deriveDoneActionsByTurn(entriesByTab)).toEqual({
-      t1: ['definition', 'facts'],
-      t2: ['answer']
-    })
-  })
-
-  it('returns an empty object for no entries anywhere', () => {
-    expect(deriveDoneActionsByTurn({})).toEqual({})
   })
 })

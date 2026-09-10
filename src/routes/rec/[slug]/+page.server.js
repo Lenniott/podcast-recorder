@@ -1,7 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { deleteRoom, getRoomBySlug, listCustomPrompts, listCustomPromptSummaries } from '$lib/server/db.js'
-import { isCustomPromptRunnable } from '$lib/home/custom-prompts.js'
+import { deleteRoom, getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
@@ -41,8 +40,6 @@ export async function load({ params, cookies }) {
   const isHostClaim = getHostClaim(slug, cookies, room, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
-  const [firstCustomPrompt] = listCustomPrompts()
-
   return {
     slug,
     roomName: room.name,
@@ -50,12 +47,6 @@ export async function load({ params, cookies }) {
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
     isHostClaim,
     guestCanAskResearch: !!room.guest_ai_allowed,
-    // The room's single Custom button predates the Custom Prompt list and is
-    // retired by ticket 07, once a highlight can trigger any prompt by id
-    // (ticket 05). Until then it runs the first prompt in the list, so an
-    // existing deployment's one prompt keeps working across this change.
-    customEnabled: isCustomPromptRunnable(firstCustomPrompt),
-    customTitle: firstCustomPrompt?.title ?? '',
     // id + title only — one selection-popup button per Custom Prompt
     // (ADR-0008, ticket 05). Deliberately NOT the template text: the server
     // resolves that by id when an annotation_ask arrives, so a participant's
