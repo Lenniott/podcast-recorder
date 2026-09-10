@@ -214,12 +214,14 @@ describe('Custom Prompt storage', () => {
 
   it('stores and reads a Custom Prompt back by its own id', () => {
     const created = createCustomPrompt({ title: '  Interpret  ', prompt: 'Read {current_tab}.' })
-    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'Interpret', prompt: 'Read {current_tab}.' }])
+    expect(listCustomPrompts()).toEqual([
+      { id: created.id, title: 'Interpret', prompt: 'Read {current_tab}.', outputFormat: 'text' }
+    ])
   })
 
   it('edits in place rather than duplicating', () => {
     const created = createCustomPrompt({ title: 'Interpret', prompt: 'a' })
     updateCustomPrompt(created.id, { title: 'TSIA', prompt: 'b' })
-    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'TSIA', prompt: 'b' }])
+    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'TSIA', prompt: 'b', outputFormat: 'text' }])
   })
 })

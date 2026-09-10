@@ -10,7 +10,16 @@
     PLACEHOLDER_HELP,
   } from "$lib/home/custom-prompts.js";
 
-  /** @type {{ id: string, title: string, prompt: string }[]} */
+  // Reply format (structured-research-output ticket 02, see
+  // research-blocks.js) — a per-prompt toggle, not a deployment-wide
+  // setting: one host's fact-check prompt might want a bulleted list while
+  // another's one-line verdict prompt never would.
+  const OUTPUT_FORMAT_OPTIONS = [
+    { value: "text", label: "Freeform text" },
+    { value: "blocks", label: "Structured blocks" },
+  ];
+
+  /** @type {{ id: string, title: string, prompt: string, outputFormat: string }[]} */
   export let customPrompts = [];
   export let promptError = "";
   /** Which prompt the error belongs to — '' means the new-prompt form. */
@@ -23,6 +32,7 @@
   // long template isn't lost to a rejected title.
   export let draftTitle = "";
   export let draftPrompt = "";
+  export let draftOutputFormat = "text";
 
   let creating = promptErrorId === "new" && !!promptError;
 
@@ -85,17 +95,32 @@
           use:enhance={() => submitting(customPrompt.id, () => (editingId = ""))}
         >
           <input type="hidden" name="custom-prompt-id" value={customPrompt.id} />
-          <div class="field">
-            <label for={`title-${customPrompt.id}`}>Title</label>
-            <input
-              id={`title-${customPrompt.id}`}
-              name="custom-prompt-title"
-              type="text"
-              class="prompt-title-input"
-              maxlength={CUSTOM_PROMPT_TITLE_MAX_LENGTH}
-              placeholder="Button label…"
-              value={customPrompt.title}
-            />
+          <div class="field-row">
+            <div class="field">
+              <label for={`title-${customPrompt.id}`}>Title</label>
+              <input
+                id={`title-${customPrompt.id}`}
+                name="custom-prompt-title"
+                type="text"
+                class="prompt-title-input"
+                maxlength={CUSTOM_PROMPT_TITLE_MAX_LENGTH}
+                placeholder="Button label…"
+                value={customPrompt.title}
+              />
+            </div>
+            <div class="field">
+              <label for={`format-${customPrompt.id}`}>Reply format</label>
+              <select
+                id={`format-${customPrompt.id}`}
+                name="custom-prompt-output-format"
+                class="format-select"
+                value={customPrompt.outputFormat}
+              >
+                {#each OUTPUT_FORMAT_OPTIONS as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </div>
           </div>
           <textarea
             name="custom-prompt-text"
@@ -115,7 +140,12 @@
       {:else}
         <div class="row-summary">
           <div class="row-text">
-            <span class="row-title">{customPrompt.title}</span>
+            <span class="row-title">
+              {customPrompt.title}
+              {#if customPrompt.outputFormat === "blocks"}
+                <span class="format-badge">blocks</span>
+              {/if}
+            </span>
             <span class="row-preview">{customPrompt.prompt}</span>
           </div>
           <div class="row-actions">
@@ -159,17 +189,32 @@
       action="?/create_custom_prompt"
       use:enhance={() => submitting("new", () => (creating = false))}
     >
-      <div class="field">
-        <label for="new-custom-prompt-title">Title</label>
-        <input
-          id="new-custom-prompt-title"
-          name="custom-prompt-title"
-          type="text"
-          class="prompt-title-input"
-          maxlength={CUSTOM_PROMPT_TITLE_MAX_LENGTH}
-          placeholder="Button label…"
-          value={draftTitle}
-        />
+      <div class="field-row">
+        <div class="field">
+          <label for="new-custom-prompt-title">Title</label>
+          <input
+            id="new-custom-prompt-title"
+            name="custom-prompt-title"
+            type="text"
+            class="prompt-title-input"
+            maxlength={CUSTOM_PROMPT_TITLE_MAX_LENGTH}
+            placeholder="Button label…"
+            value={draftTitle}
+          />
+        </div>
+        <div class="field">
+          <label for="new-custom-prompt-format">Reply format</label>
+          <select
+            id="new-custom-prompt-format"
+            name="custom-prompt-output-format"
+            class="format-select"
+            value={draftOutputFormat}
+          >
+            {#each OUTPUT_FORMAT_OPTIONS as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
       <textarea
         name="custom-prompt-text"
@@ -278,8 +323,37 @@
     flex-wrap: wrap;
   }
 
+  .field-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .field-row .field {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
   .prompt-title-input {
     margin-bottom: 12px;
+  }
+
+  .format-select {
+    width: 100%;
+    margin-bottom: 12px;
+    box-sizing: border-box;
+  }
+
+  .format-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border, rgba(148, 163, 184, 0.3));
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 400;
+    vertical-align: middle;
   }
 
   .prompt-input {

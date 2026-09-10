@@ -53,6 +53,14 @@ const FACT_CHECK = {
   prompt: 'Fact-check exactly this and nothing else: {selection}'
 }
 
+// A 'blocks'-format Custom Prompt (structured-research-output ticket 02).
+const HICKS_LAW_BLOCKS = {
+  id: 'cp_hicks',
+  title: 'Explain',
+  prompt: 'Explain {selection} in plain terms.',
+  outputFormat: 'blocks'
+}
+
 function latest(ws, type) {
   return ws.sent.filter((m) => m.type === type).at(-1)
 }
@@ -79,6 +87,12 @@ function assistantReply(takeaway, citations = []) {
   }
 }
 
+/** One structured-output model reply — the `{blocks: [...]}` JSON a
+ *  'blocks'-format request's response_format guarantees (research-blocks.js). */
+function blocksReply(blocks) {
+  return assistantReply(JSON.stringify({ blocks }))
+}
+
 /** Lets the fire-and-forget lookup inside the handler finish before asserting. */
 async function settle() {
   for (let i = 0; i < 10; i++) await Promise.resolve()
@@ -99,7 +113,11 @@ describe('setupWss — highlight → Custom Prompt → Card Annotation (ADR-0008
   beforeEach(() => {
     _resetRooms()
     getCustomPrompt.mockReset()
-    getCustomPrompt.mockImplementation((id) => (id === FACT_CHECK.id ? { ...FACT_CHECK } : null))
+    getCustomPrompt.mockImplementation((id) => {
+      if (id === FACT_CHECK.id) return { ...FACT_CHECK }
+      if (id === HICKS_LAW_BLOCKS.id) return { ...HICKS_LAW_BLOCKS }
+      return null
+    })
     getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
     // A key has to be present or askResearchAssistant refuses before it ever
     // builds a request — this is a stand-in, and the injected fake above is
@@ -358,5 +376,71 @@ describe('setupWss — highlight → Custom Prompt → Card Annotation (ADR-0008
     expect(latest(host, 'annotation_entry').entry.citations).toEqual([
       { url: 'https://en.wikipedia.org/wiki/Apollo_11', title: 'https://en.wikipedia.org/wiki/Apollo_11' }
     ])
+  })
+
+  // A 'blocks'-format Custom Prompt (structured-research-output ticket 02) —
+  // the format is resolved server-side from the stored prompt, exactly like
+  // its template text, never something the wire message controls.
+  describe('a "blocks"-format Custom Prompt', () => {
+    it('attaches the structured-output response_format to the outgoing request', async () => {
+      useAssistant(() => blocksReply([{ type: 'paragraph', text: 'x', items: null, label: null, value: null }]))
+      ask(host, { customPromptId: HICKS_LAW_BLOCKS.id })
+      await settle()
+
+      expect(fetchCalls[0].body.response_format).toEqual(
+        expect.objectContaining({ type: 'json_schema', json_schema: expect.objectContaining({ name: 'research_blocks' }) })
+      )
+    })
+
+    it('a plain "text"-format prompt (FACT_CHECK) attaches no response_format — unaffected by this feature existing', async () => {
+      ask(host)
+      await settle()
+      expect(fetchCalls[0].body.response_format).toBeUndefined()
+    })
+
+    it('resolves the Card with both a structured blocks array and a flattened-text fallback', async () => {
+      useAssistant(() =>
+        blocksReply([
+          { type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.', items: null, label: null, value: null },
+          { type: 'list', text: null, items: ['more options', 'slower decisions'], label: null, value: null }
+        ])
+      )
+      ask(host, { customPromptId: HICKS_LAW_BLOCKS.id })
+      await settle()
+
+      const answered = latest(host, 'annotation_entry').entry
+      expect(answered.status).toBe('answered')
+      expect(answered.blocks).toEqual([
+        { type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.' },
+        { type: 'list', items: ['more options', 'slower decisions'] }
+      ])
+      // A renderer that only knows `text` (today's panel, ahead of ticket 03)
+      // still sees something readable.
+      expect(answered.text).toBe('Hicks Law relates choice count to reaction time.\n\n• more options\n• slower decisions')
+
+      // And a late joiner's replay carries the same structured shape.
+      const rejoiner = mockWs()
+      wss.connect(rejoiner, 'room1'); join(rejoiner, 'Guest', 'c2')
+      expect(latest(rejoiner, 'annotation_state').entries[0].blocks).toEqual(answered.blocks)
+    })
+
+    it('an empty blocks: [] reply errors the Card rather than resolving to a blank one', async () => {
+      useAssistant(() => blocksReply([]))
+      host.sent.length = 0
+      ask(host, { customPromptId: HICKS_LAW_BLOCKS.id })
+      await settle()
+
+      const errored = latest(host, 'annotation_error')
+      expect(errored.entry.status).toBe('errored')
+      expect(errored.entry.blocks).toBe(null)
+    })
+
+    it('a Comment (no Custom Prompt involved) still has blocks: null', async () => {
+      const tabId = activeTabId(host)
+      host.emit('message', JSON.stringify({
+        type: 'annotation_create', tabId, id: 'ann-plain', kind: 'comment', quote: 'a phrase', text: 'just a note'
+      }))
+      expect(latest(host, 'annotation_entry').entry.blocks).toBe(null)
+    })
   })
 })

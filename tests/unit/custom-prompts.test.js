@@ -13,7 +13,9 @@ import db, {
   updateCustomPrompt
 } from '../../src/lib/server/db.js'
 import {
+  CUSTOM_PROMPT_OUTPUT_FORMATS,
   CUSTOM_PROMPT_TITLE_MAX_LENGTH,
+  normalizeOutputFormat,
   validateCustomPrompt
 } from '../../src/lib/home/custom-prompts.js'
 
@@ -35,7 +37,8 @@ describe('Custom Prompt list CRUD', () => {
     expect(getCustomPrompt(created.id)).toEqual({
       id: created.id,
       title: 'Interpret',
-      prompt: 'Read {selection}.'
+      prompt: 'Read {selection}.',
+      outputFormat: 'text'
     })
   })
 
@@ -59,7 +62,8 @@ describe('Custom Prompt list CRUD', () => {
     expect(getCustomPrompt(created.id)).toEqual({
       id: created.id,
       title: 'Interpret',
-      prompt: '  keep  my  spacing  '
+      prompt: '  keep  my  spacing  ',
+      outputFormat: 'text'
     })
   })
 
@@ -70,7 +74,8 @@ describe('Custom Prompt list CRUD', () => {
     expect(getCustomPrompt(created.id)).toEqual({
       id: created.id,
       title: 'Renamed',
-      prompt: 'new text'
+      prompt: 'new text',
+      outputFormat: 'text'
     })
     expect(listCustomPrompts()).toHaveLength(1)
   })
@@ -91,6 +96,59 @@ describe('Custom Prompt list CRUD', () => {
 
   it('reports a delete of an unknown id as a no-op', () => {
     expect(deleteCustomPrompt('cp_nope')).toBe(false)
+  })
+})
+
+// output_format (structured-research-output ticket 02, see
+// research-blocks.js) — defaults to 'text' for zero migration risk on an
+// existing deployment, and normalizes anything unrecognized to 'text' the
+// same way an unknown Placeholder resolves to nothing rather than erroring.
+describe('Custom Prompt output format', () => {
+  it('defaults a newly created prompt to "text" when not specified', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'x' })
+    expect(getCustomPrompt(created.id).outputFormat).toBe('text')
+  })
+
+  it('persists an explicit "blocks" format', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'x', outputFormat: 'blocks' })
+    expect(getCustomPrompt(created.id).outputFormat).toBe('blocks')
+    expect(listCustomPrompts()[0].outputFormat).toBe('blocks')
+  })
+
+  it('normalizes an unrecognized outputFormat to "text" rather than storing garbage', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'x', outputFormat: 'bogus' })
+    expect(getCustomPrompt(created.id).outputFormat).toBe('text')
+  })
+
+  it('updateCustomPrompt can flip the format in either direction, in place', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'x', outputFormat: 'text' })
+
+    expect(updateCustomPrompt(created.id, { title: 'Interpret', prompt: 'x', outputFormat: 'blocks' })).toBe(true)
+    expect(getCustomPrompt(created.id).outputFormat).toBe('blocks')
+
+    expect(updateCustomPrompt(created.id, { title: 'Interpret', prompt: 'x', outputFormat: 'text' })).toBe(true)
+    expect(getCustomPrompt(created.id).outputFormat).toBe('text')
+  })
+
+  it('an update that omits outputFormat resets it to "text" — the form always sends a value, so this is not a real path, only a documented one', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'x', outputFormat: 'blocks' })
+    updateCustomPrompt(created.id, { title: 'Interpret', prompt: 'x' })
+    expect(getCustomPrompt(created.id).outputFormat).toBe('text')
+  })
+})
+
+describe('normalizeOutputFormat', () => {
+  it('passes through every recognized value unchanged', () => {
+    for (const value of CUSTOM_PROMPT_OUTPUT_FORMATS) {
+      expect(normalizeOutputFormat(value)).toBe(value)
+    }
+  })
+
+  it('falls back to "text" for anything else, including missing/null/wrong-type values', () => {
+    expect(normalizeOutputFormat('bogus')).toBe('text')
+    expect(normalizeOutputFormat(undefined)).toBe('text')
+    expect(normalizeOutputFormat(null)).toBe('text')
+    expect(normalizeOutputFormat('')).toBe('text')
   })
 })
 

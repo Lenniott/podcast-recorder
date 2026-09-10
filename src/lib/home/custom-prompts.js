@@ -21,6 +21,21 @@ export function validateCustomPrompt({ title, prompt }) {
   return ''
 }
 
+// Per-prompt output format (structured-research-output ticket 02, see
+// research-blocks.js) — 'text' is today's freeform reply, unchanged; 'blocks'
+// asks the model for typed, renderable containers instead. Shared by the
+// editor (the toggle's allowed values) and db.js (normalizing whatever a row
+// or a form submission actually contains) so the two can't drift on what a
+// legal value is. An unrecognized value — an old row from before this field
+// existed, a tampered form post — normalizes to 'text', never a crash: the
+// same "unknown resolves to the safe default" rule Placeholders themselves
+// already follow.
+export const CUSTOM_PROMPT_OUTPUT_FORMATS = ['text', 'blocks']
+
+export function normalizeOutputFormat(value) {
+  return CUSTOM_PROMPT_OUTPUT_FORMATS.includes(value) ? value : 'text'
+}
+
 /**
  * The Placeholders a prompt author can write, with the one-line description
  * the editor shows. Kept in step with the substitution engine's own set by

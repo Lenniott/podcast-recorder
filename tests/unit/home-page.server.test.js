@@ -298,6 +298,76 @@ describe('+page.server', () => {
       expect(roomsDb.listCustomPrompts()).toMatchObject([{ title: 'Interpret', prompt: 'Read {selection}.' }])
     })
 
+    it('defaults a created Custom Prompt to "text" when the format field is absent', async () => {
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.create_custom_prompt({
+            request: promptForm({ 'custom-prompt-title': 'Interpret', 'custom-prompt-text': 'x' }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.listCustomPrompts()).toMatchObject([{ outputFormat: 'text' }])
+    })
+
+    it('persists an explicit "blocks" format on create', async () => {
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.create_custom_prompt({
+            request: promptForm({
+              'custom-prompt-title': 'Interpret',
+              'custom-prompt-text': 'x',
+              'custom-prompt-output-format': 'blocks'
+            }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.listCustomPrompts()).toMatchObject([{ outputFormat: 'blocks' }])
+    })
+
+    it('normalizes a bogus posted format to "text" rather than storing it', async () => {
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.create_custom_prompt({
+            request: promptForm({
+              'custom-prompt-title': 'Interpret',
+              'custom-prompt-text': 'x',
+              'custom-prompt-output-format': 'bogus'
+            }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.listCustomPrompts()).toMatchObject([{ outputFormat: 'text' }])
+    })
+
+    it('updates the format on an existing Custom Prompt', async () => {
+      const created = roomsDb.createCustomPrompt({ title: 'Interpret', prompt: 'x', outputFormat: 'text' })
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () =>
+          actions.update_custom_prompt({
+            request: promptForm({
+              'custom-prompt-id': created.id,
+              'custom-prompt-title': 'Interpret',
+              'custom-prompt-text': 'x',
+              'custom-prompt-output-format': 'blocks'
+            }),
+            cookies: makeCookies()
+          }),
+        303,
+        '/'
+      )
+      expect(roomsDb.getCustomPrompt(created.id).outputFormat).toBe('blocks')
+    })
+
     it('appends rather than replacing, so the list grows', async () => {
       const { actions } = await loadPage()
       for (const title of ['First', 'Second']) {
@@ -330,7 +400,9 @@ describe('+page.server', () => {
         303,
         '/'
       )
-      expect(roomsDb.listCustomPrompts()).toEqual([{ id: created.id, title: 'New', prompt: 'new text' }])
+      expect(roomsDb.listCustomPrompts()).toEqual([
+        { id: created.id, title: 'New', prompt: 'new text', outputFormat: 'text' }
+      ])
     })
 
     it('deletes a Custom Prompt', async () => {
@@ -413,7 +485,9 @@ describe('+page.server', () => {
           cookies: makeCookies()
         })
         expect(result).toMatchObject({ status: 403, data: { promptError: 'Not authorised.' } })
-        expect(roomsDb.listCustomPrompts()).toEqual([{ id: existing.id, title: 'Kept', prompt: 'kept text' }])
+        expect(roomsDb.listCustomPrompts()).toEqual([
+          { id: existing.id, title: 'Kept', prompt: 'kept text', outputFormat: 'text' }
+        ])
       }
     )
   })

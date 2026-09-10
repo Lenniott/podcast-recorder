@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { blocksResponseSchema, parseBlocks, flattenBlocksToText } from '../../src/lib/research/research-blocks.js'
+import {
+  blocksResponseSchema,
+  parseBlocks,
+  flattenBlocksToText,
+  sanitizeBlockList
+} from '../../src/lib/research/research-blocks.js'
 
 describe('blocksResponseSchema', () => {
   it('is a strict json_schema response_format naming the three block types', () => {
@@ -89,6 +94,51 @@ describe('parseBlocks', () => {
       ]
     })
     expect(parseBlocks(raw)).toEqual([{ type: 'paragraph', text: 'kept' }])
+  })
+})
+
+// sanitizeBlockList (ticket 02) is the seam room-state-store.js's
+// resolveAnnotation calls to re-validate a Block array on its way into room
+// storage — a caller with an array already in hand, not a whole `{blocks}`
+// reply. parseBlocks itself is built on top of it, so its own bounding
+// behavior is covered above; what's worth testing directly here is the
+// "array already in hand" entry point and the length bounds.
+describe('sanitizeBlockList', () => {
+  it('accepts a plain array, not only a {blocks: [...]} wrapper', () => {
+    expect(sanitizeBlockList([{ type: 'paragraph', text: 'x', items: null, label: null, value: null }]))
+      .toEqual([{ type: 'paragraph', text: 'x' }])
+  })
+
+  it('returns null for anything that is not an array', () => {
+    expect(sanitizeBlockList(null)).toBe(null)
+    expect(sanitizeBlockList(undefined)).toBe(null)
+    expect(sanitizeBlockList('not an array')).toBe(null)
+    expect(sanitizeBlockList({ blocks: [] })).toBe(null)
+  })
+
+  it('caps the number of blocks kept, rather than storing an unbounded array', () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({
+      type: 'paragraph',
+      text: `line ${i}`,
+      items: null,
+      label: null,
+      value: null
+    }))
+    const result = sanitizeBlockList(many)
+    expect(result.length).toBe(20)
+    expect(result[0].text).toBe('line 0')
+  })
+
+  it('caps each field length rather than storing an unbounded string', () => {
+    const result = sanitizeBlockList([
+      { type: 'paragraph', text: 'x'.repeat(10_000), items: null, label: null, value: null },
+      { type: 'list', text: null, items: ['y'.repeat(1000)], label: null, value: null },
+      { type: 'stat', text: null, items: null, label: 'z'.repeat(1000), value: 'w'.repeat(1000) }
+    ])
+    expect(result[0].text.length).toBeLessThan(10_000)
+    expect(result[1].items[0].length).toBeLessThan(1000)
+    expect(result[2].label.length).toBeLessThan(1000)
+    expect(result[2].value.length).toBeLessThan(1000)
   })
 })
 

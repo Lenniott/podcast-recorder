@@ -8,7 +8,7 @@ import {
   updateCustomPrompt,
   deleteCustomPrompt
 } from '$lib/server/db.js'
-import { validateCustomPrompt } from '$lib/home/custom-prompts.js'
+import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
@@ -48,7 +48,10 @@ async function readCustomPromptForm(request) {
   return {
     id: String(data.get('custom-prompt-id') || '').trim(),
     title: String(data.get('custom-prompt-title') || '').trim(),
-    prompt: String(data.get('custom-prompt-text') || '')
+    prompt: String(data.get('custom-prompt-text') || ''),
+    // normalizeOutputFormat backstops a tampered/missing field the same way
+    // it backstops an old DB row — never trust a form post's value blindly.
+    outputFormat: normalizeOutputFormat(data.get('custom-prompt-output-format'))
   }
 }
 
@@ -103,23 +106,23 @@ export const actions = {
   // a Host can't edit these mid-show (ADR-0008).
   create_custom_prompt: async ({ request, cookies }) => {
     if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.', promptErrorId: 'new' })
-    const { title, prompt } = await readCustomPromptForm(request)
+    const { title, prompt, outputFormat } = await readCustomPromptForm(request)
     const promptError = validateCustomPrompt({ title, prompt })
     if (promptError) {
       // Hand the draft back so a rejected title doesn't discard the template.
-      return fail(400, { promptError, promptErrorId: 'new', draftTitle: title, draftPrompt: prompt })
+      return fail(400, { promptError, promptErrorId: 'new', draftTitle: title, draftPrompt: prompt, draftOutputFormat: outputFormat })
     }
-    createCustomPrompt({ title, prompt })
+    createCustomPrompt({ title, prompt, outputFormat })
     throw redirect(303, '/')
   },
 
   update_custom_prompt: async ({ request, cookies }) => {
     if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.' })
-    const { id, title, prompt } = await readCustomPromptForm(request)
+    const { id, title, prompt, outputFormat } = await readCustomPromptForm(request)
     if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
     const promptError = validateCustomPrompt({ title, prompt })
     if (promptError) return fail(400, { promptError, promptErrorId: id })
-    if (!updateCustomPrompt(id, { title, prompt })) {
+    if (!updateCustomPrompt(id, { title, prompt, outputFormat })) {
       return fail(404, { promptError: 'That Custom Prompt no longer exists.', promptErrorId: id })
     }
     throw redirect(303, '/')

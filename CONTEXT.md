@@ -143,7 +143,10 @@ Same scope as the old Research Prompt: a deployment-wide list, not
 per-room, set on the create-room page by whoever holds the site password
 (see **Usage Dashboard**), never edited by a room's Host mid-show. Gated
 by **Guest Research Access** exactly like Ask, no special-case host-only
-rule of its own.
+rule of its own. Also carries a per-prompt reply format, "Freeform text"
+(default) or "Structured blocks" — the latter asks for typed **Block**s
+instead of prose; see the reply-shape Block entry below for what that
+constrains and, just as importantly, what it does not.
 _Avoid_: Turn Action, Definition/Facts/Answer, Quick Action, Interpret,
 Interpretation Mode (all retired terms this replaces — see above)
 
@@ -197,12 +200,29 @@ read in a focus state. Newest Cards sit at the top of the panel. Only a
 successful lookup stays as a visible Card; a job miss is written to the
 Research Eval Log and does not leave a "nothing to add" row. While a
 lookup is in flight, a processing block occupies that same top slot so
-it is obvious something is happening.
+it is obvious something is happening. A Card produced by a
+"Structured blocks"-format Custom Prompt also carries a **Block** array
+alongside its flattened-text body — the text is always populated (so
+anything reading only that keeps working), the Blocks are what a renderer
+built for them shows instead.
 _Avoid_: Research Card (old name — the concept is now a kind of
 Annotation, not its own standalone thing), Nothing new to add (as a
 standing history item)
 
-**Block** _(superseded — see ADR-0008)_:
+**Block** _(reused — a second, unrelated concept also uses this name; see
+the retired sense just below before assuming which one a mention means)_:
+One typed, renderable container in a **Card**'s reply — `paragraph`,
+`list`, or `stat` (`src/lib/research/research-blocks.js`) — used only
+when the triggering Custom Prompt's reply format is "Structured blocks"
+rather than the default freeform text. The model is asked for these via
+provider-enforced JSON-schema mode (`strict: true`), not merely asked
+nicely: a reply in this format cannot come back as anything else. Lives
+entirely inside a Card's own content; has nothing to do with Notes'
+structure, unlike the retired sense below.
+_Avoid_: confusing this with the retired Notes-editor Block sense below —
+same word, two different ADR-0008-era ideas that never overlapped in time
+
+**Block (Notes-editor sense)** _(superseded — see ADR-0008)_:
 Was meant as one unit of text in a tab surface: optional label, the text,
 hover actions, with the Transcript's read-only **Turn**s as one example
 and Notes tabs eventually "rebuilt as editable Blocks" as the other.
@@ -210,7 +230,8 @@ That second half never happened: ADR-0008 kept Notes as a single shared,
 freeform text surface and anchored **Annotation**s to arbitrary
 highlighted spans of it instead of restructuring Notes into an array of
 Blocks. A Turn is still one read-only unit of Transcript content; just
-don't call it a Block going forward.
+don't call it a Block going forward. Unrelated to the reply-shape Block
+sense above, which post-dates this one.
 _Avoid_: chunk, section, transcript line (say Turn), textarea row
 
 **Transcript** _(was **Transcript Tab** — see ADR-0008)_:

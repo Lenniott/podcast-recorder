@@ -4,6 +4,7 @@ import { mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { isRoomExpired } from './room-lifetime.js'
 import { removeServerCopiesForRoom } from './server-copy-storage.js'
+import { normalizeOutputFormat } from '../home/custom-prompts.js'
 
 let _db = null
 
@@ -96,6 +97,18 @@ function getDb() {
       created_at INTEGER NOT NULL
     )
   `)
+
+  // Per-prompt output format (structured-research-output ticket 02) — 'text'
+  // (today's freeform reply) or 'blocks' (research-blocks.js's typed
+  // containers). Same ALTER-then-ignore-duplicate-column pattern as
+  // rooms.password_plain/guest_ai_allowed above. Defaults to 'text' so every
+  // Custom Prompt that existed before this column did keeps behaving exactly
+  // as it did before — zero migration risk.
+  try {
+    _db.prepare(`ALTER TABLE custom_prompts ADD COLUMN output_format TEXT NOT NULL DEFAULT 'text'`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
 
   migrateLegacyResearchPrompt(_db)
 
@@ -205,7 +218,9 @@ function makeCustomPromptId() {
 }
 
 function toCustomPrompt(row) {
-  return row ? { id: row.id, title: row.title, prompt: row.prompt } : null
+  return row
+    ? { id: row.id, title: row.title, prompt: row.prompt, outputFormat: normalizeOutputFormat(row.output_format) }
+    : null
 }
 
 /**
@@ -215,7 +230,7 @@ function toCustomPrompt(row) {
  */
 export function listCustomPrompts() {
   return getDb()
-    .prepare('SELECT id, title, prompt FROM custom_prompts ORDER BY position ASC, created_at ASC')
+    .prepare('SELECT id, title, prompt, output_format FROM custom_prompts ORDER BY position ASC, created_at ASC')
     .all()
     .map(toCustomPrompt)
 }
@@ -234,7 +249,9 @@ export function listCustomPromptSummaries() {
 
 /** One Custom Prompt by its stable id — null when there's no such prompt. */
 export function getCustomPrompt(id) {
-  const row = getDb().prepare('SELECT id, title, prompt FROM custom_prompts WHERE id = ?').get(String(id ?? ''))
+  const row = getDb()
+    .prepare('SELECT id, title, prompt, output_format FROM custom_prompts WHERE id = ?')
+    .get(String(id ?? ''))
   return toCustomPrompt(row) || null
 }
 
@@ -249,22 +266,27 @@ export function getCustomPromptTemplate(id) {
 }
 
 /** Appends a Custom Prompt to the end of the list; returns the created row. */
-export function createCustomPrompt({ title, prompt }) {
+export function createCustomPrompt({ title, prompt, outputFormat }) {
   const db = getDb()
   const nextPosition = (db.prepare('SELECT MAX(position) AS max FROM custom_prompts').get()?.max ?? -1) + 1
-  const record = { id: makeCustomPromptId(), title: String(title ?? '').trim(), prompt: String(prompt ?? '') }
+  const record = {
+    id: makeCustomPromptId(),
+    title: String(title ?? '').trim(),
+    prompt: String(prompt ?? ''),
+    outputFormat: normalizeOutputFormat(outputFormat)
+  }
   db.prepare(`
-    INSERT INTO custom_prompts (id, title, prompt, position, created_at) VALUES (?, ?, ?, ?, ?)
-  `).run(record.id, record.title, record.prompt, nextPosition, Date.now())
+    INSERT INTO custom_prompts (id, title, prompt, position, created_at, output_format) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(record.id, record.title, record.prompt, nextPosition, Date.now(), record.outputFormat)
   return record
 }
 
 /** Retitles/rewrites one Custom Prompt in place — its id is unchanged, so a
  *  prompt stays the same prompt to anything holding a reference to it. */
-export function updateCustomPrompt(id, { title, prompt }) {
+export function updateCustomPrompt(id, { title, prompt, outputFormat }) {
   return getDb()
-    .prepare('UPDATE custom_prompts SET title = ?, prompt = ? WHERE id = ?')
-    .run(String(title ?? '').trim(), String(prompt ?? ''), String(id ?? '')).changes > 0
+    .prepare('UPDATE custom_prompts SET title = ?, prompt = ?, output_format = ? WHERE id = ?')
+    .run(String(title ?? '').trim(), String(prompt ?? ''), normalizeOutputFormat(outputFormat), String(id ?? '')).changes > 0
 }
 
 export function deleteCustomPrompt(id) {

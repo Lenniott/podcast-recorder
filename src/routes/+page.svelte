@@ -87,6 +87,7 @@
                 promptErrorId={form?.promptErrorId ?? ""}
                 draftTitle={form?.draftTitle ?? ""}
                 draftPrompt={form?.draftPrompt ?? ""}
+                draftOutputFormat={form?.draftOutputFormat ?? "text"}
               />
             </div>
           {:else}

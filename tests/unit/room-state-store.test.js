@@ -771,13 +771,16 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
     const { ok, entry } = store.addAnnotation('room1', tabId, valid)
     expect(ok).toBe(true)
     expect(Object.keys(entry).sort()).toEqual([
-      'at', 'author', 'citations', 'customPromptId', 'error', 'id', 'kind', 'quote', 'status', 'tabId', 'text'
+      'at', 'author', 'blocks', 'citations', 'customPromptId', 'error', 'id', 'kind', 'quote', 'status', 'tabId', 'text'
     ])
     expect(entry).toMatchObject({
       id: 'a1', tabId, kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host',
       // A Comment is complete the instant it is submitted — it is born
       // answered and nothing ever moves it (unlike a Card, below).
-      status: 'answered', error: null, citations: [], customPromptId: null
+      status: 'answered', error: null, citations: [], customPromptId: null,
+      // Structured output (ticket 02) never applies to a Comment — a person
+      // typed this, there was no Research Assistant call to structure.
+      blocks: null
     })
     expect(typeof entry.at).toBe('number')
   })
@@ -849,6 +852,62 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
     expect(resolved.entry.citations).toEqual([
       { url: 'https://en.wikipedia.org/wiki/Apollo_11', title: 'Apollo 11' }
     ])
+  })
+
+  // Structured Block output (structured-research-output ticket 02, see
+  // research-blocks.js) — resolveAnnotation's own extra param, sanitized
+  // again on the way into storage rather than trusted as already clean.
+  it('resolveAnnotation stores a sanitized blocks array alongside the flattened text fallback', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    const resolved = store.resolveAnnotation('room1', 'c1', {
+      text: 'Hicks Law relates choice count to reaction time.',
+      citations: [],
+      blocks: [{ type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.', items: null, label: null, value: null }]
+    })
+    expect(resolved.ok).toBe(true)
+    expect(resolved.entry.blocks).toEqual([
+      { type: 'paragraph', text: 'Hicks Law relates choice count to reaction time.' }
+    ])
+    // The flattened-text fallback is still there — a renderer that only
+    // knows `entry.text` (today's panel, ahead of ticket 03) is unaffected.
+    expect(resolved.entry.text).toBe('Hicks Law relates choice count to reaction time.')
+  })
+
+  it('resolveAnnotation stores null blocks for a plain "text"-format Card — no field left over from a previous resolve', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    const resolved = store.resolveAnnotation('room1', 'c1', { text: 'a plain answer', citations: [] })
+    expect(resolved.entry.blocks).toBe(null)
+  })
+
+  it('resolveAnnotation re-sanitizes blocks rather than trusting the caller — bounds and drops malformed entries the same way research-blocks.js does', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    const resolved = store.resolveAnnotation('room1', 'c1', {
+      text: 'kept',
+      citations: [],
+      blocks: [
+        { type: 'not-a-real-type', text: 'dropped', items: null, label: null, value: null },
+        { type: 'paragraph', text: 'kept block', items: null, label: null, value: null }
+      ]
+    })
+    expect(resolved.entry.blocks).toEqual([{ type: 'paragraph', text: 'kept block' }])
+  })
+
+  it('errorAnnotation clears blocks along with text/citations — a failed lookup leaves nothing stale behind', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, card)
+    store.resolveAnnotation('room1', 'c1', {
+      text: 'first answer',
+      citations: [],
+      blocks: [{ type: 'paragraph', text: 'first answer', items: null, label: null, value: null }]
+    })
+    // A Card only ever moves once through resolve/error in real use, but
+    // errorAnnotation's own job is "never leave stale content behind" —
+    // worth asserting directly rather than only via the pending-Card path.
+    const errored = store.errorAnnotation('room1', 'c1', { message: 'boom' })
+    expect(errored.entry.blocks).toBe(null)
   })
 
   it('refuses to resolve a Card to an empty answer — a blank row explains nothing', () => {

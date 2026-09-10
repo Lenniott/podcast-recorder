@@ -29,6 +29,7 @@ import {
   normalizeQuote,
   upsertAnnotation
 } from '../research/annotation-sync.js'
+import { sanitizeBlockList } from '../research/research-blocks.js'
 
 const DEFAULT_GRACE_MS = 10_000
 
@@ -485,6 +486,14 @@ export function createRoomStateStore({
         status: awaitingAnswer ? 'pending' : 'answered',
         error: null,
         citations: [],
+        // Structured reply (structured-research-output ticket 02, see
+        // research-blocks.js) — null for a Comment, a 'text'-format Card,
+        // or any Card predating this field; set only by resolveAnnotation
+        // below when the triggering Custom Prompt asked for 'blocks'.
+        // `text` still carries a flattened-text fallback either way (see
+        // resolveAnnotation) — ticket 03's renderer is what actually
+        // prefers `blocks` over it once it exists.
+        blocks: null,
         // Which Custom Prompt produced this Card, kept so a later ticket can
         // tell two Cards on the same quote apart; null for a Comment.
         customPromptId: customPromptId ? String(customPromptId).slice(0, 64) : null,
@@ -507,9 +516,24 @@ export function createRoomStateStore({
     return null
   }
 
-  /** The Research Assistant answered a pending Card. Mirrors
-   *  resolveResearchEntry — `quote`, `author` and `at` are untouched. */
-  function resolveAnnotation(slug, annotationId, { text, citations } = {}) {
+  /**
+   * The Research Assistant answered a pending Card. Mirrors
+   * resolveResearchEntry — `quote`, `author` and `at` are untouched.
+   *
+   * `blocks` (structured-research-output ticket 02) is optional — undefined
+   * for a Comment or a 'text'-format Card, an already-parsed/sanitized
+   * Block array (research-blocks.js's askResearchAssistant return value) for
+   * a 'blocks'-format one. Re-sanitized here via sanitizeBlockList rather
+   * than trusted as-is: same "never trust length/shape beyond what's
+   * already checked" discipline sanitizeCitations applies to `citations`
+   * just below, even though both have already been validated once upstream.
+   * `text` is required and non-empty regardless of format — a 'blocks'
+   * request's `answer` is research-assistant.js's own flattened-text
+   * fallback, so a structured Card is never blocks-only: anything that only
+   * knows how to read `entry.text` (today's panel rendering, ahead of
+   * ticket 03; the Eval Log; a future export) keeps working unchanged.
+   */
+  function resolveAnnotation(slug, annotationId, { text, citations, blocks } = {}) {
     return withRoom(slug, (content) => {
       const found = findAnnotation(content, String(annotationId || ''))
       if (!found) return { ok: false, error: 'Unknown annotation' }
@@ -520,6 +544,7 @@ export function createRoomStateStore({
       entry.status = 'answered'
       entry.text = answer
       entry.citations = sanitizeCitations(citations)
+      entry.blocks = sanitizeBlockList(blocks)
       entry.error = null
       return { ok: true, room: content, entry, tabId: found.tabId }
     })
@@ -540,6 +565,7 @@ export function createRoomStateStore({
       entry.error = String(message || 'Something went wrong.').slice(0, MAX_ANNOTATION_ANSWER_LEN)
       entry.text = ''
       entry.citations = []
+      entry.blocks = null
       return { ok: true, room: content, entry, tabId: found.tabId }
     })
   }

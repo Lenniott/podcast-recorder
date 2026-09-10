@@ -33,6 +33,20 @@
 
 const BLOCK_TYPES = ['paragraph', 'list', 'stat']
 
+// Storage bounds (structured-research-output ticket 02) — applied by
+// sanitizeBlock below on every path a Block array reaches, not only a
+// freshly-parsed model reply: room-state-store.js's resolveAnnotation calls
+// sanitizeBlockList again on the way into storage, same "never trust length
+// beyond what's already checked" discipline sanitizeCitations
+// (research-sync.js) applies to citations. Generous but bounded, same
+// reasoning as MAX_ANNOTATION_ANSWER_LEN (annotation-sync.js).
+const MAX_BLOCKS_PER_REPLY = 20
+const MAX_BLOCK_TEXT_LEN = 4000
+const MAX_BLOCK_LIST_ITEMS = 30
+const MAX_BLOCK_ITEM_LEN = 500
+const MAX_BLOCK_LABEL_LEN = 100
+const MAX_BLOCK_VALUE_LEN = 300
+
 function blockItemSchema() {
   return {
     type: 'object',
@@ -71,25 +85,45 @@ export function blocksResponseSchema() {
 /** Sanitizes one block from a parsed reply. Returns null for an
  *  unrecognized type or one whose required content is blank — the model
  *  signals "nothing here" the same way empty-mainTakeaway already does for
- *  freeform replies, just per-block instead of for the whole reply. */
+ *  freeform replies, just per-block instead of for the whole reply. Every
+ *  string field is also length-capped here (see the bounds above) so this
+ *  one function is the single place a Block gets bounded, whether it just
+ *  arrived from a model reply (parseBlocks) or is being re-validated on its
+ *  way into room storage (sanitizeBlockList, called again by
+ *  room-state-store.js's resolveAnnotation). */
 function sanitizeBlock(raw) {
   const type = raw?.type
   if (type === 'paragraph') {
-    const text = String(raw.text ?? '').trim()
+    const text = String(raw.text ?? '').trim().slice(0, MAX_BLOCK_TEXT_LEN)
     return text ? { type, text } : null
   }
   if (type === 'list') {
     const items = (Array.isArray(raw.items) ? raw.items : [])
-      .map((item) => String(item ?? '').trim())
+      .slice(0, MAX_BLOCK_LIST_ITEMS)
+      .map((item) => String(item ?? '').trim().slice(0, MAX_BLOCK_ITEM_LEN))
       .filter(Boolean)
     return items.length ? { type, items } : null
   }
   if (type === 'stat') {
-    const label = String(raw.label ?? '').trim()
-    const value = String(raw.value ?? '').trim()
+    const label = String(raw.label ?? '').trim().slice(0, MAX_BLOCK_LABEL_LEN)
+    const value = String(raw.value ?? '').trim().slice(0, MAX_BLOCK_VALUE_LEN)
     return label && value ? { type, label, value } : null
   }
   return null
+}
+
+/**
+ * Sanitizes an already-parsed array of (raw or previously-sanitized) blocks
+ * — the seam a caller uses when it has a Block array in hand rather than a
+ * whole `{blocks: [...]}` reply (parseBlocks below is the latter; it calls
+ * this once it has unwrapped `blocks`). Bounds the array length too, not
+ * just each block's own fields. Not `Array.isArray` → null, same "nothing
+ * to report" convention as an empty result.
+ */
+export function sanitizeBlockList(list) {
+  if (!Array.isArray(list)) return null
+  const sanitized = list.slice(0, MAX_BLOCKS_PER_REPLY).map(sanitizeBlock).filter(Boolean)
+  return sanitized.length ? sanitized : null
 }
 
 /**
@@ -106,10 +140,7 @@ export function parseBlocks(raw) {
   } catch {
     return null
   }
-  const list = Array.isArray(parsed?.blocks) ? parsed.blocks : null
-  if (!list) return null
-  const sanitized = list.map(sanitizeBlock).filter(Boolean)
-  return sanitized.length ? sanitized : null
+  return sanitizeBlockList(parsed?.blocks)
 }
 
 /**

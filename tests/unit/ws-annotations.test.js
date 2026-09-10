@@ -247,7 +247,7 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     // record, so the check is "every key is a known, non-positional one"
     // rather than an exact list that a new Annotation kind invalidates.
     const CORE_KEYS = ['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text']
-    const CARD_KEYS = ['status', 'citations', 'customPromptId', 'error']
+    const CARD_KEYS = ['status', 'citations', 'customPromptId', 'error', 'blocks']
     for (const entry of entries) {
       const keys = Object.keys(entry)
       expect(CORE_KEYS.every((k) => keys.includes(k))).toBe(true)

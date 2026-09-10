@@ -359,7 +359,7 @@
  *                                          Mirrors research_entry exactly.
  *                                          `entry` is `{id, tabId, kind,
  *                                          quote, text, status, error,
- *                                          citations, customPromptId,
+ *                                          citations, blocks, customPromptId,
  *                                          author, at}`; `kind` is
  *                                          'comment' (a person typed it) or
  *                                          'card' (a Custom Prompt produced
@@ -374,7 +374,15 @@
  *                                          anything, and an Annotation whose
  *                                          quote has since been edited out
  *                                          of Notes still exists and still
- *                                          shows that quote.
+ *                                          shows that quote. `blocks` (see
+ *                                          research-blocks.js) is null unless
+ *                                          the triggering Custom Prompt asked
+ *                                          for structured output and the
+ *                                          reply had something to report —
+ *                                          `text` always carries a readable
+ *                                          fallback either way, so a renderer
+ *                                          that only reads `text` is never
+ *                                          wrong, only plainer.
  *   { type: 'annotation_state', tabId, entries }
  *                                        — one tab's full Annotation list so
  *                                          far, in creation order; sent once
@@ -552,7 +560,7 @@ export function _setResearchFetchForTests(fetchImpl) {
  * Custom Prompt plus a resolved `{selection}`, instead of the one global
  * prompt plus the whole active tab.
  */
-async function runAnnotationAsk(slug, { annotationId, template, selection, currentTab, transcript, videoTitle }) {
+async function runAnnotationAsk(slug, { annotationId, template, selection, currentTab, transcript, videoTitle, outputFormat }) {
   const finish = (result, extra = null) => {
     if (!result.ok) return
     const msg = extra
@@ -562,22 +570,26 @@ async function runAnnotationAsk(slug, { annotationId, template, selection, curre
   }
 
   try {
-    const request = buildCustomPromptRequest({ template, selection, currentTab, transcript, videoTitle })
+    const request = buildCustomPromptRequest({ template, selection, currentTab, transcript, videoTitle, outputFormat })
     if (!request) {
       finish(roomStateStore.errorAnnotation(slug, annotationId, { message: 'That prompt is no longer configured.' }),
         'That prompt is no longer configured.')
       return
     }
-    const { answer, citations } = await askResearchAssistant(request, {
+    const { answer, citations, blocks } = await askResearchAssistant(request, {
       roomSlug: slug,
       // undefined lets askResearchAssistant fall back to the runtime's fetch.
       fetchImpl: researchFetchImpl ?? undefined
     })
     // askResearchAssistant hands back a serialized research card; a Card
     // Annotation's body is the takeaway itself, so the panel renders one
-    // the same way it renders a Comment.
+    // the same way it renders a Comment. For a 'blocks'-format Custom
+    // Prompt, `mainTakeaway` is already the flattened-text fallback (see
+    // research-assistant.js) — `blocks` alongside it is the structured
+    // shape ticket 03's renderer will prefer once it exists; until then the
+    // panel's existing text rendering is exactly this fallback.
     const text = parseResearchCard(answer)?.mainTakeaway ?? ''
-    const resolved = roomStateStore.resolveAnnotation(slug, annotationId, { text, citations })
+    const resolved = roomStateStore.resolveAnnotation(slug, annotationId, { text, citations, blocks })
     if (resolved.ok) {
       finish(resolved)
       return
@@ -1108,7 +1120,12 @@ export function setupWss(wss) {
           selection: result.entry.quote,
           currentTab: msg.currentTab,
           transcript: msg.transcript,
-          videoTitle: msg.videoTitle
+          videoTitle: msg.videoTitle,
+          // Which reply shape this Custom Prompt asks for (structured-
+          // research-output ticket 02) — resolved server-side from the
+          // stored prompt, same as the template text itself; never
+          // something a participant's message could override.
+          outputFormat: customPrompt.outputFormat
         })
       }
 
