@@ -70,14 +70,47 @@ const MAX_PLACEHOLDER_VALUE_LEN = 20_000
 
 /**
  * The Placeholder names a template actually writes (unknown `{words}` are
- * ignored, exactly as applyPlaceholders leaves them alone).
+ * ignored, exactly as applyPlaceholders leaves them alone). Counts a name
+ * used only inside a `{#if name}` condition (see resolveConditionalBlocks)
+ * as referenced too — evaluating that condition needs the ingredient just
+ * as much as interpolating `{name}` does, and skipping it here would mean
+ * buildCustomPromptRequest silently withholds the one value the condition
+ * needs to ever come out true.
  */
 export function referencedPlaceholders(template) {
+  const text = String(template || '')
   const names = new Set()
-  for (const [, name] of String(template || '').matchAll(/\{(\w+)\}/g)) {
+  for (const [, name] of text.matchAll(/\{(\w+)\}/g)) {
+    if (PLACEHOLDERS[name]) names.add(name)
+  }
+  for (const [, name] of text.matchAll(/\{#if\s+(\w+)\}/g)) {
     if (PLACEHOLDERS[name]) names.add(name)
   }
   return names
+}
+
+/**
+ * `{#if name}...{/if}` — keeps the block's text when `name`'s Placeholder
+ * resolved to something non-blank, drops the whole block (markers and all)
+ * otherwise. An unknown placeholder name is always falsy — a typo should
+ * never silently show content gated on nothing. One level only: this does
+ * not support nesting one `{#if}` inside another (a non-greedy match pairs
+ * each opener with the *next* `{/if}` it finds), because nothing asked for
+ * that yet — an `{#if}` written inside another is left partially resolved
+ * rather than crashing, but the result won't be what a nested reading of it
+ * implies.
+ *
+ * Runs before the plain `{name}` substitution pass in applyPlaceholders, so
+ * a dropped block's own placeholders are simply discarded with it rather
+ * than resolved and then thrown away — not that it would matter either way,
+ * since both passes read from the same `resolved` values.
+ */
+function resolveConditionalBlocks(template, resolved) {
+  return String(template || '').replace(/\{#if\s+(\w+)\}([\s\S]*?)\{\/if\}/g, (_match, name, body) => {
+    const key = PLACEHOLDERS[name]
+    const truthy = !!key && String(resolved[key] ?? '').trim() !== ''
+    return truthy ? body : ''
+  })
 }
 
 /**
@@ -143,7 +176,9 @@ export function applyPlaceholders(template, values = {}) {
       ? { ...values, latestTranscript: latestTranscriptWindow(values.transcript) }
       : values
 
-  return String(template || '').replace(/\{(\w+)\}/g, (match, name) => {
+  const withConditionals = resolveConditionalBlocks(template, resolved)
+
+  return withConditionals.replace(/\{(\w+)\}/g, (match, name) => {
     const key = PLACEHOLDERS[name]
     return key ? String(resolved[key] ?? '') : match
   })

@@ -53,6 +53,9 @@
     highlighted excerpt. The title is its button label. Write Placeholders into
     the prompt text to pull in room context — an unset one resolves to nothing
     at all, so a prompt that names only {"{selection}"} sees only the highlight.
+    Wrap a line in <code>{"{#if name}"}</code>…<code>{"{/if}"}</code> (bare
+    name, no braces inside) to include it only when that Placeholder isn't
+    blank — e.g. <code>{"{#if transcript}Context: {transcript}{/if}"}</code>.
   </p>
   <ul class="placeholders">
     {#each PLACEHOLDER_HELP as placeholder (placeholder.name)}

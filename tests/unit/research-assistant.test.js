@@ -279,6 +279,51 @@ describe('applyPlaceholders', () => {
   })
 })
 
+// `{#if name}...{/if}` — a host asked for this after finding {latest_transcript}
+// always printed something even with nothing recent to show.
+describe('applyPlaceholders — {#if name}...{/if} conditional blocks', () => {
+  it('keeps the block when the named Placeholder resolved to non-blank text', () => {
+    expect(applyPlaceholders('Before. {#if transcript}Context: {transcript}.{/if} After.', { transcript: 'Host: hi' }))
+      .toBe('Before. Context: Host: hi. After.')
+  })
+
+  it('drops the whole block, markers included, when the Placeholder is unset', () => {
+    expect(applyPlaceholders('Before. {#if transcript}Context: {transcript}.{/if} After.', {}))
+      .toBe('Before.  After.')
+  })
+
+  it('treats a whitespace-only value the same as unset', () => {
+    expect(applyPlaceholders('{#if selection}Selected: {selection}{/if}', { selection: '   ' })).toBe('')
+  })
+
+  it('an unknown name inside {#if} is always falsy, never a silent pass', () => {
+    expect(applyPlaceholders('{#if not_a_real_placeholder}shown{/if}', {})).toBe('')
+  })
+
+  it('a bare Placeholder outside any block resolves independently of a same-named condition elsewhere', () => {
+    expect(applyPlaceholders('{selection} — {#if selection}yes{/if}', { selection: 'the hook' }))
+      .toBe('the hook — yes')
+  })
+
+  it('{latest_transcript} inside its own condition avoids always printing something with nothing recent to show', () => {
+    expect(applyPlaceholders('{#if latest_transcript}Recently: {latest_transcript}{/if}', { transcript: '' })).toBe('')
+    expect(applyPlaceholders('{#if latest_transcript}Recently: {latest_transcript}{/if}', { transcript: 'Host: hi' }))
+      .toBe('Recently: Host: hi')
+  })
+
+  it('handles more than one block in the same template independently', () => {
+    const template = '{#if selection}Sel: {selection}. {/if}{#if transcript}Ctx: {transcript}.{/if}'
+    expect(applyPlaceholders(template, { selection: 'x' })).toBe('Sel: x. ')
+    expect(applyPlaceholders(template, { transcript: 'y' })).toBe('Ctx: y.')
+    expect(applyPlaceholders(template, { selection: 'x', transcript: 'y' })).toBe('Sel: x. Ctx: y.')
+  })
+
+  it('a template with no {#if} blocks at all is unaffected', () => {
+    expect(applyPlaceholders('Just {selection}, nothing conditional.', { selection: 'x' }))
+      .toBe('Just x, nothing conditional.')
+  })
+})
+
 describe('latestTranscriptWindow', () => {
   it('is the whole transcript when it is shorter than the limit', () => {
     expect(latestTranscriptWindow('Host: hello there')).toBe('Host: hello there')
@@ -614,6 +659,18 @@ describe('referencedPlaceholders', () => {
     expect([...referencedPlaceholders('')]).toEqual([])
     expect([...referencedPlaceholders(null)]).toEqual([])
   })
+
+  // A name used only inside {#if name} still needs its ingredient carried —
+  // otherwise the condition is withheld the value it exists to check.
+  it('counts a name used only inside {#if name} as referenced', () => {
+    expect([...referencedPlaceholders('{#if transcript}there was some talk{/if}')])
+      .toEqual(['transcript'])
+  })
+
+  it('reports a name referenced both plainly and inside a condition once', () => {
+    expect([...referencedPlaceholders('{#if selection}About: {selection}{/if}')])
+      .toEqual(['selection'])
+  })
 })
 
 describe('buildCustomPromptRequest — a prompt only ever receives what it asked for', () => {
@@ -702,6 +759,20 @@ describe('buildCustomPromptRequest — a prompt only ever receives what it asked
     expect(buildCustomPromptRequest({ template: '   ', ...everything })).toBe(null)
     expect(buildCustomPromptRequest({ template: null })).toBe(null)
     expect(buildCustomPromptRequest()).toBe(null)
+  })
+
+  // {#if transcript} only works if the transcript ingredient actually
+  // reaches the model — otherwise the condition can never see a value to
+  // check and always resolves false.
+  it('carries an ingredient referenced only inside {#if}, so the condition can actually see it', async () => {
+    const request = buildCustomPromptRequest({
+      template: '{#if transcript}Given {transcript}, is {selection} settled?{/if}',
+      ...everything
+    })
+    expect(request.transcript).toBe('Host: we have not talked about this yet')
+    expect(await sentMessages(request)).toEqual([
+      { role: 'user', content: 'Given Host: we have not talked about this yet, is the second verse settled?' }
+    ])
   })
 
   it('bounds every ingredient it does carry', () => {

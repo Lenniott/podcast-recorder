@@ -111,6 +111,13 @@ from. The set (see ADR-0008 for the four added there):
 - `{latest_transcript}` — the last ~700 words of the Transcript, a
   bounded recent window (contrast `{transcript}`, which is everything).
 - `{current_time}` — wall-clock time at request time.
+
+`{#if name}...{/if}` (bare Placeholder name, no braces inside) wraps a span
+of a prompt's own text and keeps it only when that Placeholder resolved to
+something non-blank — dropping the markers and the text alike otherwise.
+One level only, no `{:else}` — a name used only inside a condition still
+counts as referenced, so it isn't withheld from the request before the
+condition can ever see it.
 _Avoid_: prop (collides with Svelte component props, used constantly
 elsewhere in this codebase), token, variable
 
