@@ -33,6 +33,7 @@
   } from "./annotation-panel.js";
   import { formatTranscriptForPrompt } from "$lib/room/selection-annotations.js";
   import TranscriptFacet from "./TranscriptFacet.svelte";
+  import BlockList from "./BlockList.svelte";
   import { TRANSCRIPT_TAB_ID } from "$lib/room/transcript-sync.js";
 
   // (payload) => void — JSON-sends over the room's single WebSocket
@@ -506,6 +507,14 @@
                 </p>
               {:else if status === "errored"}
                 <p class="annotation-error-text">{annotation.error}</p>
+              {:else if annotation.blocks?.length}
+                <!-- Structured Block output (structured-research-output
+                     ticket 03) — only taken when a 'blocks'-format Card
+                     actually has something structured to show; every other
+                     Comment/Card (which is all of them predating this
+                     ticket) falls through to the unchanged plain-text
+                     branch below. -->
+                <BlockList blocks={annotation.blocks} />
               {:else}
                 <p class="annotation-text">{annotation.text}</p>
               {/if}
@@ -565,14 +574,24 @@
                 Looking this up…
               </p>
             {:else if entry.status === "answered"}
-              {@const card = parseResearchCard(entry.answer)}
-              {#if card}
-                {#if card.outputType === "custom" || card.outputType === "ask"}
-                  <div class="research-interpretation">{card.mainTakeaway}</div>
-                {:else}
-                  <div class="research-card">
-                    <p class="research-answer">{card.mainTakeaway}</p>
-                  </div>
+              {#if entry.blocks?.length}
+                <!-- Structured Block output (structured-research-output
+                     ticket 03) — only taken when a 'blocks'-format panel
+                     Custom Prompt actually has something structured to
+                     show; every typed-Ask/'text'-format entry (all of
+                     them predating this ticket) falls through to the
+                     unchanged parseResearchCard branch below. -->
+                <BlockList blocks={entry.blocks} />
+              {:else}
+                {@const card = parseResearchCard(entry.answer)}
+                {#if card}
+                  {#if card.outputType === "custom" || card.outputType === "ask"}
+                    <div class="research-interpretation">{card.mainTakeaway}</div>
+                  {:else}
+                    <div class="research-card">
+                      <p class="research-answer">{card.mainTakeaway}</p>
+                    </div>
+                  {/if}
                 {/if}
               {/if}
               {#if entry.citations?.length}

@@ -348,6 +348,15 @@ export function createRoomStateStore({
         status: 'pending',
         answer: null,
         citations: [],
+        // Structured reply (structured-research-output ticket 03, mirroring
+        // addAnnotation's own `blocks` field above) — null for a typed Ask
+        // (which never produces one) or a 'text'-format Custom Prompt run
+        // from a panel button; set only by resolveResearchEntry below when
+        // the triggering Custom Prompt asked for 'blocks'. `answer` still
+        // carries a flattened-text fallback either way (see
+        // resolveResearchEntry) — the panel's renderer is what actually
+        // prefers `blocks` over it once present.
+        blocks: null,
         error: null,
         at: Date.now()
       }
@@ -360,7 +369,20 @@ export function createRoomStateStore({
     })
   }
 
-  function resolveResearchEntry(slug, entryId, { answer, citations } = {}) {
+  /**
+   * The Research Assistant answered a pending entry. Mirrors resolveAnnotation
+   * above — `question` and `at` are untouched.
+   *
+   * `blocks` (structured-research-output ticket 03) is optional — undefined
+   * for a typed Ask or a 'text'-format Custom Prompt run from a panel
+   * button, an already-parsed/sanitized Block array (research-blocks.js's
+   * askResearchAssistant return value) for a 'blocks'-format one.
+   * Re-sanitized here via sanitizeBlockList rather than trusted as-is — same
+   * "never trust length/shape beyond what's already checked" discipline
+   * resolveAnnotation applies to its own `blocks` param, even though it has
+   * already been validated once upstream (research-blocks.js's parseBlocks).
+   */
+  function resolveResearchEntry(slug, entryId, { answer, citations, blocks } = {}) {
     return withRoom(slug, (content) => {
       const found = findResearchEntry(content, String(entryId || ''))
       if (!found) return { ok: false, error: 'Unknown research entry' }
@@ -369,6 +391,7 @@ export function createRoomStateStore({
       entry.status = 'answered'
       entry.answer = String(answer || '').slice(0, MAX_RESEARCH_ANSWER_LEN)
       entry.citations = sanitizeCitations(citations)
+      entry.blocks = sanitizeBlockList(blocks)
       entry.error = null
       return { ok: true, room: content, entry, tabId: found.tabId }
     })
@@ -387,6 +410,7 @@ export function createRoomStateStore({
       // above.
       entry.error = String(message || 'Something went wrong.').slice(0, MAX_RESEARCH_ANSWER_LEN)
       entry.answer = null
+      entry.blocks = null
       return { ok: true, room: content, entry, tabId: found.tabId }
     })
   }

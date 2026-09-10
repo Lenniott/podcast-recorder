@@ -128,12 +128,20 @@
  *                                          client-supplied) — this is what
  *                                          keeps an entry strictly scoped to
  *                                          whichever Tab was active at ask time.
- *   { type: 'research_resolve', entryId, answer, citations }
+ *   { type: 'research_resolve', entryId, answer, citations, blocks? }
  *                                        — sent by the asking client once its
  *                                          own POST /rec/[slug]/research call
  *                                          (ticket 02's endpoint) succeeds.
  *                                          Moves that entry from pending to
- *                                          answered for every peer.
+ *                                          answered for every peer. `blocks`
+ *                                          (structured-research-output
+ *                                          ticket 03) is accepted for
+ *                                          consistency with research_entry's
+ *                                          shape below but typed Ask's own
+ *                                          client-driven path never sends one
+ *                                          today — it's always a `kind:
+ *                                          'voice'` request, never a
+ *                                          'blocks'-format 'custom' one.
  *   { type: 'research_error', entryId, message }
  *                                        — sent by the asking client when that
  *                                          same request fails for any reason
@@ -359,9 +367,19 @@
  *                                          the server is the single source of
  *                                          truth for entry status. `entry` is
  *                                          `{id, tabId, question, status,
- *                                          answer, citations, error, at}`;
- *                                          `status` is 'pending' | 'answered'
- *                                          | 'errored'.
+ *                                          answer, citations, blocks,
+ *                                          error, at}`; `status` is 'pending'
+ *                                          | 'answered' | 'errored'. `blocks`
+ *                                          (see research-blocks.js;
+ *                                          structured-research-output ticket
+ *                                          03) is null unless the triggering
+ *                                          panel-button Custom Prompt asked
+ *                                          for structured output and the
+ *                                          reply had something to report —
+ *                                          `answer` always carries a readable
+ *                                          flattened-text fallback either
+ *                                          way, mirroring annotation_entry's
+ *                                          own `blocks`/`text` pair below.
  *   { type: 'research_state',   tabId, entries }
  *                                        — one tab's full research history so
  *                                          far, in order; sent once per tab
@@ -664,7 +682,7 @@ async function runResearchPromptAsk(slug, { entryId, template, currentTab, trans
       finish(roomStateStore.errorResearchEntry(slug, entryId, { message: 'That prompt is no longer configured.' }))
       return
     }
-    const { answer, citations } = await askResearchAssistant(request, {
+    const { answer, citations, blocks } = await askResearchAssistant(request, {
       roomSlug: slug,
       fetchImpl: researchFetchImpl ?? undefined
     })
@@ -677,7 +695,13 @@ async function runResearchPromptAsk(slug, { entryId, template, currentTab, trans
       finish(roomStateStore.errorResearchEntry(slug, entryId, { message: CUSTOM_PROMPT_ASK_ERRORS.EMPTY_ANSWER }))
       return
     }
-    finish(roomStateStore.resolveResearchEntry(slug, entryId, { answer, citations }))
+    // For a 'blocks'-format Custom Prompt, `answer` is already the
+    // flattened-text fallback (see research-assistant.js) — `blocks`
+    // alongside it is the structured shape the panel's renderer prefers
+    // once present (structured-research-output ticket 03). Same
+    // "pass the parsed result straight through, storage re-sanitizes it"
+    // shape runAnnotationAsk already uses above.
+    finish(roomStateStore.resolveResearchEntry(slug, entryId, { answer, citations, blocks }))
   } catch (e) {
     const message = CUSTOM_PROMPT_ASK_ERRORS[e?.code] || CUSTOM_PROMPT_ASK_GENERIC_ERROR
     finish(roomStateStore.errorResearchEntry(slug, entryId, { message }))
@@ -1126,7 +1150,13 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'research_resolve' && clientId) {
-        const result = roomStateStore.resolveResearchEntry(slug, msg.entryId, { answer: msg.answer, citations: msg.citations })
+        // `msg.blocks` passed through for consistency with runResearchPromptAsk
+        // above (structured-research-output ticket 03) even though typed
+        // Ask's own client-driven path never sends one today (it's always a
+        // `kind: 'voice'` request, never 'custom') — resolveResearchEntry
+        // re-sanitizes it regardless, so an absent/malformed value is
+        // harmless either way.
+        const result = roomStateStore.resolveResearchEntry(slug, msg.entryId, { answer: msg.answer, citations: msg.citations, blocks: msg.blocks })
         if (!result.ok) {
           send(ws, { type: 'error', message: result.error })
           return

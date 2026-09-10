@@ -479,6 +479,10 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
       status: 'pending',
       answer: null,
       citations: [],
+      // Structured reply (structured-research-output ticket 03) — null until
+      // resolveResearchEntry stores a 'blocks'-format Custom Prompt's reply,
+      // mirroring addAnnotation's own `blocks: null` at birth.
+      blocks: null,
       error: null
     })
     expect(result.room.research.tabA).toEqual([result.entry])
@@ -531,6 +535,8 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
       status: 'answered',
       answer: 'A haiku is a three-line Japanese poem.',
       citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }],
+      // No blocks passed in — a typed Ask never produces one.
+      blocks: null,
       error: null
     })
     expect(store.getRoom('room1').research.tabA[0]).toEqual(result.entry)
@@ -548,9 +554,72 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
       id: 'e1',
       status: 'errored',
       answer: null,
+      blocks: null,
       error: 'The Research Assistant could not be reached.'
     })
     expect(store.getRoom('room1').research.tabA[0]).toEqual(result.entry)
+  })
+
+  // Structured Block output (structured-research-output ticket 03, see
+  // research-blocks.js) — mirrors ticket 02's own Annotation coverage above:
+  // resolveResearchEntry's `blocks` param is re-sanitized on the way into
+  // storage, never trusted as already clean.
+  describe('Structured Block output (mirrors resolveAnnotation/errorAnnotation)', () => {
+    it('resolveResearchEntry stores a sanitized blocks array alongside the flattened text fallback', () => {
+      const store = createRoomStateStore({ durable: fakeDurable() })
+      store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Daily recap' })
+
+      const result = store.resolveResearchEntry('room1', 'e1', {
+        answer: 'Talked about the tour dates.',
+        citations: [],
+        blocks: [{ type: 'paragraph', text: 'Talked about the tour dates.', items: null, label: null, value: null }]
+      })
+
+      expect(result.ok).toBe(true)
+      expect(result.entry.blocks).toEqual([{ type: 'paragraph', text: 'Talked about the tour dates.' }])
+      // The flattened-text fallback is still there — a renderer that only
+      // knows `entry.answer` is unaffected.
+      expect(result.entry.answer).toBe('Talked about the tour dates.')
+    })
+
+    it('resolveResearchEntry stores null blocks for a plain "text"-format prompt or typed Ask — no field left over from a previous resolve', () => {
+      const store = createRoomStateStore({ durable: fakeDurable() })
+      store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'What is a haiku?' })
+      const result = store.resolveResearchEntry('room1', 'e1', { answer: 'a plain answer', citations: [] })
+      expect(result.entry.blocks).toBe(null)
+    })
+
+    it('resolveResearchEntry re-sanitizes blocks rather than trusting the caller — bounds and drops malformed entries the same way research-blocks.js does', () => {
+      const store = createRoomStateStore({ durable: fakeDurable() })
+      store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Daily recap' })
+
+      const result = store.resolveResearchEntry('room1', 'e1', {
+        answer: 'kept',
+        citations: [],
+        blocks: [
+          { type: 'not-a-real-type', text: 'dropped', items: null, label: null, value: null },
+          { type: 'paragraph', text: 'kept block', items: null, label: null, value: null }
+        ]
+      })
+      expect(result.entry.blocks).toEqual([{ type: 'paragraph', text: 'kept block' }])
+    })
+
+    it('errorResearchEntry clears blocks along with answer — a failed lookup leaves nothing stale behind', () => {
+      const store = createRoomStateStore({ durable: fakeDurable() })
+      store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'Daily recap' })
+      store.resolveResearchEntry('room1', 'e1', {
+        answer: 'first answer',
+        citations: [],
+        blocks: [{ type: 'paragraph', text: 'first answer', items: null, label: null, value: null }]
+      })
+
+      // A research entry only ever moves once through resolve/error in real
+      // use, but errorResearchEntry's own job is "never leave stale content
+      // behind" — worth asserting directly rather than only via the
+      // pending-entry path.
+      const errored = store.errorResearchEntry('room1', 'e1', { message: 'boom' })
+      expect(errored.entry.blocks).toBe(null)
+    })
   })
 
   it('rejects resolving/erroring an unknown entry id', () => {

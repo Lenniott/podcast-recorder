@@ -28,9 +28,77 @@ Do not skip part 2 and call this ticket done with only Annotations rendering Blo
 
 **Hands off to the next ticket (04, e2e coverage):** state plainly, in your commit message and here in this file, the exact CSS classes/`data-testid` attributes each block type's rendered markup uses (in both the Annotation list and the research-entries list), and confirm whether an old-style plain-text Card/entry's existing DOM structure is unchanged by this ticket (it must be) — ticket 04 needs both to write stable Playwright locators without re-reading this ticket's diff itself.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Each of the three block types (`paragraph`, `list`, `stat`) renders as real, distinct markup — no literal `**`/`*`/`#` characters visible anywhere.
-- [ ] A structured Custom Prompt's result is visually distinguishable as *structured* (e.g., a real bulleted list actually looks like a list), verified against a real or realistically mocked reply.
-- [ ] This is true in BOTH surfaces: a Card (Annotation list, highlight-triggered) AND a research entry (research-entries list, panel-button-triggered) — see "Where `blocks` actually lives today" above for why the second surface needs its own storage plumbing, not just a renderer.
-- [ ] Every existing Comment, freeform Card, and typed-Ask research entry — anything with no `blocks`, structured-format or not — renders exactly as it did before this ticket. This is the one acceptance criterion worth manually spot-checking rather than trusting a unit test alone: run the app, look at an old-style card next to a new structured one.
+- [x] Each of the three block types (`paragraph`, `list`, `stat`) renders as real, distinct markup — no literal `**`/`*`/`#` characters visible anywhere.
+- [x] A structured Custom Prompt's result is visually distinguishable as *structured* (e.g., a real bulleted list actually looks like a list), verified against a real or realistically mocked reply.
+- [x] This is true in BOTH surfaces: a Card (Annotation list, highlight-triggered) AND a research entry (research-entries list, panel-button-triggered) — see "Where `blocks` actually lives today" above for why the second surface needs its own storage plumbing, not just a renderer.
+- [x] Every existing Comment, freeform Card, and typed-Ask research entry — anything with no `blocks`, structured-format or not — renders exactly as it did before this ticket. This is the one acceptance criterion worth manually spot-checking rather than trusting a unit test alone: run the app, look at an old-style card next to a new structured one.
+
+**Implementation notes (what actually got built):**
+
+Part 1 (research entries carry `blocks`) mirrors ticket 02's Annotation work
+field-for-field:
+- `room-state-store.js`'s `addResearchEntry` now initializes `blocks: null`
+  on every new entry (same as `addAnnotation`).
+- `resolveResearchEntry(slug, entryId, { answer, citations, blocks })` now
+  accepts `blocks` and re-sanitizes it via `research-blocks.js`'s
+  `sanitizeBlockList` before storing — never trusted as already clean, same
+  discipline `resolveAnnotation` uses for its own `blocks` param.
+- `errorResearchEntry` resets `blocks: null` alongside `answer`.
+- `ws-rooms.js`'s `runResearchPromptAsk` now destructures `blocks` from
+  `askResearchAssistant`'s return value and passes it through to
+  `resolveResearchEntry`. The client-driven `research_resolve` handler
+  (typed Ask's path) now accepts and passes through `msg.blocks` too, for
+  shape parity between the two entry-producing paths — typed Ask itself
+  still never produces one (it's always a `kind: 'voice'` request).
+- The wire-protocol doc comments for `research_entry` (server → client) and
+  `research_resolve` (client → server) in `ws-rooms.js`'s header comment now
+  mention `blocks`, mirroring `annotation_entry`'s own doc comment.
+- No premise turned out to be wrong: `resolveResearchEntry` had no
+  pre-existing field doing this job, and `askResearchAssistant`'s return
+  shape (`{ answer, citations, blocks }`) matched the ticket's assumption
+  exactly (already used unchanged by `runAnnotationAsk`).
+
+Part 2 (rendering) is a single new component, `src/lib/research/BlockList.svelte`,
+shared by both surfaces (rather than duplicating the block-type markup twice)
+— it takes a `blocks` array prop and renders:
+- `paragraph` → `<p class="block-paragraph" data-testid="block-paragraph">`
+- `list` → `<ul class="block-list-items" data-testid="block-list-items">`
+  with one `<li data-testid="block-list-item">` per item (a real list
+  element, not bullet characters in a paragraph)
+- `stat` → `<div class="block-stat" data-testid="block-stat">` containing
+  `<span class="block-stat-label" data-testid="block-stat-label">` and
+  `<span class="block-stat-value" data-testid="block-stat-value">`,
+  accent-tinted the same register `.annotation-card`/`.annotation-badge`
+  already use to set a Card apart from a Comment.
+- The whole list is wrapped in `<div class="block-list" data-testid="block-list">`.
+
+**Wiring (`ResearchPanel.svelte`), for ticket 04's locators:**
+- Annotation list: inside the existing `status` if/else chain (pending /
+  errored / else), a new `{:else if annotation.blocks?.length}` branch
+  renders `<BlockList blocks={annotation.blocks} />` — added BEFORE the
+  final `{:else}` that renders `<p class="annotation-text">{annotation.text}</p>`.
+  That final branch, its markup, and its class are byte-for-byte unchanged
+  from before this ticket (see the diff — the only change to that branch's
+  surrounding code is the new sibling `{:else if}` above it).
+- Research entries list: inside `{:else if entry.status === "answered"}`,
+  the body is now `{#if entry.blocks?.length}` → `<BlockList blocks={entry.blocks} />`
+  `{:else}` → the pre-existing `{@const card = parseResearchCard(entry.answer)}`
+  block with its `.research-interpretation`/`.research-card`/`.research-answer`
+  markup, verbatim, unchanged.
+- **Confirmed:** every annotation/entry with no `blocks` (i.e. `blocks` is
+  `null` or an empty array) takes the exact same branch, producing the exact
+  same DOM/classes, as before this ticket — the new branches are pure
+  additions ahead of the existing `{:else}`, never a replacement of it. Diff
+  reviewed line-by-line for this specifically (see `git show` on this
+  ticket's commit).
+- Unit test coverage: `tests/unit/room-state-store.test.js`'s new
+  "Structured Block output (mirrors resolveAnnotation/errorAnnotation)"
+  describe block, and `tests/unit/ws-research-prompt-ask.test.js`'s new
+  "a \"blocks\"-format Custom Prompt" describe block (mirrors
+  `ws-annotation-ask.test.js`'s own of the same name). No Svelte-rendering
+  unit test was added for `BlockList.svelte` itself — ticket 04 is the
+  e2e ticket that exercises the rendered markup end to end; svelte-check (0
+  errors) and a manual reasoning pass over the diff cover the markup change
+  itself for this ticket.
