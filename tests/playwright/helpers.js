@@ -292,6 +292,168 @@ export async function mockResearchEndpoint(page, { status = 200, body = { answer
   )
 }
 
+/**
+ * Creates one Custom Prompt through the real, site-password-gated Usage
+ * Dashboard UI (ticket 04) — the deployment-wide config every room's
+ * highlight popup (selection-annotations.js's customPromptActions) and
+ * panel buttons (research-panel.js's panelPromptButtons) read from. There
+ * is no per-room scoping to worry about: a prompt created here is visible
+ * to every room created afterward, in whichever of those two lists its own
+ * template (does it reference `{selection}`?) puts it in — see CONTEXT.md's
+ * **Custom Prompt** entry.
+ *
+ * `outputFormat` is the exact `<select name="custom-prompt-output-format">`
+ * value CustomPromptListEditor.svelte defines: `'text'` (Freeform, the
+ * unchanged pre-ticket-03 rendering) or `'blocks'` (structured Block
+ * output, ticket 03's renderer). Title must stay under
+ * CUSTOM_PROMPT_TITLE_MAX_LENGTH (40 chars) — callers should pass a short,
+ * unique label (e.g. with a Date.now() suffix) since a Custom Prompt is
+ * global, persistent config, not scoped to one test's room.
+ *
+ * Returns the prompt's title (its only caller-visible handle — ids are
+ * server-generated and never surfaced in this form), for locating its
+ * button afterward and for passing to deleteCustomPrompt for cleanup.
+ */
+/**
+ * Switches the home page from its Dashboard tab to its Custom Prompts tab
+ * (+page.svelte's local `openTab`). Retried the same way openCreateRoom
+ * retries "New room" above: the first click after a cold `npm run dev`
+ * compile of the home route can land before this button's on:click is
+ * hydrated, in which case openTab never flips and the dashboard stays put
+ * with no error — so wait for the editor's own heading, not just the click
+ * resolving, and click again if it didn't show up yet.
+ */
+async function openPromptsTab(page) {
+  const promptsBtn = page.getByRole('button', { name: 'Prompts', exact: true })
+  await expect(promptsBtn).toBeVisible()
+  await expect(async () => {
+    await promptsBtn.click()
+    await expect(page.getByRole('heading', { name: 'Custom Prompts' })).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
+}
+
+export async function createCustomPrompt(page, { title, prompt, outputFormat = 'text' }) {
+  await page.goto('/')
+  await unlockIfNeeded(page)
+  await openPromptsTab(page)
+  await page.getByRole('button', { name: 'New Custom Prompt', exact: true }).click()
+  await fillField(page.locator('#new-custom-prompt-title'), title)
+  await page.locator('#new-custom-prompt-format').selectOption(outputFormat)
+  await page.locator('textarea[name="custom-prompt-text"]').fill(prompt)
+  await page.getByRole('button', { name: 'Add Custom Prompt', exact: true }).click()
+  // Saving redirects to '/' (see +page.server.js's create_custom_prompt
+  // action); the new row appearing is the real signal the save landed and
+  // customPrompts was refetched, not just that the button was clicked.
+  await expect(page.locator('.prompt-row', { hasText: title })).toBeVisible({ timeout: 15_000 })
+  return title
+}
+
+/**
+ * Removes one Custom Prompt created by createCustomPrompt above, through
+ * the same real UI — e2e cleanup so a repeated local `npm run test:e2e`
+ * against the same gitignored e2e-rooms.db doesn't accumulate stale global
+ * prompts across runs (unlike a room, a Custom Prompt has no TTL/eviction
+ * of its own).
+ */
+export async function deleteCustomPrompt(page, title) {
+  await page.goto('/')
+  await unlockIfNeeded(page)
+  await openPromptsTab(page)
+  const row = page.locator('.prompt-row', { hasText: title })
+  await expect(row).toBeVisible()
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row).toHaveCount(0)
+}
+
+/**
+ * Intercepts the room's own WebSocket to fake an "answered" outcome for a
+ * Custom Prompt run from either surface — annotation_ask (a highlight's
+ * Card) or research_prompt_ask (a panel button's research entry) — ticket
+ * 04's two WS-driven Research Assistant paths.
+ *
+ * **Why this exists, and why it is NOT the token-spend guard** (read this
+ * before changing it): unlike typed Ask's POST /rec/[slug]/research, which
+ * mockResearchEndpoint above intercepts before it ever leaves the browser,
+ * both of these paths are fully server-resolved (ws-rooms.js's
+ * runAnnotationAsk/runResearchPromptAsk) — the real askResearchAssistant()
+ * call, fetch and all, happens entirely inside the separate `npm run dev`
+ * process Playwright's webServer spawns (concurrently's "vite dev" + "node
+ * server-ws-dev.js"). There is no browser-visible HTTP request here for
+ * page.route() (or this function) to catch *before* it is attempted. The
+ * actual, non-negotiable guard against a real token being spent on these
+ * two paths is playwright.config.js's webServer env blanking
+ * OPENROUTER_API_KEY: askResearchAssistant() throws NOT_CONFIGURED before
+ * any network I/O whenever that key is unset (research-assistant.js), for
+ * every request kind, every time — the same fact
+ * research_endpoint_status.spec.js's own "not configured" test relies on
+ * and self-skips against if a reused `npm run dev` happens to have a real
+ * key in its `.env`.
+ *
+ * What this function adds on top of that guard: every real server-side
+ * step still runs for real (Guest Research Access gating, the pending
+ * entry's genuine creation/broadcast) — only the *second* broadcast frame,
+ * the one carrying that already-harmlessly-failed NOT_CONFIGURED outcome,
+ * is rewritten from 'errored' into a synthetic 'answered' entry carrying
+ * the given text/blocks/citations. That is what lets a test assert on
+ * real, specific rendered markup for a chosen outcome (plain text, or a
+ * given Block array) without the outcome depending on a real model reply —
+ * while the fetch that would spend a real token still never happens on
+ * either code path, key or no key.
+ *
+ * `outcomesByTitle`: `{ [customPromptTitle]: { answer, citations, blocks } }`
+ * — matched against `entry.question` (a research entry) or `entry.author`
+ * (a Card), both of which ws-rooms.js stamps as the triggering Custom
+ * Prompt's own title. A frame whose title isn't a key in this map (a typed
+ * Ask's research entry, some other prompt) is forwarded unchanged, error
+ * and all — so a test that wants to see a real, unmocked failure still can.
+ *
+ * A small artificial delay precedes only the rewritten frame (mirroring
+ * mockResearchEndpointDelayed's own reasoning in research_panel.spec.js) so
+ * the real, genuinely-broadcast pending entry has a moment to be observed
+ * before the mocked resolution lands — the NOT_CONFIGURED failure this
+ * stands in for would otherwise resolve within the same tick it went
+ * pending, too fast for a polling assertion to reliably catch.
+ */
+export async function mockCustomPromptOutcomes(page, outcomesByTitle, { delayMs = 250 } = {}) {
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((raw) => {
+      const text = typeof raw === 'string' ? raw : String(raw)
+      let msg
+      try {
+        msg = JSON.parse(text)
+      } catch {
+        ws.send(raw)
+        return
+      }
+      const isResearchEntry = msg.type === 'research_entry'
+      // A failed annotation_ask broadcasts 'annotation_error', not
+      // 'annotation_entry' (see ws-rooms.js's runAnnotationAsk) — both wire
+      // types funnel into the same upsert client-side (annotation-panel.js's
+      // applyAnnotationError just calls applyAnnotationEntry), so rewriting
+      // the entry payload alone, keeping the original message `type`, is
+      // enough; there is no need to also rename the wire type.
+      const isAnnotationError = msg.type === 'annotation_error'
+      const entry = msg.entry
+      const title = isResearchEntry ? entry?.question : isAnnotationError ? entry?.author : null
+      const outcome = title != null ? outcomesByTitle[title] : null
+      if (!outcome || entry?.status !== 'errored') {
+        ws.send(raw)
+        return
+      }
+      const mockedEntry = {
+        ...entry,
+        status: 'answered',
+        error: null,
+        citations: outcome.citations || [],
+        blocks: outcome.blocks || null,
+        ...(isResearchEntry ? { answer: outcome.answer ?? '' } : { text: outcome.answer ?? '' })
+      }
+      setTimeout(() => ws.send(JSON.stringify({ ...msg, entry: mockedEntry })), delayMs)
+    })
+  })
+}
+
 export async function expandPresenceTable(page) {
   const overlay = page.locator('.check-overlay')
   if (await overlay.isVisible()) {

@@ -23,11 +23,53 @@
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Popup/panel placement (item 1) is covered and passing.
-- [ ] Guest gating on a panel button (item 2) is covered and passing.
-- [ ] A panel-triggered prompt produces a visible, answered research entry (item 3).
-- [ ] Each of the three Block types renders as real markup in BOTH surfaces (item 4), with an assertion that would actually fail if a future change silently reverted to plain text (not just "the text is present somewhere").
-- [ ] The pre-existing plain-text path (item 5) has its own explicit, specific assertion — not just "no error was thrown."
-- [ ] The new spec(s) pass under `npm run test:e2e` and, on inspection, cannot reach a real OpenRouter call under any code path exercised.
+- [x] Popup/panel placement (item 1) is covered and passing.
+- [x] Guest gating on a panel button (item 2) is covered and passing.
+- [x] A panel-triggered prompt produces a visible, answered research entry (item 3).
+- [x] Each of the three Block types renders as real markup in BOTH surfaces (item 4), with an assertion that would actually fail if a future change silently reverted to plain text (not just "the text is present somewhere").
+- [x] The pre-existing plain-text path (item 5) has its own explicit, specific assertion — not just "no error was thrown."
+- [x] The new spec(s) pass under `npm run test:e2e` and, on inspection, cannot reach a real OpenRouter call under any code path exercised.
+
+**Implementation notes:**
+
+New spec `tests/playwright/research_custom_prompts.spec.js`, 4 tests covering
+all 5 items (guest gating and the entry-produced check share one test, since
+proving the gate also requires proving the host's click actually works).
+Helpers added to `tests/playwright/helpers.js`: `createCustomPrompt`/
+`deleteCustomPrompt` (drive the real, site-password-gated Usage Dashboard UI
+— never insert directly into the DB) and `mockCustomPromptOutcomes`.
+
+**The one non-obvious piece, worth recording so nobody re-derives it the hard
+way:** `annotation_ask` and `research_prompt_ask` are fully server-resolved
+(ws-rooms.js) — there is no browser-visible HTTP request for `page.route()`
+to intercept the way `mockResearchEndpoint` intercepts typed Ask's POST. The
+actual, non-negotiable token-spend guard for those two paths is
+`playwright.config.js`'s `webServer.env.OPENROUTER_API_KEY: ''`, which makes
+`askResearchAssistant()` throw `NOT_CONFIGURED` before any network I/O, for
+every request kind, every time. `mockCustomPromptOutcomes` uses
+`page.routeWebSocket` to rewrite that already-harmlessly-failed outcome's WS
+frame into a chosen "answered" one (text or `{blocks}`), so assertions can be
+specific and deterministic without ever touching a real key or a real
+network call.
+
+**A real ordering bug this surfaced and fixed:** `page.routeWebSocket` only
+intercepts WebSocket connections opened *after* it's registered — never
+retroactively. The first draft of this spec called `mockCustomPromptOutcomes`
+*after* `createRoom`/`joinAsGuest`, which had already opened the room's
+socket; the mock silently never applied, so the entry received the real
+(unmocked) `NOT_CONFIGURED` error and stayed `errored` instead of moving to
+`answered` — 3 of 4 tests failed on this before the fix. It must be
+registered right after `stubYouTubeApi(page)`, before any `createRoom`/
+`joinAsGuest` call on that page. Verified fixed: a full clean single-instance
+`npx playwright test tests/playwright/research_custom_prompts.spec.js` run
+(4/4 passing) and a full `npm run test:e2e` run (59 passed, 1 pre-existing
+unrelated skip, 0 failures, including this file's 4 tests at their real
+position in the suite).
+
+Note for whoever runs this next in a sandboxed container: `npm run test:e2e`
+needs a local `.env` with `SECRET` set (gitignored, never committed) and, if
+the sandbox's Chromium revision doesn't match the pinned `@playwright/test`
+version, a temporary local-only `executablePath: '/opt/pw-browsers/chromium'`
+in `playwright.config.js`'s `launchOptions` — never commit that change.
