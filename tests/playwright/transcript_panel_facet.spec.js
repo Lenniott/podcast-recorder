@@ -162,14 +162,18 @@ test('highlighting a Turn offers the same Comment popup Notes has, and files the
   })
 
   // The complete popup, identical to the one Notes text raises.
+  // Two visible "Comment" controls share the popup: the action that opens
+  // the form, and the form's submit. Same split as annotation_highlight.
   const popup = host.getByTestId('selection-popup')
   await expect(popup).toBeVisible()
-  await popup.getByRole('button', { name: /Comment/ }).first().click()
+  await popup.locator('[data-action-id="comment"]').click()
   await host.getByTestId('selection-comment-input').fill('check this date')
-  await popup.getByRole('button', { name: 'Comment', exact: true }).click()
+  await popup.locator('button[type="submit"]').click()
 
-  // It lands in the shared feed as an ordinary Annotation, quoting the
-  // Turn — and reaches the guest, who never touched the Transcript.
+  // The feed lives on the Annotations facet; the Transcript facet only
+  // draws the quote back onto the Turn. Flip to the feed to see the row —
+  // filing a Comment does not move this browser's facet (ADR-0008).
+  await annotationsFacetButton(host).click()
   await expect(host.getByTestId('annotation')).toHaveCount(1)
   await expect(host.getByTestId('annotation')).toContainText('We recorded this in the summer.')
   await expect(host.getByTestId('annotation')).toContainText('check this date')
@@ -177,6 +181,7 @@ test('highlighting a Turn offers the same Comment popup Notes has, and files the
   await expect(guest.getByTestId('annotation')).toContainText('check this date')
 
   // The quote is drawn back onto the Turn it came from.
+  await transcriptFacetButton(host).click()
   await expect(host.locator('.transcript-line mark.turn-highlight')).toHaveCount(1)
 
   await guest.close()

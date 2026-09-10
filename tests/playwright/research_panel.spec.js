@@ -95,9 +95,11 @@ test('research history is scoped per tab: switching tabs shows a different, empt
   await expect(page.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
 
   // A brand-new tab starts with its own, empty research history.
+  // `.research-empty` is also used for the Annotations empty copy, so
+  // match the research-history sentence — not the class.
   await page.getByRole('button', { name: 'Add tab' }).click()
   await expect(page.getByRole('button', { name: 'Tab 2', exact: true })).toBeVisible()
-  await expect(page.locator('.research-empty')).toBeVisible()
+  await expect(page.getByText('No research yet for this tab.')).toBeVisible()
   await expect(page.locator('.research-entry')).toHaveCount(0)
 
   // Switching back to the first tab shows its entry again.
