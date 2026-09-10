@@ -8,7 +8,7 @@
   }
 </script>
 
-<div class="card form-card">
+<div class="card form-card center-card">
   <h2>Private Instance</h2>
   <p class="sub">Enter the site password to continue.</p>
 
@@ -61,5 +61,11 @@
     font-size: 13px;
     padding: 10px 14px;
     margin-bottom: 16px;
+  }
+  .center-card {
+    margin-top: auto;
+    margin-bottom: auto;
+    margin-left: auto;
+    margin-right: auto;
   }
 </style>
