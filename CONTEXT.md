@@ -94,7 +94,12 @@ _Avoid_: research (the old mode name), Research recent conversation
 **Ask**:
 A one-off typed question in the Research Assistant panel. Carries no
 Transcript and no tab text unless the asker opts in with a **Placeholder**
-— the question is the whole request otherwise.
+— the question is the whole request otherwise. The room WebSocket server
+owns the lookup from pending entry through completion, and Ask always returns
+structured **Block**s (with the usual flattened-text fallback). It remains
+`ask`, not `custom`, in usage and eval records. Its unanchored research entry
+appears in the same newest-first panel feed as **Annotation**s; it does not
+become an Annotation because there is no frozen quote.
 _Avoid_: custom (that's a saved instruction, not a one-off question)
 
 **Placeholder**:
@@ -136,8 +141,13 @@ instruction should read **Custom Prompt** (capitalized as a term) below.
 **Custom Prompt**:
 One saved `{title, prompt text}` pair a participant can trigger — replaces
 Definition/Facts/Answer and the old singular Research Prompt/Custom
-(ADR-0008). Written using **Placeholders**, fires immediately with no
-extra input once triggered — the prompt's own text is the whole request.
+(ADR-0008). Written using **Placeholders**. A selection-based Custom Prompt
+shares the highlight popup's always-visible composer with **Annotate**: it
+can run from the highlighted excerpt alone, or append the participant's
+optional typed context to this invocation. That addendum is not a
+Placeholder and is preserved on the resulting **Card** so readers can see
+what shaped the answer. A panel-based Custom Prompt still fires directly
+from its saved prompt text.
 Same scope as the old Research Prompt: a deployment-wide list, not
 per-room, set on the create-room page by whoever holds the site password
 (see **Usage Dashboard**), never edited by a room's Host mid-show. Gated
@@ -192,10 +202,12 @@ A note anchored to a highlighted span of content — Notes text or a
 Transcript Turn — authored either by a person (a **Comment**) or by a
 Custom Prompt (a **Card**). Room-shared, listed together with every other
 Annotation in the panel regardless of which kind authored it or which
-surface (Notes or Transcript) it's anchored to. Anchored by a frozen
-quote of the original excerpt, not a live position: the quote is the
-Annotation's permanent record, and re-finding it in current Notes text to
-draw a highlight is best-effort only — if the text was edited away, the
+surface (Notes or Transcript) it's anchored to, interleaved newest-first
+with the active Notes tab's unanchored Ask and panel-prompt research entries.
+The two storage kinds remain distinct even though the panel presents one
+feed. Anchored by a frozen quote of the original excerpt, not a live
+position: the quote is the Annotation's permanent record, and re-finding
+it in current Notes text to draw a highlight is best-effort only — if the
 Annotation still exists with its quote, it just draws no highlight. Never
 a persistent character-offset link, and never a highlight shown with
 false confidence.

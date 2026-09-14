@@ -11,7 +11,7 @@ Hosts needed the Research Assistant reachable from wherever they actually are �
 - **Per-room Custom Prompt authoring, editable by a room's Host mid-show.** Rejected for now — no stated need justifies the added per-room authoring/permission surface; kept at today's site-password-gated, deployment-wide scope.
 - **A live transcript strip embedded in the Notes/video tab, and later a fully merged Notes+Transcript view.** Both rejected in favor of Transcript as a panel facet — cheaper (reuses `RoomTabs`' existing live `transcriptLines` state without reshaping the main-stage layout) and keeps the main stage (video + Notes) visually stable.
 - **Whole-line selection instead of arbitrary text selection.** Rejected — arbitrary selection was preferred for precision, at the accepted cost of the `contenteditable` migration.
-- **Custom Prompts pause for a typed follow-up question at invocation time** (like typed Ask). Rejected — every Custom Prompt fires immediately, fully self-contained from its saved template; open-endedness is something the prompt's author writes into the template, not a runtime step.
+- **Custom Prompts pause for a separate typed follow-up step at invocation time** (like typed Ask). Rejected — selection-based Custom Prompts now share the always-visible Annotation composer and may receive its optional participant context without adding a second step; panel-based prompts still fire immediately from their saved template.
 
 ## Consequences
 
