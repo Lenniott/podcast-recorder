@@ -17,7 +17,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
-import { MAX_TABS } from '../../src/lib/tab-sync.js'
+import { MAX_TABS } from '../../src/lib/room/tab-sync.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
 function latest(ws, type) {
@@ -168,6 +168,79 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
   })
 })
 
+describe('setupWss — the Transcript is not a tab_switch destination (ADR-0008, ticket 06)', () => {
+  let wss, host, guest
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    host  = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1');                  join(guest, 'Guest', 'c2')
+  })
+
+  // The Transcript was briefly a valid tab_switch destination (ticket 01
+  // follow-up). ADR-0008/ticket 06 retired that: it is a personal, local
+  // facet of each participant's own right-hand panel now, so "I'm looking
+  // at the Transcript" is not a room-shared fact and never crosses the WS.
+  // The reserved id survives only as the storage key for Turn-anchored
+  // Annotations.
+
+  it('refuses a tab_switch naming the reserved Transcript id, even sent by hand over a live socket', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    const before = latest(host, 'tabs_state').activeTabId
+    const sentBefore = guest.sent.length
+    guest.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
+
+    // The refusal is explicit, and no new tabs_state was broadcast at all.
+    const since = guest.sent.slice(sentBefore)
+    expect(since.some((m) => m.type === 'error')).toBe(true)
+    expect(since.some((m) => m.type === 'tabs_state')).toBe(false)
+    // Nobody's view moved — the refusal is not a silent no-op that leaves
+    // one peer believing it switched.
+    for (const ws of [host, guest]) {
+      expect(latest(ws, 'tabs_state').activeTabId).toBe(before)
+      expect(latest(ws, 'tabs_state').activeTabId).not.toBe(TRANSCRIPT_TAB_ID)
+    }
+  })
+
+  it('switching between real tabs is still room-shared, exactly as before', async () => {
+    host.emit('message', JSON.stringify({ type: 'tab_create', tabId: 'tab-second01' }))
+    const realTabId = latest(host, 'tabs_state').tabs[0].id
+    host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: realTabId }))
+    for (const ws of [host, guest]) {
+      expect(latest(ws, 'tabs_state').activeTabId).toBe(realTabId)
+    }
+  })
+
+  it("a late joiner is never replayed the Transcript as the room's active view", async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    host.emit('message', JSON.stringify({ type: 'tab_switch', tabId: TRANSCRIPT_TAB_ID }))
+    guest.emit('close') // free a slot — room is capped at MAX_PEERS
+
+    const late = mockWs()
+    wss.connect(late, 'room1'); join(late, 'Late', 'c3')
+    const activeTabId = latest(late, 'tabs_state').activeTabId
+    expect(activeTabId).not.toBe(TRANSCRIPT_TAB_ID)
+    // And it names a tab that actually exists, rather than nothing at all.
+    expect(latest(late, 'tabs_state').tabs.map((t) => t.id)).toContain(activeTabId)
+  })
+
+  it('still refuses tab_close/tab_text for the reserved Transcript id even via the live WS handlers', async () => {
+    const { TRANSCRIPT_TAB_ID } = await import('../../src/lib/room/transcript-sync.js')
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_close', tabId: TRANSCRIPT_TAB_ID }))
+    expect(host.sent.some((m) => m.type === 'error')).toBe(true)
+
+    host.sent.length = 0
+    host.emit('message', JSON.stringify({ type: 'tab_text', tabId: TRANSCRIPT_TAB_ID, text: 'hand-typed' }))
+    expect(host.sent.some((m) => m.type === 'error')).toBe(true)
+  })
+})
+
 describe('setupWss — tab_video (per-tab shared video, symmetric control)', () => {
   let wss, host, guest, tabId
 
@@ -284,7 +357,7 @@ describe('setupWss — tab_text (shared textarea, symmetric)', () => {
   })
 
   it('truncates text to MAX_TAB_TEXT_LEN', async () => {
-    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/tab-sync.js')
+    const { MAX_TAB_TEXT_LEN } = await import('../../src/lib/room/tab-sync.js')
     const huge = 'x'.repeat(MAX_TAB_TEXT_LEN + 500)
     guest.emit('message', JSON.stringify({ type: 'tab_text', tabId, text: huge }))
     expect(latest(host, 'tab_text').text).toHaveLength(MAX_TAB_TEXT_LEN)

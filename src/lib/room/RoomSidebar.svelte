@@ -1,10 +1,10 @@
 <script>
   import { ChevronLeft, ChevronRight, Download02, Mic } from "$lib/icons";
   import RoomDetailsPanel from "./RoomDetailsPanel.svelte";
-  import MicPanel from "./MicPanel.svelte";
-  import WaveformPanel from "./WaveformPanel.svelte";
-  import RecordControls from "./RecordControls.svelte";
-  import ServerCopyFilesModal from "./ServerCopyFilesModal.svelte";
+  import MicPanel from "../recording/MicPanel.svelte";
+  import WaveformPanel from "../recording/WaveformPanel.svelte";
+  import RecordControls from "../recording/RecordControls.svelte";
+  import ServerCopyFilesModal from "../server-copy/ServerCopyFilesModal.svelte";
 
   export let collapsed = false;
 
@@ -31,7 +31,6 @@
   export let canvasEl = null;
   export let meterPct = 0;
   export let peakPct = 0;
-  export let dbLevel;
   export let peakHoldDb;
   export let isClipping = false;
   export let lastClapFrom = null;
@@ -97,7 +96,6 @@
         bind:canvasEl
         {meterPct}
         {peakPct}
-        {dbLevel}
         {peakHoldDb}
         {isClipping}
         {lastClapFrom}
@@ -182,8 +180,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 400;
   }
   .room-sidebar-header-icon {
     display: inline-flex;

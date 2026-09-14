@@ -80,7 +80,7 @@ test('idle local recording leaves the room without a warning', async ({ page }) 
   await page.goto('/')
 
   expect(dialogCount).toBe(0)
-  await expect(page.getByRole('button', { name: /Create Room/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New room' })).toBeVisible()
 })
 
 test('active local recording warns before in-app navigation', async ({ page }) => {

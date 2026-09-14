@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { stubYouTubeApi, createRoom, joinAsGuest } from './helpers.js'
 
-test("guest text edits appear in the host's shared textarea", async ({ browser }) => {
+test("guest text edits appear in the host's shared notes", async ({ browser }) => {
   const host = await browser.newPage()
   await stubYouTubeApi(host)
   const password = 'guest-notes'
@@ -13,7 +13,9 @@ test("guest text edits appear in the host's shared textarea", async ({ browser }
 
   await guest.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' }).fill('shared notes from guest')
 
-  await expect(host.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })).toHaveValue(
+  // toHaveText, not toHaveValue: the Notes surface is a contenteditable
+  // element now, not a <textarea> (ADR-0008).
+  await expect(host.getByRole('textbox', { name: 'Shared notes — visible to everyone in the room…' })).toHaveText(
     'shared notes from guest',
     { timeout: 15_000 }
   )

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveExitGuard, isIncompleteServerCopyUpload } from '../../src/lib/exit-guard.js'
+import { deriveExitGuard, isIncompleteServerCopyUpload } from '../../src/lib/recording/exit-guard.js'
 
 describe('deriveExitGuard', () => {
   it('does not block leaving when neither recording nor upload is in progress', () => {

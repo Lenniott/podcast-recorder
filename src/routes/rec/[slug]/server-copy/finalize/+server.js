@@ -6,7 +6,7 @@
  * (`server-copy/chunks`, see `$lib/server/server-copy-storage.js`) into a
  * complete, playable WAV file, but ONLY once `totalBytes` (the final,
  * confirmed-written local recording length the client already tracks —
- * see `$lib/server-copy-upload.js`'s `confirmedBytes`) matches the byte
+ * see `$lib/server-copy/server-copy-upload.js`'s `confirmedBytes`) matches the byte
  * count actually durable on disk for this participant. Finalization is
  * therefore never inferred from the HTTP connection closing, from the
  * chunks route going quiet, or from a timer — only from this explicit

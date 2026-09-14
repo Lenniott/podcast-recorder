@@ -5,7 +5,7 @@ import {
   shouldAnnounceServerCopyFailure,
   canShowServerCopyDownload,
   formatServerCopyLine
-} from '../../src/lib/server-copy-status.js'
+} from '../../src/lib/server-copy/server-copy-status.js'
 
 describe('deriveServerCopyDisplay', () => {
   it('reports unavailable when there is no status at all (never started)', () => {

@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import db, {
+  createCustomPrompt,
   createRoom,
   getRoomBySlug,
   _resetDb
@@ -178,6 +179,42 @@ describe('rec/[slug]/+page.server', () => {
       const data = await load({ params: { slug: SLUG }, cookies })
       expect(data.isHostClaim).toBe(false)
       expect(data.roomPassword).toBeNull()
+    })
+
+    // ADR-0008, ticket 05: every configured Custom Prompt becomes its own
+    // one-click button in the selection popup, so the page has to ship the
+    // whole list — but only id + title (+ usesSelection).
+    it('ships every configured Custom Prompt as id + title + usesSelection, never the template text', async () => {
+      const passwordHash = await seedRoom()
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET)
+      })
+
+      expect((await load({ params: { slug: SLUG }, cookies })).customPrompts).toEqual([])
+
+      createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
+      createCustomPrompt({ title: 'Daily recap', prompt: 'Summarize {transcript} so far.' })
+
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.customPrompts.map((p) => p.title)).toEqual(['Fact check', 'Daily recap'])
+      expect(data.customPrompts.every((p) => typeof p.id === 'string' && p.id)).toBe(true)
+      // usesSelection is what the room's clients use to split a prompt
+      // between the highlight popup and a standalone panel button.
+      expect(data.customPrompts.map((p) => p.usesSelection)).toEqual([true, false])
+      // The show's prompt wording stays on the server — the browser only
+      // ever names a prompt by id (see ws-rooms.js's annotation_ask).
+      expect(JSON.stringify(data.customPrompts)).not.toContain('Fact-check {selection}')
+      expect(data.customPrompts.some((p) => 'prompt' in p)).toBe(false)
+    })
+
+    it('ships no Custom Prompts to someone who has not passed the room password', async () => {
+      await seedRoom()
+      createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
+      const { load } = await loadPage()
+      const data = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(data.authenticated).toBe(false)
+      expect(data.customPrompts).toEqual([])
     })
   })
 

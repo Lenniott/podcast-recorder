@@ -3,29 +3,38 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16 } from '$lib/audio-utils.js'
-  import { createCaptureWriter } from '$lib/capture-writer.js'
-  import { createServerCopyUpload } from '$lib/server-copy-upload.js'
+  import { buildWavHeader, float32ToInt16 } from '$lib/recording/audio-utils.js'
+  import { createCaptureWriter } from '$lib/recording/capture-writer.js'
+  import { createServerCopyUpload } from '$lib/server-copy/server-copy-upload.js'
   import {
     deriveServerCopyDisplay,
     deriveServerCopyUploadState,
     shouldAnnounceServerCopyFailure
-  } from '$lib/server-copy-status.js'
-  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/exit-guard.js'
-  import { createWrittenAudioRing } from '$lib/written-audio-ring.js'
-  import { METER_MIN, dbToMeterPct } from '$lib/meter.js'
-  import RecordingCheckModal from '$lib/RecordingCheckModal.svelte'
+  } from '$lib/server-copy/server-copy-status.js'
+  import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/recording/exit-guard.js'
+  import { createWrittenAudioRing } from '$lib/recording/written-audio-ring.js'
+  import { METER_MIN, dbToMeterPct } from '$lib/recording/meter.js'
+  import RecordingCheckModal from '$lib/recording/RecordingCheckModal.svelte'
   import PasswordGate from '$lib/PasswordGate.svelte'
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
   import DisplayNameGate from '$lib/DisplayNameGate.svelte'
-  import RecordingRoom from '$lib/RecordingRoom.svelte'
-  import ServerCopyWaitModal from '$lib/ServerCopyWaitModal.svelte'
-  import { createRoomConnection } from '$lib/room-connection.js'
-  import { createClockSync } from '$lib/clock-sync.js'
-  import { createRecordingCheck } from '$lib/recording-check.js'
-  import { createWaveformRenderer } from '$lib/waveform-renderer.js'
-  import { createAudioEngine } from '$lib/audio-engine.js'
-  import { createLevelMeter } from '$lib/level-meter.js'
+  import RecordingRoom from '$lib/recording/RecordingRoom.svelte'
+  import ServerCopyWaitModal from '$lib/server-copy/ServerCopyWaitModal.svelte'
+  import { createRoomConnection } from '$lib/room/room-connection.js'
+  import { createClockSync } from '$lib/recording/clock-sync.js'
+  import { createRecordingCheck } from '$lib/recording/recording-check.js'
+  import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
+  import { createAudioEngine } from '$lib/recording/audio-engine.js'
+  import { createLevelMeter } from '$lib/recording/level-meter.js'
+  import { createTranscriptCapture } from '$lib/room/transcript-capture.js'
+  // The two transcript reducers, unchanged (ADR-0002's append-only
+  // delivery/ordering is not what ticket 06 touched) — they just run here
+  // now that this page owns the lines rather than each child keeping its
+  // own listener. See `transcriptLines` below.
+  import {
+    applyTranscriptState as reduceTranscriptState,
+    applyTranscriptLine as reduceTranscriptLine
+  } from '$lib/research/research-panel.js'
 
   export let data   // { slug, roomName, authenticated, participantName, isHostClaim, ... }
   export let form   // action result
@@ -34,6 +43,29 @@
   let wsStatus = 'disconnected' // connected | connecting | disconnected
   let peers = []               // [{ clientId, name, recording, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
+  let researchPanel = null     // ResearchPanel component instance
+  // tabId -> string — RoomTabs.svelte's own true, complete, current copy
+  // (both its own just-typed keystrokes and every peer's broadcast
+  // tab_text), two-way bound so ResearchPanel can read it directly instead
+  // of keeping a second, broadcast-only (and so incomplete for a solo
+  // participant) copy of its own. See RoomTabs.svelte's own comment on
+  // `export let tabTexts`.
+  let tabTexts = {}
+  // [{id, speaker, text, at}], in server (append) order — the room's live
+  // Transcript. Lifted to this page in ticket 06 (ADR-0008): it used to be
+  // tracked twice, once in RoomTabs (which rendered the Transcript Tab) and
+  // once in ResearchPanel (which needed the lines as a Placeholder
+  // ingredient). Now RoomTabs no longer renders it at all and the panel
+  // does, so the common parent holds the one copy and hands it to both —
+  // neither child can drift from the other about what was said. Delivery
+  // and ordering are untouched; only the owner moved.
+  let transcriptLines = []
+  // 'annotations' | 'transcript' — which facet of the right-hand panel this
+  // participant is looking at. LOCAL UI ONLY, never shared over the room WS,
+  // exactly like researchCollapsed below: the Transcript stopped being a
+  // room-shared view precisely so one person opening it doesn't move
+  // anybody else's screen (see CONTEXT.md's **Transcript**).
+  let researchFacet = 'annotations'
 
   // ─── Mic / device state ─────────────────────────────────────────────
   let devices = []             // MediaDeviceInfo[]
@@ -52,8 +84,8 @@
   let recordingTimer = null
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
-  let captureWriter = null     // owns the WAV byte stream — see $lib/capture-writer.js
-  // Convenience mirror of the local recording — see $lib/server-copy-upload.js.
+  let captureWriter = null     // owns the WAV byte stream — see $lib/recording/capture-writer.js
+  // Convenience mirror of the local recording — see $lib/server-copy/server-copy-upload.js.
   // Fed from captureWriter's own onWritten seam (via handleWritten below), so
   // it can never race ahead of, or substitute for, local write confirmation.
   // A failed/slow/rejected upload must never block or delay anything above.
@@ -87,7 +119,7 @@
   // written to disk (fed via captureWriter's onWritten). The mic signal can
   // look perfectly healthy while the file silently diverges from it; a
   // display sourced from the mic can never catch that. See
-  // $lib/written-audio-ring.js.
+  // $lib/recording/written-audio-ring.js.
   let writtenRing = null
   const waveformRenderer = createWaveformRenderer({
     getCanvas: () => canvas,
@@ -149,15 +181,12 @@
   let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
 
   // ─── dBFS meter ──────────────────────────────────────────────────────
-  let dbLevel      = METER_MIN  // current RMS in dBFS (numeric readout)
-  /** Smoothed RMS for the green bar — same quantity as the readout, so the
-   *  gradient color always matches the numbers. Peak only drives the hold line. */
+  /** Smoothed RMS for the green bar. Peak only drives the hold line. */
   let meterFillDb  = METER_MIN
   let peakHoldDb   = METER_MIN  // peak-hold value (resets after 2s)
   let isClipping   = false      // true for 2s after hitting 0 dBFS
   const levelMeter = createLevelMeter({
     onState(state) {
-      dbLevel = state.dbLevel
       meterFillDb = state.meterFillDb
       peakHoldDb = state.peakHoldDb
       isClipping = state.isClipping
@@ -192,6 +221,7 @@
   let sessionDestroyed = false
   let audioInitError = ''
   let sidebarCollapsed = false // local UI only — never shared over the room WS
+  let researchCollapsed = false // ditto, for the right-hand Research Assistant panel
   // The clientId-owning capability token (ticket 11), captured off the
   // WS-exclusive 'server_copy_token' reply to our own 'join' — never
   // broadcast, so this is the only place it ever arrives. May still be
@@ -245,7 +275,7 @@
     )
   }
   // Single source of truth for both severity tiers of the exit guard — see
-  // $lib/exit-guard.js for why active-recording always wins when both are
+  // $lib/recording/exit-guard.js for why active-recording always wins when both are
   // true, so the two warnings can never collide or double-fire.
   $: exitGuard = deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload })
   $: hasBlockingExitWork = exitGuard.blocking
@@ -436,6 +466,27 @@
   // RECORDING
   // ───────────────────────────────────────────────────────────────────
 
+  // Voice Trigger capture (ticket 03; see $lib/room/transcript-capture.js and
+  // ADR-0003) — starts/stops exactly with our own local recording, no
+  // separate button, no separate consent step. `send` closes over `room`,
+  // defined further below (safe: never invoked before the component's
+  // synchronous setup — which assigns `room` — has finished running).
+  // Every failure path inside transcriptCapture is already swallowed by
+  // that module, so nothing here needs its own try/catch to protect
+  // startRecording/stopRecording's own critical sections.
+  // Per-browser, never sent over the WS — see RoomTabs.svelte's own prop
+  // doc comment. Drives the small status dot on the Transcript pill so a
+  // silently-dead recognizer (the bug speech-recognition.js's retry logic
+  // now recovers from on its own) is still visible in the meantime, not
+  // indistinguishable from "everything's fine."
+  let transcriptionStatus = 'stopped'
+
+  const transcriptCapture = createTranscriptCapture({
+    send: (msg) => room.send(msg),
+    getSpeakerName: () => getJoinName(),
+    onStatusChange: (status) => { transcriptionStatus = status }
+  })
+
   /**
    * Fires once per chunk, only after captureWriter has actually confirmed
    * it was written (see capture-writer.js's onWritten). Feeds the live
@@ -454,7 +505,7 @@
 
   /**
    * The server-copy upload's onProgress callback. Derives the small
-   * display-ready {state, percent} shape (see $lib/server-copy-status.js)
+   * display-ready {state, percent} shape (see $lib/server-copy/server-copy-status.js)
    * once, and, only when it actually changed, tells the room about it —
    * the same threshold-based, percentage-only broadcast recording_state
    * uses for local recording. Both peers then read the identical value
@@ -462,7 +513,7 @@
    * ws-rooms.js).
    */
   function handleServerCopyProgress(status) {
-    // Shared vocabulary from $lib/server-copy-status.js — distinguishes
+    // Shared vocabulary from $lib/server-copy/server-copy-status.js — distinguishes
     // "still uploading while we're still recording" from "recording
     // stopped locally, upload still catching up" so both the exit-guard
     // warning text and the post-stop blocking modal (ticket 07) stay
@@ -481,7 +532,7 @@
   }
 
   // Takes the already-derived {state, percent} display shape (see
-  // $lib/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
+  // $lib/server-copy/server-copy-status.js's deriveServerCopyDisplay) rather than a raw
   // upload status, so every caller derives it exactly once — callers that
   // don't already have a display value in hand (the reset below, the
   // resync below) derive it themselves at the call site.
@@ -592,6 +643,10 @@
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
     startRecordingCheck()
+    // Last: purely additive, and transcriptCapture never throws (see its
+    // own doc comment) — placed after every write-path-critical step above
+    // has already completed.
+    transcriptCapture.start()
   }
 
   async function stopRecording() {
@@ -600,6 +655,10 @@
     clearInterval(recordingTimer)
     recordingStartedAtMs = null
     wsNotifyState('stopped')
+    // Fire-and-forget, never awaited: stopping recognition must never delay
+    // the local WAV finalize below (AGENTS.md's one hard rule). Never
+    // throws — see $lib/room/transcript-capture.js's doc comment.
+    transcriptCapture.stop()
 
     // Stopping via the regular Stop button while the listen-back check is
     // still up (not via its own "something's wrong" path) should still
@@ -620,7 +679,7 @@
     captureWriter = null
 
     // The explicit "final length is now known" signal — see
-    // $lib/server-copy-upload.js's finish() doc. Must come after local
+    // $lib/server-copy/server-copy-upload.js's finish() doc. Must come after local
     // write confirmation (captureWriter.stop() above), never before. Not
     // awaited: a slow/failing/rejected server copy must never delay or
     // gate the local WAV finalize below (that's ticket 07's blocking-modal
@@ -730,10 +789,69 @@
         if (!audioEngineReady) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
         else injectClap(msg.from, msg.triggerAtMs)
       }
-      if (msg.type === 'tabs_state') roomTabs?.applyTabsState?.(msg)
+      if (msg.type === 'tabs_state') {
+        roomTabs?.applyTabsState?.(msg)
+        // ResearchPanel only needs to know which tab is active (to scope
+        // which tab's history it shows) — fed from this same broadcast
+        // RoomTabs derives its own activeTabId from, never a second,
+        // independently-tracked copy that could drift from it.
+        researchPanel?.applyTabsState?.(msg)
+      }
       if (msg.type === 'tab_video')  roomTabs?.applyTabVideo?.(msg)
+      // ResearchPanel does NOT get a second, independent routing line here
+      // for tab_text (unlike tabs_state/transcript_state/transcript_line
+      // below) — it reads RoomTabs' own `tabTexts` directly via the
+      // `bind:tabTexts` prop plumbing instead. RoomTabs is the only place
+      // that holds the true, complete, current value for every tab (both
+      // its own just-typed keystrokes AND every peer's broadcast text) —
+      // the tab_text broadcast itself deliberately excludes the sender (so
+      // a typist's own Notes surface isn't clobbered by an echo of its own
+      // keystrokes), which is lossy for anyone re-deriving a second copy
+      // from it, exactly the case a solo participant typing their own
+      // notes would hit.
       if (msg.type === 'tab_text')   roomTabs?.applyTabText?.(msg)
+      // The Transcript is state this page owns since ticket 06, not a
+      // message fanned out to two components that each kept their own copy.
+      // Both children read `transcriptLines` as a plain prop instead.
+      if (msg.type === 'transcript_state') {
+        transcriptLines = reduceTranscriptState(transcriptLines, msg)
+      }
+      if (msg.type === 'transcript_line') {
+        transcriptLines = reduceTranscriptLine(transcriptLines, msg)
+      }
+      if (msg.type === 'research_entry') researchPanel?.applyResearchEntry?.(msg)
+      if (msg.type === 'research_state') researchPanel?.applyResearchState?.(msg)
+      if (msg.type === 'research_removed') researchPanel?.applyResearchRemove?.(msg)
+      // Annotations (ADR-0008) go to BOTH: the panel lists them, and
+      // RoomTabs draws their quotes back onto the Notes text they were
+      // taken from (ticket 04) — as well as needing the echo of its own
+      // annotation_create to know the server has it and stop re-sending it
+      // on reconnect (see annotation-outbox.js).
+      if (msg.type === 'annotation_entry') {
+        researchPanel?.applyAnnotationEntry?.(msg)
+        roomTabs?.applyAnnotationEntry?.(msg)
+      }
+      if (msg.type === 'annotation_state') {
+        researchPanel?.applyAnnotationState?.(msg)
+        roomTabs?.applyAnnotationState?.(msg)
+      }
+      // A Card's lookup failed (ticket 05). Routed to both for the same
+      // reasons annotation_entry is: the panel has to show the reason, and
+      // RoomTabs has to stop re-sending an ask the server has clearly
+      // already seen.
+      if (msg.type === 'annotation_error') {
+        researchPanel?.applyAnnotationError?.(msg)
+        roomTabs?.applyAnnotationError?.(msg)
+      }
+      if (msg.type === 'annotation_removed') {
+        researchPanel?.applyAnnotationRemove?.(msg)
+        roomTabs?.applyAnnotationRemove?.(msg)
+      }
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
+      // The "something's coming" pulse moved with the Transcript itself
+      // (ticket 06): it now rides the panel's Transcript facet button (and
+      // its collapse toggle when the panel is shut), not a tab-strip pill.
+      if (msg.type === 'transcript_activity') researchPanel?.applyTranscriptActivity?.(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {
@@ -757,6 +875,15 @@
   })
   room.registerResync(() => {
     sendMicInfo(true)
+  })
+  room.registerResync(() => {
+    // A Comment submitted into a dropped socket is real, local, unsaved
+    // state the server has never heard of — room.send() drops it silently
+    // (see room-connection.js). Same class of bug as the stuck Recording
+    // pill AGENTS.md warns about, so it uses the same mechanism rather than
+    // a bespoke retry. Re-sending is safe: annotation_create is idempotent
+    // by id (see room-state-store.js's addAnnotation).
+    roomTabs?.resyncAnnotations?.()
   })
 
   $: micLabel = (
@@ -874,6 +1001,7 @@
     if (!browser) return
     sessionDestroyed = true
     waveformRenderer.stop()
+    transcriptCapture.stop()
     clearInterval(recordingTimer)
     clearTimeout(clapTimeout)
     levelMeter.close()
@@ -900,11 +1028,19 @@
 {:else}
   <RecordingRoom
     bind:sidebarCollapsed
+    bind:researchCollapsed
+    bind:researchFacet
     bind:roomTabs
+    bind:researchPanel
+    bind:tabTexts
+    {transcriptLines}
+    {transcriptionStatus}
     bind:canvasEl={canvas}
     roomName={data.roomName}
     slug={data.slug}
     isHostClaim={data.isHostClaim}
+    guestCanAskResearch={data.guestCanAskResearch}
+    customPrompts={data.customPrompts}
     roomPassword={data.roomPassword}
     {wsStatus}
     {peers}
@@ -923,7 +1059,6 @@
     onGainInput={updateGain}
     {meterPct}
     {peakPct}
-    {dbLevel}
     {peakHoldDb}
     {isClipping}
     {lastClapFrom}

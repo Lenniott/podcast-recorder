@@ -16,6 +16,10 @@ services:
       - DB_PATH=/app/data/rooms.db
       # Room metadata and server-copy files expire together after this many hours
       - ROOM_MAX_AGE_HOURS=${ROOM_MAX_AGE_HOURS:-12}
+      - ROOM_STATE_GRACE_MS=${ROOM_STATE_GRACE_MS:-10000}
+      # Per-IP sliding-window limits for general and authentication POSTs
+      - MAX_POSTS_PER_MIN=${MAX_POSTS_PER_MIN:-20}
+      - MAX_AUTH_POSTS_PER_MIN=${MAX_AUTH_POSTS_PER_MIN:-10}
       # Required for session / room tokens
       - SECRET=${SECRET}
       # Optional — leave empty for open “create episode” page
@@ -23,6 +27,13 @@ services:
       # Cookie flags for HTTPS (set true behind TLS / reverse proxy)
       - HTTPS=${HTTPS:-false}
       - FORCE_HTTPS=${FORCE_HTTPS:-false}
+      # Research Assistant credentials remain server-only
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-}
+      # Optional eval logs live on the same persisted volume as room data
+      - RESEARCH_EVAL_LOG=${RESEARCH_EVAL_LOG:-}
+      - RESEARCH_EVAL_LOG_DIR=${RESEARCH_EVAL_LOG_DIR:-/app/data/research-eval-logs}
+      - HIDE_TEST_ROOMS_IN_DASHBOARD=${HIDE_TEST_ROOMS_IN_DASHBOARD:-}
 
 volumes:
   podcast-recorder-data:

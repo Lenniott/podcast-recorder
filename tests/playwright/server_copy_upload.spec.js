@@ -268,7 +268,7 @@ test('incomplete-upload exit warning is softer than the active-recording warning
   // upload is reliably still `catching_up` (not yet `complete`, and never
   // `failed`) in the window right after Stop — exactly the state
   // isIncompleteServerCopyUpload/deriveExitGuard treat as the softer
-  // "upload" severity (see $lib/exit-guard.js).
+  // "upload" severity (see $lib/recording/exit-guard.js).
   await slowServerCopyChunks(guest, 350)
 
   await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()

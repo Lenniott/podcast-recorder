@@ -12,7 +12,7 @@ import {
   isServerCopyFinalized,
   finalizeServerCopy
 } from '../../src/lib/server/server-copy-storage.js'
-import { buildWavHeader } from '../../src/lib/audio-utils.js'
+import { buildWavHeader } from '../../src/lib/recording/audio-utils.js'
 
 let root
 

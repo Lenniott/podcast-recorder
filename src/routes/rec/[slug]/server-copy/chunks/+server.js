@@ -3,7 +3,7 @@
  *
  * Appends one chunk of already-confirmed-written local audio (raw PCM
  * bytes, exactly what capture-writer.js handed to its onWritten seam — see
- * $lib/server-copy-upload.js) to that participant's server-copy file.
+ * $lib/server-copy/server-copy-upload.js) to that participant's server-copy file.
  *
  * Rejects the same way as the session endpoint for an inactive room, a
  * missing/invalid room cookie, or a `clientId`/`token` mismatch (ticket

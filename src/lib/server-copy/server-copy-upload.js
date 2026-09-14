@@ -15,7 +15,7 @@
  * a slow/hung/failed HTTP request pile up unbounded retries or memory.
  *
  * Transport: plain HTTP, deliberately not the room WebSocket
- * ($lib/room-connection.js). Reasons:
+ * ($lib/room/room-connection.js). Reasons:
  *   - Chunk payloads are raw PCM bytes; the WS protocol
  *     ($lib/server/ws-rooms.js) is JSON-only today, so binary chunks would
  *     need a new framing scheme grafted on. A POST body needs none.

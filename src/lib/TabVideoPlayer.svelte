@@ -14,6 +14,10 @@
   export let talking = false; // true while *this* browser is holding Talk
   export let roomTalking = false; // true while any peer (including us) is holding Talk
 
+  // Fires with the IFrame API title once known. Empty titles are skipped so
+  // a player remount doesn't wipe a title we already cached for this tab.
+  export let reportVideoTitle = (_title) => {};
+
   const SEEK_TOLERANCE_SEC = 0.75;
   const DRIFT_CHECK_MS = 5000;
   const DUCK_FACTOR = 0.25;
@@ -85,6 +89,7 @@
       else player.cueVideoById(s.videoId, target);
       loadedVideoId = s.videoId;
       playing = s.playing;
+      notifyTitleIfKnown();
       return;
     }
 
@@ -159,6 +164,7 @@
                   const v = player.getVolume();
                   volume = Number.isFinite(v) ? v : 100;
                   muted = !!player.isMuted();
+                  notifyTitleIfKnown();
                   startUiTimer();
                   startDriftTimer();
                   resolve();
@@ -187,6 +193,7 @@
       if (!playerReady) return;
       if (!scrubbing) currentSec = player.getCurrentTime() || 0;
       durationSec = player.getDuration() || 0;
+      notifyTitleIfKnown();
     }, 500);
   }
 
@@ -284,6 +291,11 @@
 
   function toggleMute() {
     muted = !muted;
+  }
+
+  function notifyTitleIfKnown() {
+    const title = player?.getVideoData?.()?.title;
+    if (typeof title === "string" && title.trim()) reportVideoTitle(title.trim());
   }
 
   function fmt(sec) {

@@ -5,7 +5,7 @@ import { join } from 'path'
 import { hashPassword, makeSessionToken, makeHostClaimToken, makeServerCopyToken } from '../../src/lib/server/auth.js'
 import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
 import { getServerCopyFilePath, getServerCopyWavPath } from '../../src/lib/server/server-copy-storage.js'
-import { buildWavHeader } from '../../src/lib/audio-utils.js'
+import { buildWavHeader } from '../../src/lib/recording/audio-utils.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
 const SLUG = 'roomslug01'

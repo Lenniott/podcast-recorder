@@ -6,9 +6,15 @@ import db, {
   cleanupExpiredRooms,
   createRoom,
   deleteRoom,
+  deleteRoomContent,
+  createCustomPrompt,
   getActiveRoomBySlug,
   getRoomBySlug,
+  listCustomPrompts,
+  loadRoomContent,
   roomExists,
+  saveRoomContent,
+  updateCustomPrompt,
   _resetDb
 } from '../../src/lib/server/db.js'
 import {
@@ -146,5 +152,76 @@ describe('active room cleanup', () => {
 
     expect(existsSync(getServerCopyFilePath(ROOM.slug, 'guest1'))).toBe(false)
     expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(false)
+  })
+})
+
+describe('room content durable store (Room State Store\'s durable adapter)', () => {
+  it('returns null for a room with no saved content', () => {
+    expect(loadRoomContent('nosuchroom')).toBeNull()
+  })
+
+  it('saves and loads a room\'s content back exactly', () => {
+    const content = { tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: 'hello' }], activeTabId: 't1' } }
+    saveRoomContent(ROOM.slug, content)
+    expect(loadRoomContent(ROOM.slug)).toEqual(content)
+  })
+
+  it('a second save for the same slug overwrites rather than duplicating', () => {
+    saveRoomContent(ROOM.slug, { tabs: { list: [], activeTabId: null } })
+    const updated = { tabs: { list: [{ id: 't2', title: 'Tab 2', video: null, text: '' }], activeTabId: 't2' } }
+    saveRoomContent(ROOM.slug, updated)
+
+    expect(loadRoomContent(ROOM.slug)).toEqual(updated)
+    expect(db.getDb().prepare('SELECT COUNT(*) AS n FROM room_content WHERE slug = ?').get(ROOM.slug).n).toBe(1)
+  })
+
+  it('deleteRoomContent removes a room\'s saved content', () => {
+    saveRoomContent(ROOM.slug, { tabs: { list: [], activeTabId: null } })
+    expect(deleteRoomContent(ROOM.slug)).toBe(1)
+    expect(loadRoomContent(ROOM.slug)).toBeNull()
+  })
+
+  it('deleteRoomContent is a no-op for a slug with no saved content', () => {
+    expect(deleteRoomContent('nosuchroom')).toBe(0)
+  })
+
+  it('deleteRoom also removes any durable room content for that slug — closing the gap where tab state was never pruned on room expiry', () => {
+    createRoom(ROOM)
+    saveRoomContent(ROOM.slug, { tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: 'notes' }], activeTabId: 't1' } })
+
+    expect(deleteRoom(ROOM.slug)).toBe(1)
+
+    expect(loadRoomContent(ROOM.slug)).toBeNull()
+  })
+
+  it('cleanupExpiredRooms removes durable room content for an expired room the same as its metadata', () => {
+    createRoom(ROOM)
+    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
+    saveRoomContent(ROOM.slug, { tabs: { list: [], activeTabId: null } })
+
+    expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
+
+    expect(loadRoomContent(ROOM.slug)).toBeNull()
+  })
+})
+
+// Full Custom Prompt CRUD lives in custom-prompts.test.js — this is only the
+// storage-shape check that used to cover the two retired settings rows.
+describe('Custom Prompt storage', () => {
+  it('starts empty', () => {
+    expect(listCustomPrompts()).toEqual([])
+  })
+
+  it('stores and reads a Custom Prompt back by its own id', () => {
+    const created = createCustomPrompt({ title: '  Interpret  ', prompt: 'Read {current_tab}.' })
+    expect(listCustomPrompts()).toEqual([
+      { id: created.id, title: 'Interpret', prompt: 'Read {current_tab}.', outputFormat: 'text' }
+    ])
+  })
+
+  it('edits in place rather than duplicating', () => {
+    const created = createCustomPrompt({ title: 'Interpret', prompt: 'a' })
+    updateCustomPrompt(created.id, { title: 'TSIA', prompt: 'b' })
+    expect(listCustomPrompts()).toEqual([{ id: created.id, title: 'TSIA', prompt: 'b', outputFormat: 'text' }])
   })
 })

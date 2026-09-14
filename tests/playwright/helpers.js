@@ -61,6 +61,7 @@ export async function stubYouTubeApi(page) {
     class FakePlayer {
       constructor(_el, opts) {
         this._opts = opts
+        this._videoId = opts?.videoId || ''
         this._time = 0
         this._duration = 120
         this._volume = 100
@@ -85,6 +86,7 @@ export async function stubYouTubeApi(page) {
         this._muted = false
       }
       loadVideoById(id, start) {
+        this._videoId = id
         // Simulate a real YouTube iframe's buffering lag: getCurrentTime()
         // doesn't actually reach `start` until the seek settles a moment
         // later. Reading it synchronously right after load — which is
@@ -102,6 +104,7 @@ export async function stubYouTubeApi(page) {
         }, 2000)
       }
       cueVideoById(id, start) {
+        this._videoId = id
         this._time = start || 0
         this._state = 2
         window.__ytPosition = this._time
@@ -124,6 +127,13 @@ export async function stubYouTubeApi(page) {
       }
       getDuration() {
         return this._duration
+      }
+      getVideoData() {
+        const title = this._videoId ? 'Stub YouTube Title' : ''
+        // Specs that bundle {current_tab} wait on this — Play/Pause is
+        // visible from shared tab_video *before* onReady reports a title.
+        window.__ytTitle = title
+        return { video_id: this._videoId, title }
       }
       getPlayerState() {
         return this._state
@@ -159,21 +169,32 @@ export async function fillField(locator, value) {
  */
 export async function unlockIfNeeded(page) {
   const site = page.getByRole('textbox', { name: 'Site Password' })
-  const episode = page.locator('#room-episode-name')
-  await expect(site.or(episode)).toBeVisible({ timeout: 15_000 })
+  const newRoom = page.getByRole('button', { name: 'New room' })
+  await expect(site.or(newRoom)).toBeVisible({ timeout: 15_000 })
   if (await site.isVisible()) {
     const pw = process.env.SITE_PASSWORD
     if (!pw) throw new Error('SITE_PASSWORD is not set but the site gate is showing')
     await site.fill(pw)
     await page.getByRole('button', { name: 'Unlock' }).click()
     const blocked = page.getByText(/Too many requests/i)
-    await expect(episode.or(blocked)).toBeVisible({ timeout: 15_000 })
+    await expect(newRoom.or(blocked)).toBeVisible({ timeout: 15_000 })
     if (await blocked.isVisible()) {
       throw new Error(
         'Site unlock hit the rate limiter. Stop `npm run dev` so Playwright can start its own server, or wait a minute and re-run.'
       )
     }
   }
+}
+
+export async function openCreateRoom(page) {
+  const newRoom = page.getByRole('button', { name: 'New room' })
+  await expect(newRoom).toBeVisible()
+  // First click after a cold home compile can land before the button's
+  // on:click is hydrated; retry until the overlay is actually in the DOM.
+  await expect(async () => {
+    await newRoom.click()
+    await expect(page.locator('#room-episode-name')).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
 }
 
 /**
@@ -208,11 +229,15 @@ export async function passRecordingCheck(page) {
   await expect(overlay).toBeHidden()
 }
 
-export async function createRoom(page, { name, password, hostDisplayName = 'Host' }) {
+export async function createRoom(page, { name, password, hostDisplayName = 'Host', guestAiAllowed = false }) {
   await page.goto('/')
   await unlockIfNeeded(page)
+  await openCreateRoom(page)
   await fillField(page.locator('#room-episode-name'), name)
   await fillField(page.locator('#room-episode-code'), password)
+  if (guestAiAllowed) {
+    await page.getByRole('checkbox', { name: /Let your guest use the Research Assistant/i }).check()
+  }
   // Generous timeout: if the form's click lands before use:enhance has
   // hydrated, the browser falls back to a real full-page POST + redirect +
   // GET of /rec/[slug] — on a cold `npm run dev` worker that route's (now
@@ -248,6 +273,170 @@ export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
   await expect(page.getByRole('button', { name: /Play|Pause/ })).toBeVisible()
 }
 
+/**
+ * Creates one Custom Prompt through the real, site-password-gated Usage
+ * Dashboard UI (ticket 04) — the deployment-wide config every room's
+ * highlight popup (selection-annotations.js's customPromptActions) and
+ * panel buttons (research-panel.js's panelPromptButtons) read from. There
+ * is no per-room scoping to worry about: a prompt created here is visible
+ * to every room created afterward, in whichever of those two lists its own
+ * template (does it reference `{selection}`?) puts it in — see CONTEXT.md's
+ * **Custom Prompt** entry.
+ *
+ * `outputFormat` is the exact `<select name="custom-prompt-output-format">`
+ * value CustomPromptListEditor.svelte defines: `'text'` (Freeform, the
+ * unchanged pre-ticket-03 rendering) or `'blocks'` (structured Block
+ * output, ticket 03's renderer). Title must stay under
+ * CUSTOM_PROMPT_TITLE_MAX_LENGTH (40 chars) — callers should pass a short,
+ * unique label (e.g. with a Date.now() suffix) since a Custom Prompt is
+ * global, persistent config, not scoped to one test's room.
+ *
+ * Returns the prompt's title (its only caller-visible handle — ids are
+ * server-generated and never surfaced in this form), for locating its
+ * button afterward and for passing to deleteCustomPrompt for cleanup.
+ */
+/**
+ * Switches the home page from its Dashboard tab to its Custom Prompts tab
+ * (+page.svelte's local `openTab`). Retried the same way openCreateRoom
+ * retries "New room" above: the first click after a cold `npm run dev`
+ * compile of the home route can land before this button's on:click is
+ * hydrated, in which case openTab never flips and the dashboard stays put
+ * with no error — so wait for the editor's own heading, not just the click
+ * resolving, and click again if it didn't show up yet.
+ */
+async function openPromptsTab(page) {
+  const promptsBtn = page.getByRole('button', { name: 'Prompts', exact: true })
+  await expect(promptsBtn).toBeVisible()
+  await expect(async () => {
+    await promptsBtn.click()
+    await expect(page.getByRole('heading', { name: 'Custom Prompts' })).toBeVisible({ timeout: 500 })
+  }).toPass({ timeout: 15_000 })
+}
+
+export async function createCustomPrompt(page, { title, prompt, outputFormat = 'text' }) {
+  await page.goto('/')
+  await unlockIfNeeded(page)
+  await openPromptsTab(page)
+  await page.getByRole('button', { name: 'New Custom Prompt', exact: true }).click()
+  await fillField(page.locator('#new-custom-prompt-title'), title)
+  await page.locator('#new-custom-prompt-format').selectOption(outputFormat)
+  await page.locator('textarea[name="custom-prompt-text"]').fill(prompt)
+  await page.getByRole('button', { name: 'Add Custom Prompt', exact: true }).click()
+  // Saving redirects to '/' (see +page.server.js's create_custom_prompt
+  // action); the new row appearing is the real signal the save landed and
+  // customPrompts was refetched, not just that the button was clicked.
+  await expect(page.locator('.prompt-row', { hasText: title })).toBeVisible({ timeout: 15_000 })
+  return title
+}
+
+/**
+ * Removes one Custom Prompt created by createCustomPrompt above, through
+ * the same real UI — e2e cleanup so a repeated local `npm run test:e2e`
+ * against the same gitignored e2e-rooms.db doesn't accumulate stale global
+ * prompts across runs (unlike a room, a Custom Prompt has no TTL/eviction
+ * of its own).
+ */
+export async function deleteCustomPrompt(page, title) {
+  await page.goto('/')
+  await unlockIfNeeded(page)
+  await openPromptsTab(page)
+  const row = page.locator('.prompt-row', { hasText: title })
+  await expect(row).toBeVisible()
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row).toHaveCount(0)
+}
+
+/**
+ * Intercepts the room's WebSocket to fake an answered outcome for typed
+ * Ask or a Custom Prompt. Every Research Assistant action is server-owned.
+ *
+ * **Why this exists, and why it is NOT the token-spend guard** (read this
+ * before changing it): these paths are fully server-resolved (ws-rooms.js's
+ * runAnnotationAsk/runResearchEntryAsk) — the real askResearchAssistant()
+ * call, fetch and all, happens entirely inside the separate `npm run dev`
+ * process Playwright's webServer spawns (concurrently's "vite dev" + "node
+ * server-ws-dev.js"). There is no browser-visible HTTP request here for
+ * page.route() (or this function) to catch *before* it is attempted. The
+ * actual, non-negotiable guard against a real token being spent on these
+ * two paths is playwright.config.js's webServer env blanking
+ * OPENROUTER_API_KEY: askResearchAssistant() throws NOT_CONFIGURED before
+ * any network I/O whenever that key is unset (research-assistant.js), for
+ * every request kind, every time.
+ *
+ * What this function adds on top of that guard: every real server-side
+ * step still runs for real (Guest Research Access gating, the pending
+ * entry's genuine creation/broadcast) — only the *second* broadcast frame,
+ * the one carrying that already-harmlessly-failed NOT_CONFIGURED outcome,
+ * is rewritten from 'errored' into a synthetic 'answered' entry carrying
+ * the given text/blocks/citations. That is what lets a test assert on
+ * real, specific rendered markup for a chosen outcome (plain text, or a
+ * given Block array) without the outcome depending on a real model reply —
+ * while the fetch that would spend a real token still never happens on
+ * either code path, key or no key.
+ *
+ * `outcomesByTitle`: `{ [customPromptTitle]: { answer, citations, blocks } }`
+ * — matched against `entry.question` (a research entry) or `entry.author`
+ * (a Card), both of which ws-rooms.js stamps as the triggering Custom
+ * Prompt's own title. A frame whose title isn't a key in this map (a typed
+ * Ask's research entry, some other prompt) is forwarded unchanged, error
+ * and all — so a test that wants to see a real, unmocked failure still can.
+ *
+ * A small artificial delay precedes only the rewritten frame so
+ * the real, genuinely-broadcast pending entry has a moment to be observed
+ * before the mocked resolution lands — the NOT_CONFIGURED failure this
+ * stands in for would otherwise resolve within the same tick it went
+ * pending, too fast for a polling assertion to reliably catch.
+ */
+export async function mockCustomPromptOutcomes(page, outcomesByTitle, { delayMs = 250 } = {}) {
+  await page.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((raw) => {
+      const text = typeof raw === 'string' ? raw : String(raw)
+      let msg
+      try {
+        msg = JSON.parse(text)
+      } catch {
+        ws.send(raw)
+        return
+      }
+      const isResearchEntry = msg.type === 'research_entry'
+      if (msg.type === 'research_state') {
+        const entries = (msg.entries || []).map((entry) => {
+          const outcome = outcomesByTitle[entry.question]
+          return outcome && entry.status === 'errored'
+            ? { ...entry, status: 'answered', error: null, citations: outcome.citations || [], blocks: outcome.blocks || null, answer: outcome.answer ?? '' }
+            : entry
+        })
+        ws.send(JSON.stringify({ ...msg, entries }))
+        return
+      }
+      // A failed annotation_ask broadcasts 'annotation_error', not
+      // 'annotation_entry' (see ws-rooms.js's runAnnotationAsk) — both wire
+      // types funnel into the same upsert client-side (annotation-panel.js's
+      // applyAnnotationError just calls applyAnnotationEntry), so rewriting
+      // the entry payload alone, keeping the original message `type`, is
+      // enough; there is no need to also rename the wire type.
+      const isAnnotationError = msg.type === 'annotation_error'
+      const entry = msg.entry
+      const title = isResearchEntry ? entry?.question : isAnnotationError ? entry?.author : null
+      const outcome = title != null ? outcomesByTitle[title] : null
+      if (!outcome || entry?.status !== 'errored') {
+        ws.send(raw)
+        return
+      }
+      const mockedEntry = {
+        ...entry,
+        status: 'answered',
+        error: null,
+        citations: outcome.citations || [],
+        blocks: outcome.blocks || null,
+        ...(isResearchEntry ? { answer: outcome.answer ?? '' } : { text: outcome.answer ?? '' })
+      }
+      setTimeout(() => ws.send(JSON.stringify({ ...msg, entry: mockedEntry })), delayMs)
+    })
+  })
+}
+
 export async function expandPresenceTable(page) {
   const overlay = page.locator('.check-overlay')
   if (await overlay.isVisible()) {
@@ -270,10 +459,10 @@ export function presenceRow(page, name) {
  * responding (the two are separate processes) — the room's own 3s
  * auto-reconnect needs a couple of cycles to land in that window.
  */
-async function roomTabsReady(page) {
+export async function roomTabsReady(page) {
   // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
-  // tab_state WS message is applied) rather than the shared textarea's
-  // rendered visibility — the textarea can be attached-but-not-yet-laid-out
+  // tab_state WS message is applied) rather than the Notes surface's
+  // rendered visibility — it can be attached-but-not-yet-laid-out
   // for a beat after the WS state lands, which made this a flaky race,
   // especially under a cold `npm run dev` worker still compiling the bundle.
   await page.locator('.room-tabs[data-ws-ready="true"]').waitFor({ timeout: 30_000 })

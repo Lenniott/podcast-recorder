@@ -9,12 +9,15 @@
     "preview": "vite preview",
     "rooms": "node scripts/rooms.js list",
     "rooms:delete": "node scripts/rooms.js delete",
+    "research:eval": "node --env-file=.env scripts/research-eval.js",
+    "check:standalone": "node scripts/check-standalone-server-imports.mjs",
+    "pretest": "npm run check:standalone",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e": "./scripts/run-e2e.sh",
+    "test:e2e:ui": "./scripts/run-e2e.sh --ui"
   },
   "dependencies": {
     "@sveltejs/kit": "^2.56.1",

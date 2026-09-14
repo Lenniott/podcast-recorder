@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { createRoomConnection, nextReconnectDelay } from '../../src/lib/room-connection.js'
+import { createRoomConnection, nextReconnectDelay } from '../../src/lib/room/room-connection.js'
 
 function makeSocket() {
   const sock = {

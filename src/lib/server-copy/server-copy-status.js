@@ -1,6 +1,6 @@
 /**
  * Pure mapping from a server-copy upload's internal status (see
- * $lib/server-copy-upload.js's getStatus()) to the small, display-ready
+ * $lib/server-copy/server-copy-upload.js's getStatus()) to the small, display-ready
  * shape that gets broadcast over the room WebSocket and rendered in the
  * sidebar.
  *
@@ -73,9 +73,9 @@ export function deriveServerCopyUploadState(status, { isRecording = false } = {}
  * Ticket 08: whether to surface a one-time, explicit explanation that
  * *this* participant's own server copy has permanently failed.
  *
- * The post-stop wait modal (ticket 07, $lib/ServerCopyWaitModal.svelte)
+ * The post-stop wait modal (ticket 07, $lib/server-copy/ServerCopyWaitModal.svelte)
  * only stays open for `isIncompleteServerCopyUpload` states
- * ($lib/exit-guard.js), which deliberately excludes `failed` — there's
+ * ($lib/recording/exit-guard.js), which deliberately excludes `failed` — there's
  * nothing left to wait for, so it isn't blocking. But that also means the
  * modal simply closes the instant a copy fails, exactly as if it had
  * finished normally, with nothing beyond the sidebar pill to tell the user

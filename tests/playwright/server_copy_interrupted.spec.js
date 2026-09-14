@@ -5,7 +5,7 @@ import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPres
  * Interrupted server-copy upload (ticket 13's second half). Aborts only
  * the chunk-upload requests — never the room WebSocket, never anything
  * else — so this proves the server copy's failure path is fully isolated
- * from local recording, exactly as $lib/server-copy-upload.js's module doc
+ * from local recording, exactly as $lib/server-copy/server-copy-upload.js's module doc
  * promises ("the local WAV remains the fallback").
  */
 

@@ -61,7 +61,7 @@ export function verifyHostClaimToken(token, slug, passwordHash, secret = getSecr
  * `clientId`, and sent back *only* on that connection — never broadcast,
  * since `clientId` itself is broadcast presence data and is not a secret.
  * The client threads it through every `server-copy/{session,chunks,
- * finalize}` request (`$lib/server-copy-upload.js`), and
+ * finalize}` request (`$lib/server-copy/server-copy-upload.js`), and
  * `authorizeServerCopyRequest` (`./server-copy-session.js`) verifies it
  * against the `clientId` in the request, proving the caller is the
  * connection that actually owns that `clientId` — something the room's

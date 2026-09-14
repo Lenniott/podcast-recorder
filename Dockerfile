@@ -16,10 +16,10 @@ WORKDIR /app
 COPY --from=builder /app/build         ./build
 COPY --from=builder /app/node_modules  ./node_modules
 COPY --from=builder /app/server.js     ./server.js
-COPY --from=builder /app/src/lib/server ./src/lib/server
-# server.js loads these as real files (not bundled). Copy every top-level
-# lib JS so a new import from ws-rooms.js cannot crash the image.
-COPY --from=builder /app/src/lib/*.js ./src/lib/
+# server.js loads this graph as real files (not through Vite's bundle).
+# Copy the complete tree so sibling imports from ws-rooms.js — research,
+# room, home, recording, and future modules — cannot drift out of the image.
+COPY --from=builder /app/src/lib       ./src/lib
 COPY --from=builder /app/scripts       ./scripts
 
 COPY --from=builder /app/package.json  ./package.json
@@ -33,5 +33,8 @@ ENV DB_PATH=/app/data/rooms.db
 ENV ROOM_MAX_AGE_HOURS=12
 
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]

@@ -5,7 +5,7 @@ import {
   float32ToInt16,
   gainToDb,
   dbToMeterPct
-} from '../../src/lib/audio-utils.js'
+} from '../../src/lib/recording/audio-utils.js'
 
 // ─── buildWavHeader ──────────────────────────────────────────────────────────
 

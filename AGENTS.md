@@ -15,7 +15,7 @@ that isn't true?
 ## Recording, locally
 
 Each browser captures and writes its own WAV file independently — audio never
-touches the server. The write path (`src/lib/capture-writer.js`) has one hard
+touches the server. The write path (`src/lib/recording/capture-writer.js`) has one hard
 invariant: **silence is only ever written from an explicit, measured gap**
 (`notifyDeviceGap`), never inferred from how long a disk write took. That
 inference is exactly the bug that corrupted a real 50-minute episode — search the
@@ -31,7 +31,7 @@ what let the original bug go unnoticed for an hour.
 
 ## Keeping host and guest in sync
 
-One WebSocket connection per browser, owned by `src/lib/room-connection.js`.
+One WebSocket connection per browser, owned by `src/lib/room/room-connection.js`.
 Reconnects use backoff + jitter and are otherwise invisible to callers.
 
 The one thing to know: any state that's true locally but not yet known to the
@@ -44,6 +44,13 @@ Don't hand-build a fix for a new flag; register it on the existing mechanism.
 
 ## Running things here
 
+- `npm run check:standalone` — confirms `ws-rooms.js` loads under plain Node
+  with no Vite/SvelteKit involved (`server.js`/`server-ws-dev.js` both load it
+  that way). Runs automatically before `npm test`. `npx vitest run` alone
+  won't catch a module in that import graph reaching for a SvelteKit-only
+  virtual import (`$env/*`, `$app/*`) — vitest itself runs through Vite, so
+  those always resolve there regardless of whether real startup would crash.
+  If you add a new import to anything `ws-rooms.js` pulls in, run this.
 - `npx vitest run` — unit tests, fast, no server needed.
 - `npm run test:coverage` — same unit tests plus a `coverage/` HTML report.
 - `npx svelte-check` — run `npx svelte-kit sync` first if `.svelte-kit/` is missing.
