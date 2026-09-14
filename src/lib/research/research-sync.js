@@ -13,9 +13,8 @@
  * room's Tab state).
  */
 
-// Matches the research endpoint's own MAX_QUERY_LENGTH
-// (src/routes/rec/[slug]/research/+server.js) — a manual ask can never be
-// longer than what the endpoint itself would accept.
+// Canonical server-side bound for a typed Ask question. The WebSocket
+// server applies this before creating the shared pending entry.
 export const MAX_RESEARCH_QUESTION_LEN = 500
 
 // Generous but bounded — an answer is trusted-enough client-relayed content
@@ -46,7 +45,7 @@ export function sanitizeCitations(citations) {
 }
 
 /** Client-generated id (like RoomTabs.svelte's makeTabId()) — lets the
- *  asking browser correlate its own later research_resolve/research_error
+ *  asking browser correlate the pending and server-owned completion frames
  *  message with the entry it just asked to create, without waiting for a
  *  round trip to learn a server-assigned id first. */
 export function makeResearchEntryId() {

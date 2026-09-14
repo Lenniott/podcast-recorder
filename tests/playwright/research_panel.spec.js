@@ -1,19 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, mockResearchEndpoint } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, mockCustomPromptOutcomes } from './helpers.js'
 
-/**
- * Same shape as mockResearchEndpoint (helpers.js) but with an artificial
- * delay before fulfilling, so the pending state is reliably observable
- * before the mocked answer lands — without this, a same-tick mocked
- * response can resolve before the assertion for "pending" even gets a
- * chance to poll.
- */
-async function mockResearchEndpointDelayed(page, { status = 200, body, delayMs = 300 } = {}) {
-  await page.route('**/rec/*/research', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, delayMs))
-    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-  })
-}
+const askAnswer = (text) => JSON.stringify({ provenInTranscript: 0, ubiquitousKnowledge: 0, outputType: 'ask', mainTakeaway: text })
+const paragraph = (text) => [{ type: 'paragraph', text }]
 
 const askInput = (page) => page.getByLabel('Ask the Research Assistant')
 const askButton = (page) => page.getByRole('button', { name: 'Ask' })
@@ -26,29 +15,27 @@ async function askQuestion(page, question) {
 test('manual ask: goes pending then answered with citations, shared with the other peer', async ({ browser }) => {
   const host = await browser.newPage()
   await stubYouTubeApi(host)
+  await mockCustomPromptOutcomes(host, {
+    'What is a haiku?': { answer: askAnswer('A haiku is a three-line Japanese poem.'), blocks: paragraph('A haiku is a three-line Japanese poem.'), citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }] }
+  })
   const password = 'research-panel-test'
   const roomUrl = await createRoom(host, { name: `E2E Research ${Date.now()}`, password })
 
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
-  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
-
-  await mockResearchEndpointDelayed(host, {
-    status: 200,
-    body: {
-      answer: 'A haiku is a three-line Japanese poem.',
-      citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }]
-    }
+  await mockCustomPromptOutcomes(guest, {
+    'What is a haiku?': { answer: askAnswer('A haiku is a three-line Japanese poem.'), blocks: paragraph('A haiku is a three-line Japanese poem.'), citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }] }
   })
+  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
   await askQuestion(host, 'What is a haiku?')
 
   // Goes pending immediately (real, server-broadcast state — not a client
   // illusion), then resolves to the answer once the (mocked, delayed)
-  // endpoint responds.
+  // server-owned lookup resolves.
   await expect(host.locator('.research-entry[data-status="pending"]')).toBeVisible()
   await expect(host.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
-  await expect(host.locator('.research-answer')).toHaveText('A haiku is a three-line Japanese poem.')
+  await expect(host.locator('[data-testid="block-list"]')).toHaveText('A haiku is a three-line Japanese poem.')
   // Citations are collapsed behind a disclosure toggle by default.
   await host.locator('.research-citations-toggle').click()
   // Rendered as the deduped hostname, not the citation's title — see
@@ -60,7 +47,7 @@ test('manual ask: goes pending then answered with citations, shared with the oth
   // sent anything from the guest side, this is purely the server's broadcast.
   await expect(guest.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 15_000 })
   await expect(guest.locator('.research-question')).toHaveText('What is a haiku?')
-  await expect(guest.locator('.research-answer')).toHaveText('A haiku is a three-line Japanese poem.')
+  await expect(guest.locator('[data-testid="block-list"]')).toHaveText('A haiku is a three-line Japanese poem.')
   await guest.locator('.research-citations-toggle').click()
   await expect(guest.locator('.research-citations a')).toHaveText('example.com')
 
@@ -73,12 +60,10 @@ test('a failed ask always resolves to a visible error, never a stuck pending car
   const password = 'research-panel-error'
   await createRoom(page, { name: `E2E ResearchError ${Date.now()}`, password })
 
-  await mockResearchEndpoint(page, { status: 502, body: { error: 'UPSTREAM_ERROR' } })
-
   await askQuestion(page, 'Define entropy.')
 
   await expect(page.locator('.research-entry[data-status="errored"]')).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('.research-error-text')).toHaveText(/could not be reached/i)
+  await expect(page.locator('.research-error-text')).toHaveText(/not configured/i)
   // Never left pending alongside the error.
   await expect(page.locator('.research-entry[data-status="pending"]')).toHaveCount(0)
 
@@ -87,10 +72,11 @@ test('a failed ask always resolves to a visible error, never a stuck pending car
 
 test('research history is scoped per tab: switching tabs shows a different, empty history', async ({ page }) => {
   await stubYouTubeApi(page)
+  await mockCustomPromptOutcomes(page, {
+    'Question for tab 1': { answer: askAnswer('Answer for tab 1.'), blocks: paragraph('Answer for tab 1.') }
+  })
   const password = 'research-panel-tabs'
   await createRoom(page, { name: `E2E ResearchTabs ${Date.now()}`, password })
-  await mockResearchEndpoint(page, { status: 200, body: { answer: 'Answer for tab 1.', citations: [] } })
-
   await askQuestion(page, 'Question for tab 1')
   await expect(page.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
 
@@ -99,7 +85,7 @@ test('research history is scoped per tab: switching tabs shows a different, empt
   // match the research-history sentence — not the class.
   await page.getByRole('button', { name: 'Add tab' }).click()
   await expect(page.getByRole('button', { name: 'Tab 2', exact: true })).toBeVisible()
-  await expect(page.getByText('No research yet for this tab.')).toBeVisible()
+  await expect(page.getByText('Ask a question, run a prompt, or highlight text to annotate it.')).toBeVisible()
   await expect(page.locator('.research-entry')).toHaveCount(0)
 
   // Switching back to the first tab shows its entry again.
@@ -114,10 +100,11 @@ test('research history survives a room re-join', async ({ browser }) => {
   const context = await browser.newContext()
   const host = await context.newPage()
   await stubYouTubeApi(host)
+  await mockCustomPromptOutcomes(host, {
+    'Persisted question?': { answer: askAnswer('Persisted answer.'), blocks: paragraph('Persisted answer.') }
+  })
   const password = 'research-panel-rejoin'
   const roomUrl = await createRoom(host, { name: `E2E ResearchRejoin ${Date.now()}`, password })
-  await mockResearchEndpoint(host, { status: 200, body: { answer: 'Persisted answer.', citations: [] } })
-
   await askQuestion(host, 'Persisted question?')
   await expect(host.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 10_000 })
 
@@ -125,10 +112,13 @@ test('research history survives a room re-join', async ({ browser }) => {
 
   const rejoined = await context.newPage()
   await stubYouTubeApi(rejoined)
+  await mockCustomPromptOutcomes(rejoined, {
+    'Persisted question?': { answer: askAnswer('Persisted answer.'), blocks: paragraph('Persisted answer.') }
+  }, { delayMs: 0 })
   await rejoined.goto(roomUrl)
   await expect(rejoined.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 15_000 })
   await expect(rejoined.locator('.research-question')).toHaveText('Persisted question?')
-  await expect(rejoined.locator('.research-answer')).toHaveText('Persisted answer.')
+  await expect(rejoined.locator('[data-testid="block-list"]')).toHaveText('Persisted answer.')
 
   await rejoined.close()
   await context.close()

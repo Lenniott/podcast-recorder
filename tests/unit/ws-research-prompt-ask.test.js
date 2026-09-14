@@ -24,7 +24,7 @@ vi.mock('../../src/lib/server/research-eval-log.js', () => ({
   appendResearchEvalLog: vi.fn()
 }))
 
-import { getActiveRoomBySlug, getCustomPrompt } from '../../src/lib/server/db.js'
+import { getActiveRoomBySlug, getCustomPrompt, recordResearchUsage } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms, _setResearchFetchForTests } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -326,16 +326,55 @@ describe('setupWss — panel button → Custom Prompt → research entry (no hig
       expect(errored.entry.blocks).toBe(null)
     })
 
-    it('a typed Ask (research_resolve) still has blocks: null', async () => {
+    it('server-resolves typed Ask as structured blocks while preserving ask usage semantics', async () => {
+      recordResearchUsage.mockClear()
+      useAssistant(() =>
+        blocksReply([{ type: 'paragraph', text: 'It is noon.', items: null, label: null, value: null }])
+      )
       host.sent.length = 0
-      host.emit('message', JSON.stringify({ type: 'research_ask', entryId: 'ask-1', question: 'What time is it?' }))
       host.emit('message', JSON.stringify({
-        type: 'research_resolve',
+        type: 'research_ask',
         entryId: 'ask-1',
-        answer: JSON.stringify({ mainTakeaway: 'It is noon.', outputType: 'ask' }),
-        citations: []
+        question: 'What time is it? Use {current_tab}, not an unrequested transcript.',
+        currentTab: 'CLOCK NOTES',
+        transcript: 'SECRET TRANSCRIPT',
+        videoTitle: 'Clock episode'
       }))
-      expect(latest(host, 'research_entry').entry.blocks).toBe(null)
+      await settle()
+
+      const answered = latest(host, 'research_entry').entry
+      expect(answered).toMatchObject({ id: 'ask-1', status: 'answered' })
+      expect(answered.blocks).toEqual([{ type: 'paragraph', text: 'It is noon.' }])
+      expect(fetchCalls[0].body.response_format).toEqual(
+        expect.objectContaining({ type: 'json_schema', json_schema: expect.objectContaining({ name: 'research_blocks' }) })
+      )
+      expect(JSON.stringify(fetchCalls[0].body.messages)).toContain('CLOCK NOTES')
+      expect(JSON.stringify(fetchCalls[0].body.messages)).not.toContain('SECRET TRANSCRIPT')
+      expect(recordResearchUsage).toHaveBeenCalledWith(expect.objectContaining({ mode: 'ask' }))
+    })
+
+    it('uses the canonical bounded question for the provider request', async () => {
+      useAssistant(() => blocksReply([{ type: 'paragraph', text: 'Done.', items: null, label: null, value: null }]))
+      const oversized = `  ${'q'.repeat(600)}  `
+      host.emit('message', JSON.stringify({ type: 'research_ask', entryId: 'ask-capped', question: oversized }))
+      await settle()
+
+      const answered = latest(host, 'research_entry').entry
+      expect(answered.question).toBe('q'.repeat(500))
+      expect(fetchCalls[0].body.messages[0].content).toBe('q'.repeat(500))
+    })
+
+    it('ignores client-driven resolve and error messages', async () => {
+      useAssistant(() => new Promise(() => {}))
+      host.emit('message', JSON.stringify({ type: 'research_ask', entryId: 'ask-owned', question: 'Who owns completion?' }))
+      host.sent.length = 0
+      guest.sent.length = 0
+
+      host.emit('message', JSON.stringify({ type: 'research_resolve', entryId: 'ask-owned', answer: 'forged' }))
+      host.emit('message', JSON.stringify({ type: 'research_error', entryId: 'ask-owned', message: 'forged' }))
+
+      expect(host.sent.some((m) => m.type === 'research_entry')).toBe(false)
+      expect(guest.sent.some((m) => m.type === 'research_entry')).toBe(false)
     })
   })
 })

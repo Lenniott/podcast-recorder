@@ -11,26 +11,22 @@
    *   <SelectionPopup
    *     rect={selectionRect}
    *     actions={[
-   *       { id: "comment", label: "Comment", icon: AnnotationPlus },
+   *       { id: "comment", label: "Annotate", icon: AnnotationPlus, primary: true },
    *       ...customPrompts.map((p) => ({
    *            id: `prompt:${p.id}`, label: p.title, icon: Sparkles,
    *            disabled: !canRunPrompts, title: "Needs Research Access" }))
    *     ]}
    *     onAction={(id) => ...}
    *   >
-   *     {#if openActionId === "comment"}<CommentComposer … />{/if}
+   *     <SelectionComposer … />
    *   </SelectionPopup>
    *
    * Each entry is `{ id, label, icon?, title?, disabled?, ariaLabel? }`.
-   * `onAction(id)` fires on click; the parent decides what that means —
-   * ticket 03's Comment opens a composer in the slot below the row, while
-   * ticket 05's Custom Prompts are expected to fire immediately and need no
-   * slot content at all (ADR-0008: "every Custom Prompt fires immediately").
-   * Both work because this component never branches on an action's id.
+   * `onAction(id)` fires on click; the parent decides whether that saves a
+   * Comment or runs a Custom Prompt with the shared composer's context.
    *
-   * The default slot renders under the action row, inside the same floating
-   * card, and is where an action that needs follow-up UI (a text input, a
-   * confirmation) puts it. Empty slot = a bare row of buttons.
+   * The default slot renders above the action row, inside the same floating
+   * card, so the quote and shared composer remain visible for every action.
    *
    * Positioning is `position: fixed` in viewport coordinates, so `rect`
    * should come straight from `selectionRect()` in selection-popup.js with
@@ -46,11 +42,6 @@
 
   /** (actionId) => void */
   export let onAction = () => {};
-
-  /** Which action's follow-up UI the parent is currently showing, if any.
-   *  Used only to mark the button as pressed — this component never decides
-   *  it, so an action that needs no follow-up UI can leave it null. */
-  export let openActionId = null;
 
   export let ariaLabel = "Actions for the selected text";
 
@@ -98,16 +89,18 @@
          an action button must not blur/collapse the very selection the
          action is about, but anything the slot renders — a text input, say —
          still has to be focusable normally. -->
+    <slot />
     <div class="selection-popup-actions" on:mousedown|preventDefault role="presentation">
       {#each actions as action (action.id)}
         <button
           type="button"
-          class="btn-secondary btn-sm selection-popup-action"
+          class:btn-primary={action.primary}
+          class:btn-secondary={!action.primary}
+          class="btn-sm selection-popup-action"
           data-action-id={action.id}
           disabled={action.disabled}
           title={action.title || action.label}
           aria-label={action.ariaLabel || action.label}
-          aria-pressed={openActionId === action.id}
           on:click={() => onAction(action.id)}
         >
           {#if action.icon}
@@ -119,7 +112,6 @@
         </button>
       {/each}
     </div>
-    <slot />
   </div>
 {/if}
 

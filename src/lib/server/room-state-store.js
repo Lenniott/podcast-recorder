@@ -23,6 +23,7 @@ import { MAX_RESEARCH_QUESTION_LEN, MAX_RESEARCH_ANSWER_LEN, sanitizeCitations }
 import {
   ANNOTATION_KINDS,
   MAX_ANNOTATION_TEXT_LEN,
+  MAX_ANNOTATION_PARTICIPANT_CONTEXT_LEN,
   MAX_ANNOTATION_ANSWER_LEN,
   MAX_ANNOTATION_AUTHOR_LEN,
   isAiAuthoredKind,
@@ -349,8 +350,8 @@ export function createRoomStateStore({
         answer: null,
         citations: [],
         // Structured reply (structured-research-output ticket 03, mirroring
-        // addAnnotation's own `blocks` field above) — null for a typed Ask
-        // (which never produces one) or a 'text'-format Custom Prompt run
+        // addAnnotation's own `blocks` field above) — populated for typed Ask
+        // or a blocks-format Custom Prompt, and null for a text-format prompt
         // from a panel button; set only by resolveResearchEntry below when
         // the triggering Custom Prompt asked for 'blocks'. `answer` still
         // carries a flattened-text fallback either way (see
@@ -373,10 +374,9 @@ export function createRoomStateStore({
    * The Research Assistant answered a pending entry. Mirrors resolveAnnotation
    * above — `question` and `at` are untouched.
    *
-   * `blocks` (structured-research-output ticket 03) is optional — undefined
-   * for a typed Ask or a 'text'-format Custom Prompt run from a panel
-   * button, an already-parsed/sanitized Block array (research-blocks.js's
-   * askResearchAssistant return value) for a 'blocks'-format one.
+   * `blocks` is optional — an already-parsed/sanitized Block array for typed
+   * Ask or a blocks-format Custom Prompt, and undefined for a text-format
+   * prompt or older stored entry.
    * Re-sanitized here via sanitizeBlockList rather than trusted as-is — same
    * "never trust length/shape beyond what's already checked" discipline
    * resolveAnnotation applies to its own `blocks` param, even though it has
@@ -460,7 +460,7 @@ export function createRoomStateStore({
    * name — never read off the wire message, so nobody can post a Comment
    * under someone else's name.
    */
-  function addAnnotation(slug, tabId, { id, kind, quote, text, author, customPromptId } = {}) {
+  function addAnnotation(slug, tabId, { id, kind, quote, text, author, customPromptId, participantContext } = {}) {
     return withRoom(slug, (content) => {
       const annotationId = String(id || '').slice(0, 64)
       if (!annotationId) return { ok: false, error: 'Invalid annotation id' }
@@ -521,6 +521,9 @@ export function createRoomStateStore({
         // Which Custom Prompt produced this Card, kept so a later ticket can
         // tell two Cards on the same quote apart; null for a Comment.
         customPromptId: customPromptId ? String(customPromptId).slice(0, 64) : null,
+        participantContext: awaitingAnswer
+          ? String(participantContext ?? '').trim().slice(0, MAX_ANNOTATION_PARTICIPANT_CONTEXT_LEN)
+          : null,
         author: String(author || '').trim().slice(0, MAX_ANNOTATION_AUTHOR_LEN) || 'Guest',
         at: Date.now()
       }
@@ -594,6 +597,19 @@ export function createRoomStateStore({
     })
   }
 
+  /** Removes one Annotation and returns its immutable storage tab so the
+   * WebSocket layer can clear the row and anchor for every participant. */
+  function removeAnnotation(slug, annotationId) {
+    return withRoom(slug, (content) => {
+      const id = String(annotationId || '')
+      const found = findAnnotation(content, id)
+      if (!found) return { ok: false, error: 'Unknown annotation' }
+
+      content.annotations[found.tabId].splice(found.idx, 1)
+      return { ok: true, room: content, tabId: found.tabId, annotationId: id }
+    })
+  }
+
   /** For tests only — clears hot content and cancels every pending grace
    *  timer, so each test starts clean (mirrors ws-rooms.js's own
    *  _resetRooms, since this Store now owns what that used to hold). */
@@ -620,6 +636,7 @@ export function createRoomStateStore({
     addAnnotation,
     resolveAnnotation,
     errorAnnotation,
+    removeAnnotation,
     _resetForTests
   }
 }

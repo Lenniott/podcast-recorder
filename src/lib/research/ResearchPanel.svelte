@@ -3,8 +3,6 @@
   import {
     ChevronLeft,
     ChevronRight,
-    ChevronUp,
-    ChevronDown,
     FileSearch02,
     XClose,
   } from "$lib/icons";
@@ -12,34 +10,28 @@
     applyResearchEntry as reduceResearchEntry,
     applyResearchState as reduceResearchState,
     applyResearchRemove as reduceResearchRemove,
-    visibleEntries,
-    dedupeCitationsByHost,
-    buildManualAskRequest,
+    panelFeed,
     activeNotesTabText,
     activeTabVideoTitle,
-    describeResearchError,
     makeResearchEntryId,
     panelPromptButtons,
   } from "./research-panel.js";
-  import { parseResearchCard } from "./research-card.js";
   import {
     applyAnnotationEntry as reduceAnnotationEntry,
     applyAnnotationState as reduceAnnotationState,
     applyAnnotationError as reduceAnnotationError,
+    applyAnnotationRemove as reduceAnnotationRemove,
     visibleAnnotations,
-    visibleAnnotationsForRoom,
     isCardAnnotation,
-    annotationStatus,
   } from "./annotation-panel.js";
   import { formatTranscriptForPrompt } from "$lib/room/selection-annotations.js";
   import TranscriptFacet from "./TranscriptFacet.svelte";
-  import BlockList from "./BlockList.svelte";
+  import AiCard from "./AiCard.svelte";
   import { TRANSCRIPT_TAB_ID } from "$lib/room/transcript-sync.js";
 
   // (payload) => void — JSON-sends over the room's single WebSocket
   // connection, owned by the page (same contract as RoomTabs.svelte's send).
   export let send = () => {};
-  export let slug = "";
 
   // Local, per-browser UI preference — never sent over the WS, mirrors
   // RoomSidebar.svelte's own `collapsed` (bound by the parent, e.g.
@@ -141,22 +133,10 @@
   let activeTabId = null;
   let entriesByTab = {};
 
-  $: entries = visibleEntries(entriesByTab, activeTabId);
-
-  // Annotations (ADR-0008, ticket 03) — a parallel per-tab collection to
-  // entriesByTab above, fed by its own annotation_entry/annotation_state
-  // broadcasts. Deliberately a separate list rather than rows mixed into
-  // `entries`: a research entry has a pending/answered/errored lifecycle
-  // and a question, an Annotation has neither — it is written once and is
-  // then a permanent record of a quote plus a note.
+  // Storage remains split: Annotations have frozen anchors while research
+  // entries do not. panelFeed is the one tested display projection.
   let annotationsByTab = {};
-  // The feed lists the active Notes tab's Annotations AND every
-  // Turn-anchored one, together, newest first — see
-  // visibleAnnotationsForRoom for why the Transcript's are the one
-  // cross-tab case (ticket 06). Before this, Turn Annotations were filed
-  // under a tabId that `activeTabId` could hold; now it never can, so
-  // scoping the feed to activeTabId alone would hide them entirely.
-  $: annotations = visibleAnnotationsForRoom(annotationsByTab, activeTabId);
+  $: feed = panelFeed({ annotationsByTab, entriesByTab, activeTabId });
   // Just the Transcript's, for drawing highlights back onto the Turns.
   $: turnAnnotations = visibleAnnotations(annotationsByTab, TRANSCRIPT_TAB_ID);
 
@@ -164,27 +144,12 @@
   $: videoTitle = activeTabVideoTitle(tabVideoTitles, activeTabId);
 
   let questionInput = "";
-  let entriesEl;
-  let annotationsEl;
-
-  // entry.id -> boolean. One `showCitations` shared across every research
-  // card would toggle citations on ALL of them at once when clicked on any
-  // one card — keyed per-entry so each card's disclosure is independent.
-  let expandedCitations = {};
-
-  function toggleCitations(entryId) {
-    // Reassign (not mutate) so Svelte 4's `$:`/markup reactivity notices —
-    // `expandedCitations[entryId] = ...` in place wouldn't trigger a rerender.
-    expandedCitations = {
-      ...expandedCitations,
-      [entryId]: !expandedCitations[entryId],
-    };
-  }
+  let feedEl;
 
   function revealPanel() {
     collapsed = false;
     tick().then(() => {
-      if (entriesEl) entriesEl.scrollTop = 0;
+      if (feedEl) feedEl.scrollTop = 0;
     });
   }
 
@@ -209,7 +174,7 @@
   export function applyResearchEntry(msg) {
     entriesByTab = reduceResearchEntry(entriesByTab, msg);
     tick().then(() => {
-      if (entriesEl) entriesEl.scrollTop = 0;
+      if (feedEl) feedEl.scrollTop = 0;
     });
   }
 
@@ -228,7 +193,7 @@
   export function applyAnnotationEntry(msg) {
     annotationsByTab = reduceAnnotationEntry(annotationsByTab, msg);
     tick().then(() => {
-      if (annotationsEl) annotationsEl.scrollTop = 0;
+      if (feedEl) feedEl.scrollTop = 0;
     });
   }
 
@@ -244,20 +209,26 @@
     annotationsByTab = reduceAnnotationError(annotationsByTab, msg);
   }
 
+  export function applyAnnotationRemove(msg) {
+    annotationsByTab = reduceAnnotationRemove(annotationsByTab, msg);
+  }
+
   function removeEntry(entryId) {
     if (!canAskResearch) return; // same gate as ws-rooms.js's research_remove
     send({ type: "research_remove", entryId });
   }
 
+  function removeAnnotation(annotationId) {
+    send({ type: "annotation_remove", annotationId });
+  }
+
   // ─── Outbound — a panel-button Custom Prompt (structured-research-output
-  //     panel-buttons feature) — fully server-resolved, like annotation_ask,
-  //     unlike the client-driven research_ask/publishResearchResult flow
-  //     just below: there is no template to keep off the wire here beyond
-  //     what annotation_ask already keeps off it, so this reuses that same
+  //     panel-buttons feature) — fully server-resolved, like annotation_ask
+  //     and typed research_ask. There is no template to keep off the wire
+  //     here beyond what annotation_ask already keeps off it, so this reuses
   //     "resolve by id, server-side" discipline rather than the HTTP-POST
   //     one. Result lands as a research entry (ws-rooms.js's
-  //     runResearchPromptAsk), rendered by the exact same `entries` markup
-  //     below — no separate rendering path needed. ────────────────────────
+  //     runResearchEntryAsk), rendered in the same mixed feed below. ──────
 
   function runPanelPrompt(customPromptId) {
     if (!canAskResearch) return; // same gate as ws-rooms.js's research_prompt_ask
@@ -276,9 +247,7 @@
     revealPanel();
   }
 
-  // ─── Outbound — manual ask (ticket 04; Quick Actions/Voice Trigger,
-  //     tickets 05/06, will reuse the same research_ask/resolve/error
-  //     mechanism) ────────────────────────────────────────────────────────
+  // ─── Outbound — typed Ask, resolved entirely by the WS server. ────────
 
   function submitQuestion() {
     if (!canAskResearch) return; // same gate as ws-rooms.js's research_ask
@@ -287,54 +256,15 @@
     questionInput = "";
 
     const entryId = makeResearchEntryId();
-    send({ type: "research_ask", entryId, question });
-    revealPanel();
-    // notes/video title/transcriptLines ride along only as Placeholder
-    // ingredients ({current_tab}/{transcript} — see CONTEXT.md) —
-    // substitution itself happens server-side (research-assistant.js).
-    publishResearchResult(
-      entryId,
-      buildManualAskRequest(question, notesText, transcriptLines, videoTitle),
-    );
-  }
-
-  async function postResearch(requestBody) {
-    let res;
-    try {
-      res = await fetch(`/rec/${slug}/research`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(requestBody),
-      });
-    } catch {
-      return { ok: false, body: null };
-    }
-
-    let body = null;
-    try {
-      body = await res.json();
-    } catch {
-      body = null;
-    }
-    return { ok: res.ok, body };
-  }
-
-  async function publishResearchResult(entryId, requestBody) {
-    const { ok, body } = await postResearch(requestBody);
-    if (!ok) {
-      send({
-        type: "research_error",
-        entryId,
-        message: describeResearchError(body),
-      });
-      return;
-    }
     send({
-      type: "research_resolve",
+      type: "research_ask",
       entryId,
-      answer: body?.answer ?? "",
-      citations: body?.citations ?? [],
+      question,
+      currentTab: notesText,
+      transcript: formatTranscriptForPrompt(transcriptLines),
+      videoTitle,
     });
+    revealPanel();
   }
 </script>
 
@@ -469,167 +399,46 @@
       </form>
     {/if}
 
-    <!-- Annotations (ADR-0008, tickets 03 and 05) — the active tab's,
-         newest first. Comments (human) and Cards (a Custom Prompt's answer)
-         share ONE list on purpose: they are the same concept, both anchored
-         to a frozen quote, and separating them would make a reader check two
-         places for what was said about one highlight. Reading is not gated
-         by canAskResearch — the gate is on *spending* a Research Assistant
-         call (see ws-rooms.js's annotation_ask), not on seeing the result. -->
-    <section class="annotation-list" data-testid="annotation-list">
-      <h3 class="annotation-list-title">Annotations</h3>
-      <div class="annotation-entries" bind:this={annotationsEl}>
-        {#if annotations.length === 0}
-          <p class="research-empty">
-            Highlight text in the notes — or a Transcript Turn — to comment
-            on it or run a prompt.
-          </p>
-        {:else}
-          {#each annotations as annotation (annotation.id)}
-            {@const isCard = isCardAnnotation(annotation)}
-            {@const status = annotationStatus(annotation)}
+    <!-- One visual feed over two stores. Annotations retain frozen quotes;
+         Ask/panel-prompt research entries retain their tab-scoped question. -->
+    <div class="panel-feed" data-testid="panel-feed" bind:this={feedEl}>
+      {#if feed.length === 0}
+        <p class="research-empty">
+          Ask a question, run a prompt, or highlight text to annotate it.
+        </p>
+      {:else}
+        {#each feed as row (row.key)}
+          {#if row.type === "annotation" && !isCardAnnotation(row)}
             <article
               class="annotation"
-              class:annotation-card={isCard}
-              data-kind={annotation.kind}
-              data-status={status}
+              data-kind={row.kind}
+              data-status="answered"
               data-testid="annotation"
             >
-              <!-- The frozen quote — exactly the text that was highlighted
-                   when this Annotation was made, never recomputed from the
-                   notes as they stand now. -->
-              <blockquote class="annotation-quote">
-                {annotation.quote}
-              </blockquote>
-              {#if status === "pending"}
-                <p class="annotation-pending" aria-live="polite">
-                  Running {annotation.author}…
-                </p>
-              {:else if status === "errored"}
-                <p class="annotation-error-text">{annotation.error}</p>
-              {:else if annotation.blocks?.length}
-                <!-- Structured Block output (structured-research-output
-                     ticket 03) — only taken when a 'blocks'-format Card
-                     actually has something structured to show; every other
-                     Comment/Card (which is all of them predating this
-                     ticket) falls through to the unchanged plain-text
-                     branch below. -->
-                <BlockList blocks={annotation.blocks} />
-              {:else}
-                <p class="annotation-text">{annotation.text}</p>
-              {/if}
-              <!-- Who said it. A Card names the prompt that produced it and
-                   is badged as AI, so a reader skimming the list is never
-                   left guessing whether a person or the assistant wrote a
-                   given row. -->
-              <p class="annotation-author">
-                {#if isCard}
-                  <span class="annotation-badge" data-testid="annotation-badge"
-                    >AI</span
-                  >
-                {/if}
-                {annotation.author}
-              </p>
-              {#if isCard && annotation.citations?.length}
-                <ul class="annotation-citations">
-                  {#each dedupeCitationsByHost(annotation.citations) as citation (citation.host)}
-                    <li>
-                      <a
-                        href={citation.url}
-                        target="_blank"
-                        rel="noopener noreferrer">{citation.host}</a
-                      >
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-            </article>
-          {/each}
-        {/if}
-      </div>
-    </section>
-
-    <div class="research-entries" bind:this={entriesEl}>
-      {#if entries.length === 0}
-        <p class="research-empty">No research yet for this tab.</p>
-      {:else}
-        {#each entries as entry (entry.id)}
-          <div class="research-entry" data-status={entry.status}>
-            <div class="research-entry-header">
-              <p class="research-question">{entry.question}</p>
-              {#if canAskResearch}
+              <div class="feed-row-header">
+                <blockquote class="annotation-quote">{row.quote}</blockquote>
                 <button
                   type="button"
                   class="btn-ghost btn-icon btn-sm research-remove"
-                  aria-label="Remove this research card"
-                  title="Remove this research card"
-                  on:click={() => removeEntry(entry.id)}
-                >
-                  <XClose />
-                </button>
-              {/if}
-            </div>
-            {#if entry.status === "pending"}
-              <p class="research-pending" aria-live="polite">
-                Looking this up…
+                  aria-label="Remove this annotation"
+                  title="Remove this annotation"
+                  on:click={() => removeAnnotation(row.id)}
+                ><XClose /></button>
+              </div>
+              <p class="annotation-text">{row.text}</p>
+              <p class="annotation-author">
+                {row.author}
               </p>
-            {:else if entry.status === "answered"}
-              {#if entry.blocks?.length}
-                <!-- Structured Block output (structured-research-output
-                     ticket 03) — only taken when a 'blocks'-format panel
-                     Custom Prompt actually has something structured to
-                     show; every typed-Ask/'text'-format entry (all of
-                     them predating this ticket) falls through to the
-                     unchanged parseResearchCard branch below. -->
-                <BlockList blocks={entry.blocks} />
-              {:else}
-                {@const card = parseResearchCard(entry.answer)}
-                {#if card}
-                  {#if card.outputType === "custom" || card.outputType === "ask"}
-                    <div class="research-interpretation">{card.mainTakeaway}</div>
-                  {:else}
-                    <div class="research-card">
-                      <p class="research-answer">{card.mainTakeaway}</p>
-                    </div>
-                  {/if}
-                {/if}
-              {/if}
-              {#if entry.citations?.length}
-                <div class="research-citations-container">
-                  <button
-                    class="research-citations-toggle"
-                    aria-label="Show citations"
-                    title="Show citations"
-                    on:click={() => toggleCitations(entry.id)}
-                  >
-                    <span class="research-citations-title">Citations</span>
-                    {#if expandedCitations[entry.id]}
-                      <ChevronUp />
-                    {:else}
-                      <ChevronDown />
-                    {/if}
-                  </button>
-                  {#if expandedCitations[entry.id]}
-                    <ul class="research-citations">
-                      {#each dedupeCitationsByHost(entry.citations) as citation (citation.host)}
-                        <li>
-                          <a
-                            href={citation.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {citation.host}
-                          </a>
-                        </li>
-                      {/each}
-                    </ul>
-                  {/if}
-                </div>
-              {/if}
-            {:else if entry.status === "errored"}
-              <p class="research-error-text">{entry.error}</p>
-            {/if}
-          </div>
+            </article>
+          {:else}
+            <AiCard
+              {row}
+              canRemove={row.type === "annotation" || canAskResearch}
+              onRemove={() => row.type === "annotation"
+                ? removeAnnotation(row.id)
+                : removeEntry(row.id)}
+            />
+          {/if}
         {/each}
       {/if}
     </div>
@@ -789,42 +598,27 @@
     border-color: var(--accent);
   }
 
-  .research-entries {
+  .panel-feed {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
     gap: 10px;
-    overflow-y: auto;
-  }
-
-  /* Annotations sit above the research entries and get their own bounded
-     scroll area, so a long Comment history can't push the research cards —
-     the thing you glance at mid-conversation — off the bottom of the panel. */
-  .annotation-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
     width: 100%;
+    min-width: 0;
     min-height: 0;
-    flex: 0 1 auto;
-    max-height: 45%;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .annotation-list-title {
-    margin: 0;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  .annotation-entries {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
     overflow-y: auto;
+  }
+
+  .feed-row-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .research-remove {
+    flex-shrink: 0;
+    color: var(--muted);
   }
 
   .annotation {
@@ -835,6 +629,8 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .annotation-quote {
@@ -844,6 +640,9 @@
     color: var(--muted);
     font-size: 12px;
     font-style: italic;
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
   }
 
   .annotation-text {
@@ -851,6 +650,7 @@
     font-size: 13px;
     color: var(--text);
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .annotation-author {
@@ -862,217 +662,8 @@
     gap: 6px;
   }
 
-  /* A Card is the assistant talking, not a co-host — the accent edge and
-     the badge together make that readable at a glance in a mixed list,
-     rather than relying on the author name alone (a prompt title like
-     "Fact check" reads a lot like a person's note otherwise). */
-  .annotation-card {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
-  }
-
-  .annotation-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 5px;
-    border-radius: 999px;
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .annotation-pending {
-    margin: 0;
-    font-size: 13px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .annotation-pending::before {
-    content: "";
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--accent);
-    animation: research-pulse 1s ease-in-out infinite;
-  }
-
-  .annotation-error-text {
-    margin: 0;
-    font-size: 13px;
-    color: var(--danger, #d33);
-  }
-
-  .annotation-citations {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 11px;
-  }
-
-  .annotation-citations a {
-    color: var(--muted);
-  }
-
   .research-empty {
     color: var(--muted);
     font-size: 13px;
-  }
-
-  .research-entry {
-    padding: 10px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 100%;
-  }
-
-  .research-entry-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-  }
-
-  .research-question {
-    margin: 0;
-    font-weight: 600;
-    font-size: 12px;
-    margin-right: auto;
-    color: var(--muted);
-  }
-
-  .research-remove {
-    flex-shrink: 0;
-    color: var(--muted);
-  }
-
-  .research-answer {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 400;
-    line-height: 1.35;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px;
-  }
-
-  .research-interpretation {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-  }
-
-  .research-card {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 400;
-  }
-
-  .research-entry[data-status="pending"] {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  }
-
-  .research-pending {
-    margin: 0;
-    font-size: 13px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .research-pending::before {
-    content: "";
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--accent);
-    animation: research-pulse 1s ease-in-out infinite;
-  }
-
-  @keyframes research-pulse {
-    0%,
-    100% {
-      opacity: 0.35;
-      transform: scale(0.85);
-    }
-    50% {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  .research-error-text {
-    margin: 0;
-    font-size: 13px;
-    color: var(--danger, #d33);
-  }
-
-  .research-citations-container {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .research-citations {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--muted);
-    padding: 4px 6px;
-    background: var(--bg-elevated);
-    border-radius: 2px;
-  }
-
-  .research-citations a {
-    color: var(--text);
-  }
-
-  .research-citations-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 400;
-    color: var(--muted);
-    cursor: pointer;
-    width: 100%;
-    border: none;
-    background: none;
-    padding: 0;
-    margin: 0;
-    text-align: left;
-    cursor: pointer;
-    padding: 4px 6px;
-  }
-
-  .research-citations-toggle:hover {
-    background: var(--bg-elevated);
-    border-radius: 2px;
   }
 </style>

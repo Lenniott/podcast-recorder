@@ -1,4 +1,6 @@
 <script>
+  import { sanitizeBlockList } from "./research-blocks.js";
+
   /**
    * Renders a Card's or research entry's structured Block array (see
    * research-blocks.js) as real markup — a `paragraph` per <p>, a `list` as
@@ -16,10 +18,14 @@
    * only `null`.
    */
   let { blocks = [] } = $props();
+  // Re-sanitize at the display boundary as well as on new server writes.
+  // This cleans already-persisted Cards created before a sanitizer rule was
+  // added, without requiring a destructive room-state migration.
+  let displayBlocks = $derived(sanitizeBlockList(blocks) || []);
 </script>
 
 <div class="block-list" data-testid="block-list">
-  {#each blocks as block, i (i)}
+  {#each displayBlocks as block, i (i)}
     {#if block.type === "paragraph"}
       <p class="block-paragraph" data-testid="block-paragraph">{block.text}</p>
     {:else if block.type === "list"}
@@ -47,6 +53,8 @@
     flex-direction: column;
     gap: 6px;
     width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .block-paragraph {
@@ -54,6 +62,8 @@
     font-size: inherit;
     line-height: 1.4;
     white-space: pre-wrap;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .block-list-items {
@@ -64,6 +74,13 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .block-list-items li {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   /* A "stat" gets the same accent-tinted, distinct-from-plain-text
@@ -78,6 +95,9 @@
     border-radius: 6px;
     border: 1px solid var(--accent);
     background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .block-stat-label {
@@ -92,5 +112,7 @@
     font-size: 14px;
     font-weight: 700;
     color: var(--text);
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 </style>

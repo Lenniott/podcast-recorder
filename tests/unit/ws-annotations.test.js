@@ -156,6 +156,28 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     expect(latest(host, 'annotation_entry').entry.text).toBe('my two cents')
   })
 
+  it('a guest can remove an Annotation without Guest Research Access and every peer is told to clear its anchor', () => {
+    const tabId = activeTabId(host)
+    comment(host, { tabId, id: 'a1', quote: 'a highlighted phrase', text: 'temporary note' })
+    host.sent.length = 0
+    guest.sent.length = 0
+
+    guest.emit('message', JSON.stringify({ type: 'annotation_remove', annotationId: 'a1' }))
+
+    for (const ws of [host, guest]) {
+      expect(latest(ws, 'annotation_removed')).toEqual({
+        type: 'annotation_removed',
+        tabId,
+        annotationId: 'a1'
+      })
+      expect(ws.sent.some((msg) => msg.type === 'error')).toBe(false)
+    }
+
+    guest.sent.length = 0
+    guest.emit('message', JSON.stringify({ type: 'tabs_sync' }))
+    expect(latest(guest, 'annotation_state')).toBeUndefined()
+  })
+
   it('rejoining replays every existing Annotation for the tab, before any live one', () => {
     const tabId = activeTabId(host)
     comment(host, { tabId, id: 'a1', quote: 'first quote', text: 'first note' })
@@ -247,7 +269,7 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     // record, so the check is "every key is a known, non-positional one"
     // rather than an exact list that a new Annotation kind invalidates.
     const CORE_KEYS = ['at', 'author', 'id', 'kind', 'quote', 'tabId', 'text']
-    const CARD_KEYS = ['status', 'citations', 'customPromptId', 'error', 'blocks']
+    const CARD_KEYS = ['status', 'citations', 'customPromptId', 'participantContext', 'error', 'blocks']
     for (const entry of entries) {
       const keys = Object.keys(entry)
       expect(CORE_KEYS.every((k) => keys.includes(k))).toBe(true)

@@ -168,7 +168,6 @@
 
   <ResearchPanel
     {send}
-    {slug}
     {tabTexts}
     {tabVideoTitles}
     {isHostClaim}

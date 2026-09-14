@@ -178,7 +178,7 @@ describe('serializeResearchCard', () => {
   })
 })
 
-// This is the exact path a real research_resolve/annotation_entry broadcast
+// This is the exact path a real research_entry/annotation_entry broadcast
 // takes: askResearchAssistant sanitizes + serializes server-side, the value
 // goes out over the wire as the entry/Card's answer, and the panel calls
 // parseResearchCard on THAT string to render it — never on the model's raw

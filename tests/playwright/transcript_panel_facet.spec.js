@@ -162,13 +162,10 @@ test('highlighting a Turn offers the same Comment popup Notes has, and files the
   })
 
   // The complete popup, identical to the one Notes text raises.
-  // Two visible "Comment" controls share the popup: the action that opens
-  // the form, and the form's submit. Same split as annotation_highlight.
   const popup = host.getByTestId('selection-popup')
   await expect(popup).toBeVisible()
-  await popup.locator('[data-action-id="comment"]').click()
   await host.getByTestId('selection-comment-input').fill('check this date')
-  await popup.locator('button[type="submit"]').click()
+  await popup.getByRole('button', { name: 'Annotate' }).click()
 
   // The feed lives on the Annotations facet; the Transcript facet only
   // draws the quote back onto the Turn. Flip to the feed to see the row —

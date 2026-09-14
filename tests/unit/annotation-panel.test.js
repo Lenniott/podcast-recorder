@@ -3,6 +3,7 @@ import {
   applyAnnotationEntry,
   applyAnnotationState,
   applyAnnotationError,
+  applyAnnotationRemove,
   annotationStatus,
   isCardAnnotation,
   visibleAnnotations
@@ -103,6 +104,17 @@ describe('annotation-panel — applying broadcasts', () => {
   it('applyAnnotationError with no entry leaves the list untouched rather than dropping a row', () => {
     const before = applyAnnotationEntry({}, { tabId: 'tab-1', entry: entry('a1') })
     expect(applyAnnotationError(before, { tabId: 'tab-1', id: 'a1' })).toBe(before)
+  })
+
+  it('applyAnnotationRemove drops exactly the matching Annotation from its stored tab', () => {
+    const before = {
+      'tab-1': [entry('keep'), entry('remove')],
+      'tab-2': [entry('other', { tabId: 'tab-2' })]
+    }
+    const after = applyAnnotationRemove(before, { tabId: 'tab-1', annotationId: 'remove' })
+    expect(after['tab-1'].map((item) => item.id)).toEqual(['keep'])
+    expect(after['tab-2']).toBe(before['tab-2'])
+    expect(before['tab-1']).toHaveLength(2)
   })
 })
 

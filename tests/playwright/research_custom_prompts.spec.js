@@ -3,7 +3,6 @@ import {
   stubYouTubeApi,
   createRoom,
   joinAsGuest,
-  mockResearchEndpoint,
   createCustomPrompt,
   deleteCustomPrompt,
   mockCustomPromptOutcomes
@@ -40,9 +39,7 @@ import {
  * mockCustomPromptOutcomes only rewrites the WS frame carrying that
  * already-harmlessly-failed outcome into a chosen "answered" one, so this
  * file's Block-rendering assertions can be specific and deterministic.
- * Every other call this file makes (typed Ask) goes through
- * mockResearchEndpoint, which — like every existing spec that uses it —
- * intercepts the browser's own POST before it ever reaches the dev server.
+ * Typed Ask uses the same intercepted WS outcome mechanism.
  */
 
 const notesOf = (page) =>
@@ -117,6 +114,11 @@ test('a {selection} Custom Prompt appears only in the popup; a non-{selection} o
   await page.keyboard.type('the moon landing happened in 1969')
   await selectInNotes(page, 'the moon landing')
   await expect(popup(page)).toBeVisible()
+  await expect(popup(page).locator('.selection-comment-quote')).toHaveText('“the moon landing”')
+  await expect(page.getByTestId('selection-comment-input')).toBeVisible()
+  await expect(page.getByTestId('selection-comment-input')).toHaveAttribute('placeholder', 'Add context or a comment…')
+  await expect(popup(page).getByRole('button', { name: 'Annotate' })).toHaveClass(/btn-primary/)
+  await expect(popup(page).getByRole('button', { name: 'Annotate' })).toBeDisabled()
   await expect(popupPromptButton(page, selectionTitle)).toBeVisible()
   await expect(popup(page).locator('.selection-popup-action', { hasText: panelTitle })).toHaveCount(0)
 
@@ -206,15 +208,21 @@ test('each Block type renders as real markup, in both the Annotation list (a Car
 
   await createRoom(page, { name: `E2E CustomPromptBlocks ${Date.now()}`, password: 'custom-prompt-blocks' })
 
+  await expect(page.getByTestId('panel-feed')).toHaveCount(1)
+  await expect(page.locator('.annotation-entries')).toHaveCount(0)
+  await expect(page.locator('.research-entries')).toHaveCount(0)
+
   // ── Card (Annotation list), triggered from a highlight ────────────────
   await notesOf(page).click()
   await page.keyboard.type('the moon landing happened in 1969')
   await selectInNotes(page, 'the moon landing')
   await expect(popup(page)).toBeVisible()
+  await page.getByTestId('selection-comment-input').fill('Check the year in particular.')
   await popupPromptButton(page, cardTitle).click()
 
   const card = page.locator('[data-testid="annotation"][data-status="answered"]', { hasText: cardTitle })
   await expect(card).toBeVisible({ timeout: 10_000 })
+  await expect(card.locator('.annotation-participant-context')).toHaveText('Check the year in particular.')
   await assertBlocksRendered(card)
 
   // ── Research entry, triggered from a panel button ──────────────────────
@@ -222,6 +230,14 @@ test('each Block type renders as real markup, in both the Annotation list (a Car
   const entry = page.locator('.research-entry[data-status="answered"]', { hasText: entryTitle })
   await expect(entry).toBeVisible({ timeout: 10_000 })
   await assertBlocksRendered(entry)
+
+  // Storage differs (the Card has a frozen selection anchor; the panel
+  // entry does not), but authorship does not: both are AI output and must
+  // go through the exact same visual module.
+  await expect(card).toHaveAttribute('data-ai-card', 'true')
+  await expect(entry).toHaveAttribute('data-ai-card', 'true')
+  await expect(card.locator('[data-testid="ai-card-badge"]')).toHaveText('AI')
+  await expect(entry.locator('[data-testid="ai-card-badge"]')).toHaveText('AI')
 
   await deleteCustomPrompt(page, cardTitle)
   await deleteCustomPrompt(page, entryTitle)
@@ -256,7 +272,7 @@ async function assertBlocksRendered(container) {
   expect(wholeText).not.toMatch(/[*#]/)
 }
 
-test('the pre-existing plain-text path is untouched: typed Ask, and a Freeform Custom Prompt in both surfaces', async ({ page }) => {
+test('typed Ask renders Blocks while a Freeform Custom Prompt stays plain text in both surfaces', async ({ page }) => {
   await stubYouTubeApi(page)
 
   const cardTextTitle = await createCustomPrompt(page, {
@@ -273,28 +289,28 @@ test('the pre-existing plain-text path is untouched: typed Ask, and a Freeform C
   // Must be registered BEFORE createRoom below opens the room's WebSocket —
   // page.routeWebSocket only intercepts connections opened after it's
   // installed, never retroactively (see mockCustomPromptOutcomes' own doc
-  // comment in helpers.js). mockResearchEndpoint below is an HTTP
-  // page.route(), which has no such ordering constraint — it intercepts any
-  // matching future request regardless of when it's registered relative to
-  // navigation, so it stays where it naturally reads, right before the ask.
+  // comment in helpers.js).
   await mockCustomPromptOutcomes(page, {
     [cardTextTitle]: { answer: 'A plain-text Card answer, no blocks.', blocks: null },
-    [entryTextTitle]: { answer: 'A plain-text research entry answer, no blocks.', blocks: null }
+    [entryTextTitle]: { answer: 'A plain-text research entry answer, no blocks.', blocks: null },
+    'What is a haiku?': {
+      answer: JSON.stringify({ provenInTranscript: 0, ubiquitousKnowledge: 0, outputType: 'ask', mainTakeaway: 'A haiku is a three-line poem.' }),
+      blocks: [{ type: 'paragraph', text: 'A haiku is a three-line poem.' }]
+    }
   })
 
   await createRoom(page, { name: `E2E CustomPromptPlainText ${Date.now()}`, password: 'custom-prompt-plaintext' })
 
-  // ── Typed Ask (client-driven, unrelated to Custom Prompts) — the exact
+  // ── Typed Ask (server-owned, unrelated to Custom Prompts) — the exact
   //    DOM shape research_panel.spec.js's own manual-ask test already
   //    asserts, repeated here as this ticket's own explicit regression
   //    check rather than borrowed by reference. ──────────────────────────
-  await mockResearchEndpoint(page, { status: 200, body: { answer: 'A haiku is a three-line poem.', citations: [] } })
   await page.getByLabel('Ask the Research Assistant').fill('What is a haiku?')
   await page.getByRole('button', { name: 'Ask' }).click()
   const askEntry = page.locator('.research-entry[data-status="answered"]', { hasText: 'What is a haiku?' })
   await expect(askEntry).toBeVisible({ timeout: 10_000 })
-  await expect(askEntry.locator('.research-answer')).toHaveText('A haiku is a three-line poem.')
-  await expect(askEntry.locator('[data-testid="block-list"]')).toHaveCount(0)
+  await expect(askEntry).toHaveAttribute('data-ai-card', 'true')
+  await expect(askEntry.locator('[data-testid="block-list"]')).toHaveText('A haiku is a three-line poem.')
 
   // ── A Freeform Custom Prompt's Card (highlight-triggered) ──────────────
   await notesOf(page).click()

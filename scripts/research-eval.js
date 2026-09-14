@@ -8,14 +8,14 @@
  * ResearchPanel.svelte's "Research recent conversation" button sends, and
  * prints the real AI output.
  *
- * Deliberately talks to a running server over its real WS + HTTP protocol
+ * Deliberately talks to a running server over its real WebSocket protocol
  * — the same one `npm run dev`/`npm run start` already exposes — rather
  * than importing src/lib/server/* modules directly. This mirrors
  * scripts/rooms.js's own convention (talk to the DB/crypto primitives
  * directly, never risk pulling in a SvelteKit-only import chain from a
  * plain `node` process), and it means every case here exercises the exact
  * same server-side code path a real user's click does — the real
- * room-state-store, the real research endpoint, a real OpenRouter call.
+ * room-state-store and a real OpenRouter call.
  *
  * Needs a real OPENROUTER_API_KEY in the server's .env to see a real
  * answer rather than a "not configured" error — this script makes genuine,
@@ -27,8 +27,7 @@
  *   node --env-file=.env scripts/research-eval.js wrong-fact    # one case
  *   node --env-file=.env scripts/research-eval.js --list        # list cases, no calls
  *   node --env-file=.env scripts/research-eval.js --keep        # don't delete the rooms after
- *   node --env-file=.env scripts/research-eval.js --http=http://localhost:3000 --ws-port=3000
- *                                                                # against `npm run start` (single port)
+ *   node --env-file=.env scripts/research-eval.js --ws-port=3000  # against `npm run start` (single port)
  *
  * Each run writes `.eval-runs/<timestamp>/` (gitignored): summary.json plus
  * per-case .json (diffable) and .md (skimmable). --list writes nothing.
@@ -124,7 +123,6 @@ if (flags.has('--list')) {
   process.exit(0)
 }
 
-const HTTP_BASE = opts.http || 'http://localhost:5173'
 const WS_PORT = opts['ws-port'] || process.env.DEV_WS_PORT || '3001'
 const WS_BASE = opts.ws || `ws://localhost:${WS_PORT}`
 const KEEP_ROOMS = flags.has('--keep')
@@ -202,38 +200,51 @@ function makeSessionToken(slug, passwordHash) {
   return createHmac('sha256', SECRET).update(`${slug}:${passwordHash}`).digest('hex')
 }
 
+function makeHostClaimToken(slug, passwordHash) {
+  return createHmac('sha256', SECRET).update(`host:${slug}:${passwordHash}`).digest('hex')
+}
+
 // ─── Drive one case ──────────────────────────────────────────────────────
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function feedTranscript(slug, lines) {
-  const ws = new WebSocket(`${WS_BASE}/ws?slug=${slug}`)
+async function openEvalSocket(slug, passwordHash) {
+  const cookie = `pr_host_${slug}=${makeHostClaimToken(slug, passwordHash)}; pr_auth_${slug}=${makeSessionToken(slug, passwordHash)}`
+  const ws = new WebSocket(`${WS_BASE}/ws?slug=${slug}`, { headers: { cookie } })
   await new Promise((resolve, reject) => {
     ws.once('open', resolve)
     ws.once('error', reject)
   })
   ws.send(JSON.stringify({ type: 'join', name: 'Eval Script', clientId: randomBytes(6).toString('hex') }))
   await sleep(200) // let 'join' land before the first transcript_line
+  return ws
+}
 
+async function feedTranscript(ws, lines) {
   for (const line of lines) {
     if (line.afterMs) await sleep(line.afterMs)
     ws.send(JSON.stringify({ type: 'transcript_line', speaker: line.speaker, text: line.text }))
   }
   await sleep(300) // let the last line's broadcast/append settle
-  ws.close()
 }
 
-async function askResearchAssistant(slug, passwordHash, context) {
-  const cookie = `pr_auth_${slug}=${makeSessionToken(slug, passwordHash)}`
-  const res = await fetch(`${HTTP_BASE}/rec/${slug}/research`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ kind: 'voice', query: null, context, notes: '' })
+async function askResearchAssistant(ws, request) {
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out waiting for research_entry')), 60_000)
+    const onMessage = (raw) => {
+      let msg
+      try { msg = JSON.parse(String(raw)) } catch { return }
+      if (msg.type !== 'research_entry' || msg.entry?.id !== request.entryId) return
+      if (msg.entry.status !== 'answered' && msg.entry.status !== 'errored') return
+      clearTimeout(timeout)
+      ws.off('message', onMessage)
+      resolve(msg.entry)
+    }
+    ws.on('message', onMessage)
+    ws.send(JSON.stringify(request))
   })
-  const body = await res.json().catch(() => ({}))
-  return { status: res.status, body }
 }
 
 function transcriptText(lines) {
@@ -243,7 +254,7 @@ function transcriptText(lines) {
 function writeCaseArtifacts(outDir, record) {
   writeFileSync(join(outDir, `${record.name}.json`), JSON.stringify(record, null, 2) + '\n')
   const request = record.request
-  const context = request?.context ?? ''
+  const context = request?.transcript ?? ''
   writeFileSync(
     join(outDir, `${record.name}.md`),
     [
@@ -251,15 +262,15 @@ function writeCaseArtifacts(outDir, record) {
       '',
       record.description,
       '',
-      `Duration: ${record.durationMs}ms · HTTP ${record.httpStatus ?? 'n/a'}`,
-      `kind: ${request?.kind ?? ''} · query: ${JSON.stringify(request?.query ?? null)} · notes: ${JSON.stringify(request?.notes ?? '')}`,
+      `Duration: ${record.durationMs}ms · WS ${record.wsStatus ?? 'n/a'}`,
+      `kind: Ask · question: ${JSON.stringify(request?.question ?? '')}`,
       '',
       '## Transcript fed in',
       '```',
       context,
       '```',
       '',
-      `## Response (HTTP ${record.httpStatus ?? 'n/a'})`,
+      `## Response (WS ${record.wsStatus ?? 'n/a'})`,
       '```json',
       JSON.stringify(record.response ?? { threw: record.threw }, null, 2),
       '```'
@@ -270,8 +281,8 @@ function writeCaseArtifacts(outDir, record) {
 function summaryRow(record) {
   return {
     name: record.name,
-    status: record.httpStatus,
-    ok: record.httpStatus === 200,
+    status: record.wsStatus,
+    ok: record.wsStatus === 'answered',
     error: record.threw || record.response?.error || null,
     durationMs: record.durationMs,
     files: { json: `${record.name}.json`, md: `${record.name}.md` }
@@ -287,7 +298,14 @@ async function runCase(name, { description, lines }, outDir) {
   const { slug, passwordHash } = await createEvalRoom(`Eval — ${name}`)
   console.log(`Room: ${slug} (feeding ${lines.length} lines over ~${lines.reduce((s, l) => s + l.afterMs, 0) / 1000}s)`)
 
-  const request = { kind: 'voice', query: null, context: transcriptText(lines), notes: '' }
+  const request = {
+    type: 'research_ask',
+    entryId: `eval-${randomBytes(6).toString('hex')}`,
+    question: 'Research the most useful factual claim or open question in this conversation.\n\n{transcript}',
+    transcript: transcriptText(lines),
+    currentTab: '',
+    videoTitle: ''
+  }
   const record = {
     name,
     description,
@@ -295,27 +313,29 @@ async function runCase(name, { description, lines }, outDir) {
     durationMs: 0,
     roomSlug: slug,
     request,
-    httpStatus: null,
+    wsStatus: null,
     response: null,
     threw: null
   }
 
   try {
-    await feedTranscript(slug, lines)
-    const { status, body } = await askResearchAssistant(slug, passwordHash, request.context)
-    record.httpStatus = status
-    record.response = body
+    const ws = await openEvalSocket(slug, passwordHash)
+    await feedTranscript(ws, lines)
+    const entry = await askResearchAssistant(ws, request)
+    record.wsStatus = entry.status
+    record.response = entry
+    ws.close()
 
-    console.log(`\n--- Transcript fed in ---\n${request.context}`)
-    console.log(`\n--- Response (HTTP ${status}) ---`)
-    if (body.answer) {
-      console.log(body.answer)
-      if (body.citations?.length) {
+    console.log(`\n--- Transcript fed in ---\n${request.transcript}`)
+    console.log(`\n--- Response (WS ${entry.status}) ---`)
+    if (entry.answer) {
+      console.log(entry.answer)
+      if (entry.citations?.length) {
         console.log('\nCitations:')
-        for (const c of body.citations) console.log(`  - ${c.title || c.url}: ${c.url}`)
+        for (const c of entry.citations) console.log(`  - ${c.title || c.url}: ${c.url}`)
       }
     } else {
-      console.log(JSON.stringify(body, null, 2))
+      console.log(JSON.stringify(entry, null, 2))
     }
   } catch (err) {
     record.threw = err?.message || String(err)
@@ -334,7 +354,7 @@ async function main() {
   const t0 = Date.now()
   const outDir = join('.eval-runs', startedAt.replace(/[:.]/g, '-'))
   mkdirSync(outDir, { recursive: true })
-  console.log(`Server: ${HTTP_BASE} (HTTP) / ${WS_BASE} (WS)`)
+  console.log(`Server: ${WS_BASE} (WS)`)
   console.log(`Saving results to ${outDir}/`)
 
   const results = []
@@ -348,7 +368,6 @@ async function main() {
       startedAt,
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - t0,
-      httpBase: HTTP_BASE,
       wsBase: WS_BASE,
       casesRequested: Object.keys(selectedCases),
       openrouterModel: process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',

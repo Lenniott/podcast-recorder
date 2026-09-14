@@ -62,9 +62,8 @@ async function rectOfPhraseInNotes(page, phrase) {
 async function commentOnSelection(page, comment) {
   const popup = page.locator('[data-testid="selection-popup"]')
   await expect(popup).toBeVisible()
-  await popup.locator('[data-action-id="comment"]').click()
   await page.locator('[data-testid="selection-comment-input"]').fill(comment)
-  await popup.locator('button[type="submit"]').click()
+  await page.keyboard.press('Enter')
 }
 
 test('a Comment highlights its quote, survives edits around it, and vanishes when the quote is edited away', async ({
@@ -81,7 +80,10 @@ test('a Comment highlights its quote, survives edits around it, and vanishes whe
   await commentOnSelection(page, 'check the date on this')
 
   // The panel row lands, and the highlight is drawn over the quoted words.
-  await expect(page.locator('.annotation-quote')).toHaveText('the moon landing')
+  const comment = page.locator('[data-testid="annotation"][data-kind="comment"]')
+  await expect(comment.locator('.annotation-quote')).toHaveText('the moon landing')
+  await expect(comment).not.toHaveAttribute('data-ai-card', 'true')
+  await expect(comment.locator('[data-testid="ai-card-badge"]')).toHaveCount(0)
   await expect(highlightsOf(page)).toHaveText(['the moon landing'])
 
   // ── Editing outside the quoted span leaves the highlight alone ────────
@@ -107,6 +109,33 @@ test('a Comment highlights its quote, survives edits around it, and vanishes whe
   await selectInNotes(page, 'mars')
   await page.keyboard.type('moon')
   await expect(highlightsOf(page)).toHaveText(['the moon landing'])
+})
+
+test('a guest without Research Access can remove an Annotation, clearing the row and highlight for everyone', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'highlight-remove'
+  const roomUrl = await createRoom(host, { name: `E2E HighlightRemove ${Date.now()}`, password })
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
+
+  await notesOf(host).fill('we talked about the moon landing today')
+  await expect(notesOf(guest)).toHaveText('we talked about the moon landing today')
+  await selectInNotes(host, 'the moon landing')
+  await commentOnSelection(host, 'temporary note')
+  await expect(highlightsOf(host)).toHaveText(['the moon landing'])
+  await expect(highlightsOf(guest)).toHaveText(['the moon landing'])
+
+  await guest.getByRole('button', { name: 'Remove this annotation' }).click()
+
+  for (const page of [host, guest]) {
+    await expect(page.locator('[data-testid="annotation"]')).toHaveCount(0)
+    await expect(highlightsOf(page)).toHaveCount(0)
+  }
+
+  await guest.close()
+  await host.close()
 })
 
 test('the highlight is drawn over the quoted words themselves, including on a later line', async ({

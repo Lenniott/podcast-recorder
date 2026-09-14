@@ -107,6 +107,15 @@ describe('annotation outbox — AGENTS.md\'s "re-announce on reconnect" rule', (
     expect(sent).toEqual(['a1', 'a2'])
   })
 
+  it('replays an AI ask with the same participant context it was first sent with', () => {
+    const outbox = createAnnotationOutbox()
+    const payload = { type: 'annotation_ask', id: 'a1', participantContext: 'Check the year.' }
+    outbox.track(payload)
+    const sent = []
+    outbox.resync((message) => sent.push(message))
+    expect(sent).toEqual([payload])
+  })
+
   it('stops replaying one the server echoed back', () => {
     const outbox = createAnnotationOutbox()
     outbox.track({ id: 'a1' })

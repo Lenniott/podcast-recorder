@@ -95,6 +95,32 @@ describe('parseBlocks', () => {
     })
     expect(parseBlocks(raw)).toEqual([{ type: 'paragraph', text: 'kept' }])
   })
+
+  it('keeps citation URLs out of prose because citations have their own card UI', () => {
+    const raw = JSON.stringify({
+      blocks: [
+        {
+          type: 'paragraph',
+          text: 'Read [the source](https://example.com/article) for context.',
+          items: null,
+          label: null,
+          value: null
+        },
+        {
+          type: 'list',
+          text: null,
+          items: ['Supported by https://example.com/another-source'],
+          label: null,
+          value: null
+        }
+      ]
+    })
+
+    expect(parseBlocks(raw)).toEqual([
+      { type: 'paragraph', text: 'Read the source for context.' },
+      { type: 'list', items: ['Supported by'] }
+    ])
+  })
 })
 
 // sanitizeBlockList (ticket 02) is the seam room-state-store.js's

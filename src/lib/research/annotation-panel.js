@@ -29,6 +29,14 @@ export function applyAnnotationState(annotationsByTab, msg) {
   return { ...annotationsByTab, [msg.tabId]: msg.entries }
 }
 
+/** Applies an `annotation_removed` broadcast to both the panel list and the
+ * highlight renderer's copy of Annotation state. */
+export function applyAnnotationRemove(annotationsByTab, msg) {
+  const list = annotationsByTab[msg.tabId]
+  if (!list) return annotationsByTab
+  return { ...annotationsByTab, [msg.tabId]: list.filter((entry) => entry.id !== msg.annotationId) }
+}
+
 /** Applies an `annotation_error` broadcast — a Card whose Research
  *  Assistant lookup failed (ADR-0008, ticket 05). The message carries the
  *  errored Annotation itself, so this is the same upsert

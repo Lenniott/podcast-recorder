@@ -274,25 +274,6 @@ export async function loadVideo(page, url = SAMPLE_YOUTUBE_URL) {
 }
 
 /**
- * Fakes the browser's own POST /rec/[slug]/research call for whichever
- * page this is installed on — for Research Assistant UI specs (tickets
- * 04-06) to test how the panel renders a given outcome without a real
- * (paid) OpenRouter call. Covers the codes that depend on controlling what
- * OpenRouter itself would have said (200 success, 502 upstream error, 504
- * timeout) — the codes reachable for real without a key (401/410/400/500
- * "not configured") are instead tested directly against the real route in
- * research_endpoint_status.spec.js, no mocking needed for those.
- *
- * Must be installed before whatever action triggers the request (a Quick
- * Action click, a manual ask submit, a Voice Trigger firing).
- */
-export async function mockResearchEndpoint(page, { status = 200, body = { answer: 'Mocked answer.', citations: [] } } = {}) {
-  await page.route('**/rec/*/research', (route) =>
-    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-  )
-}
-
-/**
  * Creates one Custom Prompt through the real, site-password-gated Usage
  * Dashboard UI (ticket 04) — the deployment-wide config every room's
  * highlight popup (selection-annotations.js's customPromptActions) and
@@ -366,16 +347,12 @@ export async function deleteCustomPrompt(page, title) {
 }
 
 /**
- * Intercepts the room's own WebSocket to fake an "answered" outcome for a
- * Custom Prompt run from either surface — annotation_ask (a highlight's
- * Card) or research_prompt_ask (a panel button's research entry) — ticket
- * 04's two WS-driven Research Assistant paths.
+ * Intercepts the room's WebSocket to fake an answered outcome for typed
+ * Ask or a Custom Prompt. Every Research Assistant action is server-owned.
  *
  * **Why this exists, and why it is NOT the token-spend guard** (read this
- * before changing it): unlike typed Ask's POST /rec/[slug]/research, which
- * mockResearchEndpoint above intercepts before it ever leaves the browser,
- * both of these paths are fully server-resolved (ws-rooms.js's
- * runAnnotationAsk/runResearchPromptAsk) — the real askResearchAssistant()
+ * before changing it): these paths are fully server-resolved (ws-rooms.js's
+ * runAnnotationAsk/runResearchEntryAsk) — the real askResearchAssistant()
  * call, fetch and all, happens entirely inside the separate `npm run dev`
  * process Playwright's webServer spawns (concurrently's "vite dev" + "node
  * server-ws-dev.js"). There is no browser-visible HTTP request here for
@@ -384,10 +361,7 @@ export async function deleteCustomPrompt(page, title) {
  * two paths is playwright.config.js's webServer env blanking
  * OPENROUTER_API_KEY: askResearchAssistant() throws NOT_CONFIGURED before
  * any network I/O whenever that key is unset (research-assistant.js), for
- * every request kind, every time — the same fact
- * research_endpoint_status.spec.js's own "not configured" test relies on
- * and self-skips against if a reused `npm run dev` happens to have a real
- * key in its `.env`.
+ * every request kind, every time.
  *
  * What this function adds on top of that guard: every real server-side
  * step still runs for real (Guest Research Access gating, the pending
@@ -407,8 +381,7 @@ export async function deleteCustomPrompt(page, title) {
  * Ask's research entry, some other prompt) is forwarded unchanged, error
  * and all — so a test that wants to see a real, unmocked failure still can.
  *
- * A small artificial delay precedes only the rewritten frame (mirroring
- * mockResearchEndpointDelayed's own reasoning in research_panel.spec.js) so
+ * A small artificial delay precedes only the rewritten frame so
  * the real, genuinely-broadcast pending entry has a moment to be observed
  * before the mocked resolution lands — the NOT_CONFIGURED failure this
  * stands in for would otherwise resolve within the same tick it went
@@ -427,6 +400,16 @@ export async function mockCustomPromptOutcomes(page, outcomesByTitle, { delayMs 
         return
       }
       const isResearchEntry = msg.type === 'research_entry'
+      if (msg.type === 'research_state') {
+        const entries = (msg.entries || []).map((entry) => {
+          const outcome = outcomesByTitle[entry.question]
+          return outcome && entry.status === 'errored'
+            ? { ...entry, status: 'answered', error: null, citations: outcome.citations || [], blocks: outcome.blocks || null, answer: outcome.answer ?? '' }
+            : entry
+        })
+        ws.send(JSON.stringify({ ...msg, entries }))
+        return
+      }
       // A failed annotation_ask broadcasts 'annotation_error', not
       // 'annotation_entry' (see ws-rooms.js's runAnnotationAsk) — both wire
       // types funnel into the same upsert client-side (annotation-panel.js's

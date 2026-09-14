@@ -108,59 +108,6 @@ describe('setupWss — research assistant entries (per-tab, shared — see ADR-0
     expect(host.sent.some((m) => m.type === 'research_entry')).toBe(false)
   })
 
-  it('an entry can be resolved to an answer — the update broadcasts to every peer', () => {
-    ask(host, { entryId: 'e1', question: 'Define photosynthesis.' })
-    host.sent.length = 0
-    guest.sent.length = 0
-
-    host.emit('message', JSON.stringify({
-      type: 'research_resolve',
-      entryId: 'e1',
-      answer: 'Photosynthesis converts light into chemical energy.',
-      citations: [{ url: 'https://example.com/photo', title: 'Photosynthesis basics' }]
-    }))
-
-    for (const ws of [host, guest]) {
-      const msg = latest(ws, 'research_entry')
-      expect(msg.entry).toMatchObject({
-        id: 'e1',
-        status: 'answered',
-        answer: 'Photosynthesis converts light into chemical energy.',
-        citations: [{ url: 'https://example.com/photo', title: 'Photosynthesis basics' }]
-      })
-    }
-  })
-
-  it('an entry can be errored — the update broadcasts to every peer, never leaving it stuck pending', () => {
-    ask(host, { entryId: 'e1', question: 'Define photosynthesis.' })
-    host.sent.length = 0
-    guest.sent.length = 0
-
-    host.emit('message', JSON.stringify({
-      type: 'research_error',
-      entryId: 'e1',
-      message: 'The Research Assistant could not be reached.'
-    }))
-
-    for (const ws of [host, guest]) {
-      const msg = latest(ws, 'research_entry')
-      expect(msg.entry).toMatchObject({
-        id: 'e1',
-        status: 'errored',
-        answer: null,
-        error: 'The Research Assistant could not be reached.'
-      })
-    }
-  })
-
-  it('resolving/erroring an unknown entry id is refused to the sender only, without broadcasting anything', () => {
-    host.sent.length = 0
-    guest.sent.length = 0
-    host.emit('message', JSON.stringify({ type: 'research_resolve', entryId: 'nope', answer: 'x' }))
-    expect(host.sent.some((m) => m.type === 'error')).toBe(true)
-    expect(guest.sent.some((m) => m.type === 'research_entry')).toBe(false)
-  })
-
   it('entries created while one tab is active are filed strictly under that tab, never leaking into another tab', () => {
     const firstTabId = activeTabId(host)
     ask(host, { entryId: 'e1', question: 'Question for tab 1' })

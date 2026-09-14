@@ -102,7 +102,8 @@
  *                                          survive in a stable (arrival)
  *                                          order instead of one silently
  *                                          overwriting the other.
- *   { type: 'research_ask', entryId, question }
+ *   { type: 'research_ask', entryId, question,
+ *     currentTab?, transcript?, videoTitle? }
  *                                        — manual "ask a question" (ticket 04).
  *                                          The Definition/Facts/Answer Turn
  *                                          Actions that once rode this same
@@ -119,37 +120,17 @@
  *                                          this room (see CONTEXT.md); the
  *                                          same gate covers annotation_ask.
  *                                          entryId is client-generated (like
- *                                          tab_create's tabId) so the asking
- *                                          browser can correlate its own later
- *                                          research_resolve/research_error
- *                                          without a round trip first. Filed
+ *                                          tab_create's tabId). The WS server
+ *                                          creates the pending entry and owns
+ *                                          its provider call and completion.
+ *                                          Placeholder ingredients are included
+ *                                          only if the typed question references
+ *                                          them. Ask always requests Blocks. Filed
  *                                          under the room's CURRENT active tab
  *                                          (server-determined, never
  *                                          client-supplied) — this is what
  *                                          keeps an entry strictly scoped to
  *                                          whichever Tab was active at ask time.
- *   { type: 'research_resolve', entryId, answer, citations, blocks? }
- *                                        — sent by the asking client once its
- *                                          own POST /rec/[slug]/research call
- *                                          (ticket 02's endpoint) succeeds.
- *                                          Moves that entry from pending to
- *                                          answered for every peer. `blocks`
- *                                          (structured-research-output
- *                                          ticket 03) is accepted for
- *                                          consistency with research_entry's
- *                                          shape below but typed Ask's own
- *                                          client-driven path never sends one
- *                                          today — it's always a `kind:
- *                                          'voice'` request, never a
- *                                          'blocks'-format 'custom' one.
- *   { type: 'research_error', entryId, message }
- *                                        — sent by the asking client when that
- *                                          same request fails for any reason
- *                                          (non-2xx, network error, timeout).
- *                                          Moves the entry from pending to
- *                                          errored with a visible `message` —
- *                                          a pending entry must never be left
- *                                          stuck with no explanation.
  *   { type: 'research_remove', entryId }
  *                                        — host-only by default (same gate
  *                                          as research_ask) discards one
@@ -228,8 +209,13 @@
  *                                          else's name.
  *                                          Deliberately NOT gated by Guest
  *                                          Research Access — see the handler.
+ *   { type: 'annotation_remove', annotationId }
+ *                                        — removes one Annotation. Any joined
+ *                                          participant may do this; Guest
+ *                                          Research Access controls AI spend,
+ *                                          not shared Annotation cleanup.
  *   { type: 'annotation_ask', tabId, id, kind: 'card', customPromptId,
- *     quote, currentTab?, transcript?, videoTitle? }
+ *     quote, currentTab?, transcript?, videoTitle?, participantContext? }
  *                                        — fire one Custom Prompt against a
  *                                          highlighted excerpt (ADR-0008,
  *                                          ticket 05). The Card half of the
@@ -274,6 +260,12 @@
  *                                          buildCustomPromptRequest — that
  *                                          discard is the ADR's spoiler-risk
  *                                          lesson made structural).
+ *                                          participantContext is a bounded,
+ *                                          explicit addendum for this one
+ *                                          invocation. It is appended even
+ *                                          when the template has no matching
+ *                                          Placeholder and preserved on the
+ *                                          Card for later readers.
  *                                          `id` is client-generated and, like
  *                                          annotation_create, idempotent: a
  *                                          replayed ask re-broadcasts the
@@ -440,11 +432,16 @@
  *                                          live annotation_entry for that
  *                                          connection. Mirrors
  *                                          research_state exactly.
+ *   { type: 'annotation_removed', tabId, annotationId }
+ *                                        — one Annotation deleted outright,
+ *                                          broadcast to EVERY peer so both
+ *                                          its panel row and best-effort
+ *                                          Notes/Transcript highlight clear.
  *   { type: 'annotation_error', tabId, id, message, entry }
  *                                        — a Card's Research Assistant
  *                                          lookup failed (ADR-0008, ticket
- *                                          05). Mirrors what research_error
- *                                          does to a research entry: the
+ *                                          05). Like an errored research
+ *                                          entry, the
  *                                          Annotation moves from pending to
  *                                          errored with a visible reason,
  *                                          never left stuck pending with no
@@ -465,7 +462,7 @@
 import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
 import { getHostClaim, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
-import { askResearchAssistant, buildCustomPromptRequest } from './research-assistant.js'
+import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
 
 const MAX_PEERS = 2
@@ -569,13 +566,8 @@ function broadcast(slug, msg, excludeClientId = null) {
 }
 
 // The Research Assistant's failure codes, as something a participant can
-// actually read. Same job as research-panel.js's describeResearchError,
-// which does this for the HTTP path — a Card or a panel-triggered research
-// entry that failed must always show why, never sit pending forever. Shared
-// by runAnnotationAsk (a highlight-triggered Card) and runResearchPromptAsk
-// (a panel-triggered research entry) below — both are "run this Custom
-// Prompt's Research Assistant call," differing only in where the result is
-// stored, so one error vocabulary serves both.
+// actually read. A Card or research entry that failed must always show why,
+// never sit pending forever. Shared by every server-owned lookup below.
 const CUSTOM_PROMPT_ASK_ERRORS = {
   NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
   TIMEOUT: 'The Research Assistant took too long to respond. Try again.',
@@ -594,7 +586,7 @@ const CUSTOM_PROMPT_ASK_GENERIC_ERROR = 'Something went wrong running that promp
 // Same `_`-prefixed, tests-only shape as _resetRooms below.
 let researchFetchImpl = null
 
-/** Tests only: route the Research Assistant's HTTP call at a fake, so no
+/** Tests only: route the Research Assistant's provider call at a fake, so no
  *  test can spend a real Research Assistant call. Pass null to restore. */
 export function _setResearchFetchForTests(fetchImpl) {
   researchFetchImpl = fetchImpl || null
@@ -607,13 +599,12 @@ export function _setResearchFetchForTests(fetchImpl) {
  * already broadcast state by the time this starts, so every peer can see
  * the lookup is happening.
  *
- * This deliberately reuses askResearchAssistant — the same entry point the
- * HTTP research route calls — rather than introducing a second way to reach
- * the model. What is new here is only how the *request* is built: one named
+ * This deliberately reuses askResearchAssistant, the single server-side
+ * entry point to the model. What differs here is how the request is built: one named
  * Custom Prompt plus a resolved `{selection}`, instead of the one global
  * prompt plus the whole active tab.
  */
-async function runAnnotationAsk(slug, { annotationId, template, selection, currentTab, transcript, videoTitle, outputFormat }) {
+async function runAnnotationAsk(slug, { annotationId, template, selection, currentTab, transcript, videoTitle, participantContext, outputFormat }) {
   const finish = (result, extra = null) => {
     if (!result.ok) return
     const msg = extra
@@ -629,6 +620,9 @@ async function runAnnotationAsk(slug, { annotationId, template, selection, curre
         'That prompt is no longer configured.')
       return
     }
+    // A trigger-time participant addendum, kept separate from the saved
+    // template so its braces are literal rather than Placeholder syntax.
+    request.participantContext = participantContext
     const { answer, citations, blocks } = await askResearchAssistant(request, {
       roomSlug: slug,
       // undefined lets askResearchAssistant fall back to the runtime's fetch.
@@ -670,14 +664,16 @@ async function runAnnotationAsk(slug, { annotationId, template, selection, curre
  * an LLM call, and the pending entry is already broadcast state by the time
  * this starts.
  */
-async function runResearchPromptAsk(slug, { entryId, template, currentTab, transcript, videoTitle, outputFormat }) {
+async function runResearchEntryAsk(slug, { entryId, kind, template, currentTab, transcript, videoTitle, outputFormat }) {
   const finish = (result) => {
     if (!result.ok) return
     broadcast(slug, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
   }
 
   try {
-    const request = buildCustomPromptRequest({ template, currentTab, transcript, videoTitle, outputFormat })
+    const request = kind === 'ask'
+      ? buildAskRequest({ question: template, currentTab, transcript, videoTitle })
+      : buildCustomPromptRequest({ template, currentTab, transcript, videoTitle, outputFormat })
     if (!request) {
       finish(roomStateStore.errorResearchEntry(slug, entryId, { message: 'That prompt is no longer configured.' }))
       return
@@ -688,8 +684,7 @@ async function runResearchPromptAsk(slug, { entryId, template, currentTab, trans
     })
     // Same "an empty takeaway is a failed lookup" rule runAnnotationAsk
     // applies to a Card — resolveResearchEntry itself does not refuse an
-    // empty answer (a typed Ask's own client-driven path never produces
-    // one), so this function is the one that must catch it here instead.
+    // empty answer, so this runner must catch it here instead.
     const text = parseResearchCard(answer)?.mainTakeaway ?? ''
     if (!text) {
       finish(roomStateStore.errorResearchEntry(slug, entryId, { message: CUSTOM_PROMPT_ASK_ERRORS.EMPTY_ANSWER }))
@@ -1098,6 +1093,14 @@ export function setupWss(wss) {
         for (const p of room.values()) {
           send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
         }
+        void runResearchEntryAsk(slug, {
+          entryId: result.entry.id,
+          kind: 'ask',
+          template: result.entry.question,
+          currentTab: msg.currentTab,
+          transcript: msg.transcript,
+          videoTitle: msg.videoTitle
+        })
       }
 
       if (msg.type === 'research_prompt_ask' && clientId) {
@@ -1139,42 +1142,15 @@ export function setupWss(wss) {
           send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
         }
 
-        void runResearchPromptAsk(slug, {
+        void runResearchEntryAsk(slug, {
           entryId: result.entry.id,
+          kind: 'custom',
           template: customPrompt.prompt,
           currentTab: msg.currentTab,
           transcript: msg.transcript,
           videoTitle: msg.videoTitle,
           outputFormat: customPrompt.outputFormat
         })
-      }
-
-      if (msg.type === 'research_resolve' && clientId) {
-        // `msg.blocks` passed through for consistency with runResearchPromptAsk
-        // above (structured-research-output ticket 03) even though typed
-        // Ask's own client-driven path never sends one today (it's always a
-        // `kind: 'voice'` request, never 'custom') — resolveResearchEntry
-        // re-sanitizes it regardless, so an absent/malformed value is
-        // harmless either way.
-        const result = roomStateStore.resolveResearchEntry(slug, msg.entryId, { answer: msg.answer, citations: msg.citations, blocks: msg.blocks })
-        if (!result.ok) {
-          send(ws, { type: 'error', message: result.error })
-          return
-        }
-        for (const p of room.values()) {
-          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
-        }
-      }
-
-      if (msg.type === 'research_error' && clientId) {
-        const result = roomStateStore.errorResearchEntry(slug, msg.entryId, { message: msg.message })
-        if (!result.ok) {
-          send(ws, { type: 'error', message: result.error })
-          return
-        }
-        for (const p of room.values()) {
-          send(p.ws, { type: 'research_entry', tabId: result.tabId, entry: result.entry })
-        }
       }
 
       if (msg.type === 'research_remove' && clientId) {
@@ -1224,6 +1200,23 @@ export function setupWss(wss) {
         }
       }
 
+      if (msg.type === 'annotation_remove' && clientId) {
+        // Deliberately ungated, matching annotation_create: removing shared
+        // collaborative state does not spend a Research Assistant call.
+        const result = roomStateStore.removeAnnotation(slug, msg.annotationId)
+        if (!result.ok) {
+          send(ws, { type: 'error', message: result.error })
+          return
+        }
+        for (const p of room.values()) {
+          send(p.ws, {
+            type: 'annotation_removed',
+            tabId: result.tabId,
+            annotationId: result.annotationId
+          })
+        }
+      }
+
       if (msg.type === 'annotation_ask' && clientId) {
         // Guest Research Access, the SAME gate research_ask/research_remove
         // use (cached on the peer at connect as `guestAiAllowed`) — not a
@@ -1251,7 +1244,8 @@ export function setupWss(wss) {
           // person who highlighted the text — that is what makes it visibly
           // AI-authored in the panel alongside a human's Comment.
           author: customPrompt.title,
-          customPromptId: customPrompt.id
+          customPromptId: customPrompt.id,
+          participantContext: msg.participantContext
         })
         if (!result.ok) {
           send(ws, { type: 'error', message: result.error })
@@ -1280,6 +1274,7 @@ export function setupWss(wss) {
           currentTab: msg.currentTab,
           transcript: msg.transcript,
           videoTitle: msg.videoTitle,
+          participantContext: result.entry.participantContext,
           // Which reply shape this Custom Prompt asks for (structured-
           // research-output ticket 02) — resolved server-side from the
           // stored prompt, same as the template text itself; never

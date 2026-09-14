@@ -243,6 +243,33 @@ describe('setupWss — highlight → Custom Prompt → Card Annotation (ADR-0008
     expect(content).toContain('TRANSCRIPT THE PROMPT DID NOT ASK FOR')
   })
 
+  it('sanitizes participant context, preserves it on the Card, and appends it to every selection prompt', async () => {
+    ask(host, { participantContext: '  Check the year in particular.  ' })
+
+    expect(latest(host, 'annotation_entry').entry.participantContext)
+      .toBe('Check the year in particular.')
+    await settle()
+
+    expect(fetchCalls[0].body.messages).toEqual([
+      {
+        role: 'user',
+        content: 'Fact-check exactly this and nothing else: the moon landing\n\nParticipant context:\nCheck the year in particular.'
+      }
+    ])
+    expect(latest(host, 'annotation_entry').entry.participantContext)
+      .toBe('Check the year in particular.')
+  })
+
+  it('treats participant context as literal text, never as Placeholder syntax', async () => {
+    ask(host, { participantContext: 'Keep {current_time} and {selection} literal.' })
+    await settle()
+
+    expect(fetchCalls[0].body.messages[0].content).toBe(
+      'Fact-check exactly this and nothing else: the moon landing\n\n' +
+      'Participant context:\nKeep {current_time} and {selection} literal.'
+    )
+  })
+
   it('resolves {selection} from the stored frozen quote, not the raw wire value', async () => {
     ask(host, { quote: '   the moon landing   ' })
     await settle()

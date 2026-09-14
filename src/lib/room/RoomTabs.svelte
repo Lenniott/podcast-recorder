@@ -35,6 +35,7 @@
   import {
     applyAnnotationEntry as reduceAnnotationEntry,
     applyAnnotationState as reduceAnnotationState,
+    applyAnnotationRemove as reduceAnnotationRemove,
   } from "$lib/research/annotation-panel.js";
   import {
     getNotesTextSize,
@@ -119,14 +120,11 @@
 
   // ─── Highlight → popup → Annotation (ADR-0008, tickets 03 and 05) ──────
   //
-  // Highlighting text raises a floating popup next to the highlight. Its
-  // actions are Comment (opens a short input; submitting sends
-  // `annotation_create`) and one button per configured Custom Prompt, which
-  // fires IMMEDIATELY — no compose step at all, because a Custom Prompt is
-  // fully self-contained from its saved template (ADR-0008 explicitly
-  // rejected pausing for a typed follow-up). A prompt click sends
-  // `annotation_ask` and the answer comes back as a Card in the same shared
-  // Annotation list the Comments are in.
+  // Highlighting text raises one stable composer next to the highlight.
+  // Annotate saves its text through `annotation_create`; every configured
+  // selection-based Custom Prompt can use that same text as optional
+  // participant context through `annotation_ask`. An AI action never also
+  // creates a Comment, and still works when the composer is blank.
   //
   // The popup itself is SelectionPopup.svelte — presentational, takes its
   // actions as data and never branches on an id, so both behaviours live
@@ -170,9 +168,11 @@
   $: selectionActions = [
     {
       id: SELECTION_ACTION_COMMENT,
-      label: "Comment",
+      label: "Annotate",
       title: "Comment on the highlighted text",
       icon: AnnotationPlus,
+      primary: true,
+      disabled: !commentDraft.trim(),
     },
     ...customPromptActions(customPrompts, {
       canRun: canRunCustomPrompts,
@@ -202,13 +202,9 @@
   // re-file the Annotation under a tab that never held the quote.
   let selectionAnchor = null;
   // A clone of the highlighted Range, kept so the popup can stay anchored
-  // after the live selection is gone (clicking into the comment input
+  // after the live selection is gone (clicking into the composer
   // collapses it). Geometry only — never a source of quote text.
   let anchorRange = null;
-  // Which action's follow-up UI is open. While this is set the popup stops
-  // tracking the live selection, so focusing the input doesn't dismiss the
-  // very popup that input belongs to.
-  let openSelectionActionId = null;
   let commentDraft = "";
   let commentInputEl = null;
 
@@ -217,13 +213,13 @@
   function clearSelectionPopup() {
     selectionAnchor = null;
     anchorRange = null;
-    openSelectionActionId = null;
     commentDraft = "";
   }
 
   function refreshSelectionPopup() {
-    // Frozen while an action's follow-up UI is open — see openSelectionActionId.
-    if (openSelectionActionId) return;
+    // Focusing the always-visible composer collapses the browser Selection,
+    // but the frozen quote/range must stay anchored while the person types.
+    if (document.activeElement === commentInputEl) return;
     if (typeof window === "undefined") return;
     const selection = window.getSelection?.();
     const surface = resolveSelectionSurface(selectionSurfaces, selection);
@@ -256,20 +252,14 @@
     selectionAnchor = { ...selectionAnchor, rect };
   }
 
-  async function onSelectionAction(actionId) {
-    // A Custom Prompt fires on the click itself — no composer, no second
-    // confirmation, nothing to type (ADR-0008: "every Custom Prompt fires
-    // immediately, fully self-contained from its saved template").
+  function onSelectionAction(actionId) {
     const customPromptId = parsePromptActionId(actionId);
     if (customPromptId) {
       runCustomPrompt(customPromptId);
       return;
     }
     if (actionId !== SELECTION_ACTION_COMMENT) return;
-    openSelectionActionId = SELECTION_ACTION_COMMENT;
-    commentDraft = "";
-    await tick();
-    commentInputEl?.focus();
+    submitComment();
   }
 
   /** Fires one Custom Prompt against the current highlight. The Card comes
@@ -293,6 +283,7 @@
       currentTab: tabTexts[anchor?.tabId] ?? "",
       transcript: formatTranscriptForPrompt(transcriptLines),
       videoTitle: tabVideoTitles[anchor?.tabId] ?? "",
+      participantContext: commentDraft,
     });
     if (!payload) return;
     // Same reasoning as a Comment's: send() is a no-op on a dropped socket,
@@ -403,6 +394,13 @@
    *  reconnect would only re-broadcast the same errored row. */
   export function applyAnnotationError(msg) {
     if (msg?.entry?.id) annotationOutbox.acknowledge(msg.entry.id);
+  }
+
+  /** Remove the same room state from the highlight renderer. A deleted
+   * Annotation must not leave a stale Notes or Transcript anchor behind. */
+  export function applyAnnotationRemove(msg) {
+    annotationsByTab = reduceAnnotationRemove(annotationsByTab, msg);
+    if (msg?.annotationId) annotationOutbox.acknowledge(msg.annotationId);
   }
 
   /** Re-announce Comments the server never confirmed, on every successful
@@ -848,15 +846,10 @@
   <SelectionPopup
         rect={selectionAnchor?.rect ?? null}
         actions={selectionActions}
-        openActionId={openSelectionActionId}
         onAction={onSelectionAction}
         ariaLabel="Actions for the highlighted text"
       >
-        {#if openSelectionActionId === SELECTION_ACTION_COMMENT}
-          <form
-            class="selection-comment"
-            on:submit|preventDefault={submitComment}
-          >
+          <form class="selection-comment" on:submit|preventDefault={submitComment}>
             <p class="selection-comment-quote" title={selectionAnchor?.quote}>
               “{selectionAnchor?.quote ?? ""}”
             </p>
@@ -865,23 +858,15 @@
                 type="text"
                 class="selection-comment-input"
                 data-testid="selection-comment-input"
-                placeholder="Add a comment…"
-                aria-label="Comment on the highlighted text"
+                placeholder="Add context or a comment…"
+                aria-label="Add context or a comment for the highlighted text"
                 maxlength={MAX_ANNOTATION_TEXT_LEN}
                 bind:this={commentInputEl}
                 bind:value={commentDraft}
                 on:keydown={onCommentKeydown}
               />
-              <button
-                type="submit"
-                class="btn-secondary btn-sm"
-                disabled={!commentDraft.trim()}
-              >
-                Comment
-              </button>
             </div>
           </form>
-        {/if}
   </SelectionPopup>
 </div>
 

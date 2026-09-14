@@ -69,6 +69,10 @@ export const MAX_ANNOTATION_QUOTE_LEN = 2000
  *  megabyte into every peer's panel. */
 export const MAX_ANNOTATION_TEXT_LEN = 2000
 
+/** Optional context typed for one Custom Prompt invocation. Kept with the
+ * Card so a reader can see the explicit addendum that shaped its answer. */
+export const MAX_ANNOTATION_PARTICIPANT_CONTEXT_LEN = 2000
+
 /** Matches the 50-char cap ws-rooms.js already applies to a join name,
  *  which is where an author name comes from. */
 export const MAX_ANNOTATION_AUTHOR_LEN = 50

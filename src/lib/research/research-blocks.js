@@ -50,16 +50,30 @@ const MAX_BLOCK_VALUE_LEN = 300
 function blockItemSchema() {
   return {
     type: 'object',
+    description: 'A display block containing plain text only. Never include Markdown links, citation URLs, or citation markers; citations render separately in the AI Card.',
     properties: {
       type: { type: 'string', enum: BLOCK_TYPES },
-      text: { type: ['string', 'null'] },
-      items: { type: ['array', 'null'], items: { type: 'string' } },
-      label: { type: ['string', 'null'] },
-      value: { type: ['string', 'null'] }
+      text: { type: ['string', 'null'], description: 'Plain prose with no Markdown and no URLs.' },
+      items: { type: ['array', 'null'], items: { type: 'string', description: 'Plain text with no Markdown and no URLs.' } },
+      label: { type: ['string', 'null'], description: 'A short plain-text label.' },
+      value: { type: ['string', 'null'], description: 'A short plain-text value with no citation URL.' }
     },
     required: ['type', 'text', 'items', 'label', 'value'],
     additionalProperties: false
   }
+}
+
+// Citations have a dedicated disclosure UI on the shared AI Card. Keep
+// provider mistakes from leaking Markdown link syntax or duplicate URLs
+// into visible prose. For a Markdown link the human-readable label remains;
+// a bare URL has no display content worth preserving here.
+function stripCitationMarkup(value) {
+  return String(value ?? '')
+    .replace(/\[([^\]]+)\]\((?:https?:\/\/|www\.)[^)]+\)/gi, '$1')
+    .replace(/\(?\bhttps?:\/\/\S+\)?/gi, '')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *([.,;:!?])/g, '$1')
+    .trim()
 }
 
 /** The `response_format` to attach to an OpenRouter request that wants
@@ -94,19 +108,19 @@ export function blocksResponseSchema() {
 function sanitizeBlock(raw) {
   const type = raw?.type
   if (type === 'paragraph') {
-    const text = String(raw.text ?? '').trim().slice(0, MAX_BLOCK_TEXT_LEN)
+    const text = stripCitationMarkup(raw.text).slice(0, MAX_BLOCK_TEXT_LEN)
     return text ? { type, text } : null
   }
   if (type === 'list') {
     const items = (Array.isArray(raw.items) ? raw.items : [])
       .slice(0, MAX_BLOCK_LIST_ITEMS)
-      .map((item) => String(item ?? '').trim().slice(0, MAX_BLOCK_ITEM_LEN))
+      .map((item) => stripCitationMarkup(item).slice(0, MAX_BLOCK_ITEM_LEN))
       .filter(Boolean)
     return items.length ? { type, items } : null
   }
   if (type === 'stat') {
-    const label = String(raw.label ?? '').trim().slice(0, MAX_BLOCK_LABEL_LEN)
-    const value = String(raw.value ?? '').trim().slice(0, MAX_BLOCK_VALUE_LEN)
+    const label = stripCitationMarkup(raw.label).slice(0, MAX_BLOCK_LABEL_LEN)
+    const value = stripCitationMarkup(raw.value).slice(0, MAX_BLOCK_VALUE_LEN)
     return label && value ? { type, label, value } : null
   }
   return null

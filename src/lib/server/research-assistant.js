@@ -2,17 +2,17 @@
  * Research Assistant Client — one entry point, `askResearchAssistant(request)`,
  * turns a lookup into `{ answer, citations, blocks }`. Callers never see
  * prompt text. `blocks` (ticket 01 of the structured-output line, see
- * `.scratch/structured-research-output/`) is a parsed Block array only for
- * a `custom` request whose `outputFormat` is `'blocks'`, and null for every
- * other request — including a blocks-format request whose reply had
- * nothing to report. `answer` is always populated (a flattened-text
+ * `.scratch/structured-research-output/`) is a parsed Block array for typed
+ * Ask and for a `custom` request whose `outputFormat` is `'blocks'`; it is
+ * null for a text-format Custom Prompt or a Blocks reply with nothing to
+ * report. `answer` is always populated (a flattened-text
  * fallback for a blocks reply), so an existing caller that only reads
  * `answer` keeps working unchanged.
  *
  * Deliberately `process.env`, not `$env/dynamic/private` — same reasoning as
  * auth.js's getSecret(): this module is loaded from ws-rooms.js (ADR-0008,
- * ticket 05's annotation_ask calls askResearchAssistant directly, server-side)
- * as well as from the research route. ws-rooms.js is only ever loaded by
+ * ticket 05's annotation_ask calls askResearchAssistant directly, server-side).
+ * ws-rooms.js is only ever loaded by
  * server.js/server-ws-dev.js — plain Node processes outside Vite/SvelteKit's
  * module graph — where `$env/dynamic/private` is not a real package and
  * cannot resolve at all (`ERR_MODULE_NOT_FOUND`), not even to an empty
@@ -63,10 +63,27 @@ export function latestTranscriptWindow(transcript, wordLimit = LATEST_TRANSCRIPT
   return text.slice(words[words.length - wordLimit].index).trim()
 }
 
-/** Same ceiling POST /rec/[slug]/research applies to every Placeholder
- *  ingredient it accepts — one bound, applied wherever a request is built,
- *  rather than a second number that could drift from the route's. */
+/** One bound applied wherever a Placeholder-bearing request is built. */
 const MAX_PLACEHOLDER_VALUE_LEN = 20_000
+
+export function buildAskRequest({ question, currentTab = '', transcript = '', videoTitle = '' } = {}) {
+  const instruction = String(question ?? '').trim()
+  if (!instruction) return null
+
+  const referenced = referencedPlaceholders(instruction)
+  const wants = (name) => referenced.has(name)
+  const cap = (value) => String(value ?? '').slice(0, MAX_PLACEHOLDER_VALUE_LEN)
+  return {
+    kind: 'ask',
+    question: instruction,
+    currentTab: wants('current_tab') ? cap(currentTab) : '',
+    transcript: wants('transcript') || wants('latest_transcript') ? cap(transcript) : '',
+    selection: '',
+    videoTitle: wants('video_title') ? cap(videoTitle).trim() : '',
+    researchPrompt: instruction,
+    outputFormat: 'blocks'
+  }
+}
 
 /**
  * `{#if name}...{/if}` — keeps the block's text when `name`'s Placeholder
@@ -173,7 +190,7 @@ export function applyPlaceholders(template, values = {}) {
 
 /**
  * Pulls the Placeholder ingredients off a request. `custom` carries the
- * active tab's body as `text` and `voice` as `currentTab` — the two request
+ * active tab's body as `text` and `ask` as `currentTab` — the two request
  * shapes predate each other; everything else is named the same in both.
  * `{current_time}` is the one Placeholder no caller supplies: it's the
  * request's own press time, so it's filled in here.
@@ -200,7 +217,14 @@ function buildMessages(request, pressTime = new Date()) {
     if (!template) {
       throw new ResearchAssistantError('INVALID_REQUEST', 'Custom Prompt is not configured')
     }
-    const instruction = applyPlaceholders(template, placeholderValues(request, pressTimeIso))
+    const resolvedTemplate = applyPlaceholders(template, placeholderValues(request, pressTimeIso))
+    // Participant context is authored for this one invocation, not part of
+    // the saved template language. Append it only after Placeholder
+    // substitution so braces the participant typed remain literal text.
+    const participantContext = String(request.participantContext || '').trim()
+    const instruction = participantContext
+      ? `${resolvedTemplate}\n\nParticipant context:\n${participantContext}`
+      : resolvedTemplate
     const mode = 'custom'
     return {
       mode,
@@ -208,19 +232,11 @@ function buildMessages(request, pressTime = new Date()) {
     }
   }
 
-  if (request.kind === 'voice') {
+  if (request.kind === 'ask') {
     // Typed Ask is freeform like Custom: the box text *is* the request.
     // No shared system prompt, no MODE_RULES.ask. Placeholders in the
-    // typed text still resolve here. context/notes stay optional extras
-    // (eval harness / leftover voice-shaped callers).
-    const query = applyPlaceholders(request.query, placeholderValues(request, pressTimeIso))
-    const userContent = [
-      query ? String(query).trim() : '',
-      request.context ? `FOCUS TURN:\n${request.context}` : '',
-      request.notes ? `GROUNDING:\n${request.notes}` : ''
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+    // typed text still resolve here.
+    const userContent = applyPlaceholders(request.question, placeholderValues(request, pressTimeIso)).trim()
     if (!userContent.trim()) {
       throw new ResearchAssistantError('INVALID_REQUEST', 'Ask question is empty')
     }
@@ -239,16 +255,12 @@ function buildMessages(request, pressTime = new Date()) {
 // the model.
 function researchPromptForLog(request) {
   if (request.kind === 'custom') return String(request.instruction || '')
-  return String(request.researchPrompt ?? '')
+  return String(request.question ?? request.researchPrompt ?? '')
 }
 
-// A request asks for structured output the same way ADR-0008's own
-// grounding rule works: opt-in, never a hardcoded policy. Only a `custom`
-// request with `outputFormat: 'blocks'` gets the schema attached — typed
-// Ask and every `'text'`-format Custom Prompt get exactly today's plain
-// `messages` body, byte-identical to before this field existed.
+// Typed Ask always uses Blocks. Custom Prompts choose their saved format.
 function wantsBlocks(request) {
-  return request.kind === 'custom' && request.outputFormat === 'blocks'
+  return request.kind === 'ask' || (request.kind === 'custom' && request.outputFormat === 'blocks')
 }
 
 function buildRequestBody(request, pressTime) {

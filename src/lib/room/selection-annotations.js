@@ -130,7 +130,8 @@ export function buildAnnotationAskPayload({
   quote,
   currentTab = '',
   transcript = '',
-  videoTitle = ''
+  videoTitle = '',
+  participantContext = ''
 }) {
   if (!id || !tabId || !customPromptId) return null
   const excerpt = String(quote ?? '').trim()
@@ -144,7 +145,8 @@ export function buildAnnotationAskPayload({
     quote: excerpt,
     currentTab: String(currentTab ?? ''),
     transcript: String(transcript ?? ''),
-    videoTitle: String(videoTitle ?? '').trim()
+    videoTitle: String(videoTitle ?? '').trim(),
+    participantContext: String(participantContext ?? '').trim()
   }
 }
 

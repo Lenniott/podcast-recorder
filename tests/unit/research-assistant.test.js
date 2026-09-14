@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   askResearchAssistant,
   applyPlaceholders,
+  buildAskRequest,
   buildCustomPromptRequest,
   referencedPlaceholders,
   latestTranscriptWindow,
@@ -34,14 +35,14 @@ describe('askResearchAssistant — not configured', () => {
     const fetchImpl = vi.fn()
 
     await expect(
-      askResearchAssistant({ kind: 'voice', query: 'the Monroe Doctrine', context: '', notes: '' }, { fetchImpl })
+      askResearchAssistant({ kind: 'ask', question: 'the Monroe Doctrine', context: '', notes: '' }, { fetchImpl })
     ).rejects.toMatchObject({ code: 'NOT_CONFIGURED' })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('the thrown error is a ResearchAssistantError instance callers can branch on without string-matching', async () => {
     await expect(
-      askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl: vi.fn() })
+      askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl: vi.fn() })
     ).rejects.toBeInstanceOf(ResearchAssistantError)
   })
 })
@@ -83,6 +84,17 @@ function successBody({ answer = fieldAnswer('ask'), citations = [] } = {}) {
   }
 }
 
+function blocksReplyBody(blocks, citations = []) {
+  return okResponse({
+    choices: [{
+      message: {
+        content: JSON.stringify({ blocks }),
+        annotations: citations.map((c) => ({ type: 'url_citation', url_citation: c }))
+      }
+    }]
+  })
+}
+
 describe('askResearchAssistant — building the OpenRouter request', () => {
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
@@ -93,7 +105,7 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
     await askResearchAssistant(
-      { kind: 'voice', query: 'the Monroe Doctrine', context: '', notes: '' },
+      { kind: 'ask', question: 'the Monroe Doctrine', context: '', notes: '' },
       { fetchImpl }
     )
 
@@ -111,7 +123,7 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
   it('defaults to a cheap model when OPENROUTER_MODEL is not set', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
-    await askResearchAssistant({ kind: 'voice', query: 'topic', context: '', notes: '' }, { fetchImpl })
+    await askResearchAssistant({ kind: 'ask', question: 'topic', context: '', notes: '' }, { fetchImpl })
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(typeof body.model).toBe('string')
@@ -120,74 +132,43 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
 
   it('a typed Ask sends the question as the whole request, with no system prompt', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse({ choices: [{ message: { content: 'plain answer', annotations: [] } }] })
+      blocksReplyBody([{ type: 'paragraph', text: 'plain answer', items: null, label: null, value: null }])
     )
 
     await askResearchAssistant(
-      { kind: 'voice', query: 'the Monroe Doctrine', context: 'earlier chat about foreign policy', notes: '' },
+      { kind: 'ask', question: 'the Monroe Doctrine' },
       { fetchImpl }
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
     expect(body.messages.some((m) => m.role === 'system')).toBe(false)
-    expect(body.response_format).toBeUndefined()
+    expect(body.response_format).toEqual(expect.objectContaining({ type: 'json_schema' }))
     expect(body.messages).toEqual([
       {
         role: 'user',
-        content: 'the Monroe Doctrine\n\nFOCUS TURN:\nearlier chat about foreign policy'
+        content: 'the Monroe Doctrine'
       }
     ])
   })
+})
 
-  it('a topic-less voice request still sends FOCUS TURN as the user message, with no system prompt', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse({ choices: [{ message: { content: 'plain answer', annotations: [] } }] })
-    )
-
-    await askResearchAssistant(
-      { kind: 'voice', query: null, context: 'Alice: so anyway that thing from the news', notes: '' },
-      { fetchImpl }
-    )
-
-    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    expect(body.messages.some((m) => m.role === 'system')).toBe(false)
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(userContent).toContain('FOCUS TURN:')
-    expect(userContent).toContain('Alice: so anyway that thing from the news')
-    expect(userContent).not.toMatch(/GROUNDING:/)
-  })
-
-  it('a topic-less voice request with notes labels them GROUNDING, after FOCUS TURN', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
-
-    await askResearchAssistant(
-      {
-        kind: 'voice',
-        query: null,
-        context: 'Ben: I think they did a cover of Jolene',
-        notes: 'Ben: so Jack White\nBen: married his sister turned out not to be a sister'
-      },
-      { fetchImpl }
-    )
-
-    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(userContent).toContain('FOCUS TURN:\nBen: I think they did a cover of Jolene')
-    expect(userContent).toContain('GROUNDING:\nBen: so Jack White')
-    expect(userContent.indexOf('FOCUS TURN:')).toBeLessThan(userContent.indexOf('GROUNDING:'))
-  })
-
-  it('includes notes for grounding when present alongside an explicit query', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
-
-    await askResearchAssistant(
-      { kind: 'voice', query: 'topic', context: '', notes: 'Notes: the guest mentioned tariffs earlier.' },
-      { fetchImpl }
-    )
-
-    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    const userContent = body.messages.find((m) => m.role === 'user').content
-    expect(userContent).toContain('Notes: the guest mentioned tariffs earlier.')
+describe('buildAskRequest', () => {
+  it('carries only referenced Placeholder ingredients and always selects Blocks', () => {
+    expect(buildAskRequest({
+      question: 'Compare {current_tab} at {current_time}',
+      currentTab: 'notes',
+      transcript: 'private transcript',
+      videoTitle: 'private title'
+    })).toEqual({
+      kind: 'ask',
+      question: 'Compare {current_tab} at {current_time}',
+      currentTab: 'notes',
+      transcript: '',
+      selection: '',
+      videoTitle: '',
+      researchPrompt: 'Compare {current_tab} at {current_time}',
+      outputFormat: 'blocks'
+    })
   })
 })
 
@@ -412,7 +393,7 @@ describe('askResearchAssistant — Custom (the Research Prompt)', () => {
   })
 })
 
-describe('askResearchAssistant — voice Ask with a {current_tab}/{transcript} Placeholder', () => {
+describe('askResearchAssistant — typed Ask with a {current_tab}/{transcript} Placeholder', () => {
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
@@ -422,8 +403,8 @@ describe('askResearchAssistant — voice Ask with a {current_tab}/{transcript} P
 
     await askResearchAssistant(
       {
-        kind: 'voice',
-        query: 'Summarize {current_tab}',
+        kind: 'ask',
+        question: 'Summarize {current_tab}',
         context: '',
         notes: '',
         currentTab: 'the notes tab text',
@@ -443,25 +424,19 @@ describe('askResearchAssistant — response shaping', () => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
 
-  it('returns the freeform reply and the web-search citations for a typed Ask', async () => {
+  it('returns structured Blocks, flattened text, and web-search citations for a typed Ask', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse({
-        choices: [
-          {
-            message: {
-              content: 'The Monroe Doctrine was a US policy stance from 1823.',
-              annotations: [
-                { type: 'url_citation', url_citation: { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' } },
-                { type: 'url_citation', url_citation: { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' } }
-              ]
-            }
-          }
+      blocksReplyBody(
+        [{ type: 'paragraph', text: 'The Monroe Doctrine was a US policy stance from 1823.', items: null, label: null, value: null }],
+        [
+          { url: 'https://example.com/monroe', title: 'Monroe Doctrine — Britannica' },
+          { url: 'https://example.com/monroe2', title: 'Monroe Doctrine — Wikipedia' }
         ]
-      })
+      )
     )
 
     const result = await askResearchAssistant(
-      { kind: 'voice', query: 'the Monroe Doctrine', context: '', notes: '' },
+      { kind: 'ask', question: 'the Monroe Doctrine', context: '', notes: '' },
       { fetchImpl }
     )
 
@@ -487,7 +462,7 @@ describe('askResearchAssistant — response shaping', () => {
       })
     )
 
-    await askResearchAssistant({ kind: 'voice', query: 'the Monroe Doctrine', context: '', notes: '' }, { fetchImpl })
+    await askResearchAssistant({ kind: 'ask', question: 'the Monroe Doctrine', context: '', notes: '' }, { fetchImpl })
 
     expect(appendResearchEvalLog).toHaveBeenCalledTimes(1)
     const [entry] = appendResearchEvalLog.mock.calls[0]
@@ -498,25 +473,22 @@ describe('askResearchAssistant — response shaping', () => {
     expect(entry.durationMs).toBeGreaterThanOrEqual(0)
   })
 
-  it('logs the unsubstituted Custom Prompt even when the call itself is a plain Ask', async () => {
+  it('logs the unsubstituted typed question for Ask', async () => {
     appendResearchEvalLog.mockClear()
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
 
     await askResearchAssistant(
       {
-        kind: 'voice',
-        query: 'the Monroe Doctrine',
+        kind: 'ask',
+        question: 'the Monroe Doctrine',
         context: '',
-        notes: '',
-        researchPrompt: 'Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.'
+        notes: ''
       },
       { fetchImpl }
     )
 
     const [entry] = appendResearchEvalLog.mock.calls[0]
-    expect(entry.researchPrompt).toBe('Read {current_tab}. Return PROFESSIONAL / FANDOM / AI TSIA.')
-    // The prompt was not sent on this Ask — messages stay the built-in system + question.
-    expect(entry.messages.some((m) => String(m.content).includes('AI TSIA'))).toBe(false)
+    expect(entry.researchPrompt).toBe('the Monroe Doctrine')
   })
 
   it('logs the Custom Prompt template, not the placeholder-substituted message', async () => {
@@ -547,13 +519,13 @@ describe('askResearchAssistant — response shaping', () => {
   // along with the fixed Turn Action modes they only ever policed — every
   // reply is now used as-is, whatever the model actually said, with
   // nothing left that could discard it.
-  it('uses the model reply as-is, with no suppression guard left to discard it', async () => {
+  it('uses the flattened Blocks reply with no suppression guard left to discard it', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      okResponse({ choices: [{ message: { content: 'A plain, unlabeled answer.', annotations: [] } }] })
+      blocksReplyBody([{ type: 'paragraph', text: 'A plain, unlabeled answer.', items: null, label: null, value: null }])
     )
 
     const result = await askResearchAssistant(
-      { kind: 'voice', query: 'x', context: '', notes: '' },
+      { kind: 'ask', question: 'x', context: '', notes: '' },
       { fetchImpl }
     )
 
@@ -575,7 +547,7 @@ describe('askResearchAssistant — error kinds', () => {
 
     let thrown
     try {
-      await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+      await askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
     } catch (e) {
       thrown = e
     }
@@ -589,7 +561,7 @@ describe('askResearchAssistant — error kinds', () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: '' })))
 
     await expect(
-      askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+      askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
     ).rejects.toMatchObject({ code: 'EMPTY_ANSWER' })
   })
 
@@ -597,7 +569,7 @@ describe('askResearchAssistant — error kinds', () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse({ choices: [] }))
 
     await expect(
-      askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+      askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
     ).rejects.toMatchObject({ code: 'EMPTY_ANSWER' })
   })
 
@@ -605,7 +577,7 @@ describe('askResearchAssistant — error kinds', () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('getaddrinfo ENOTFOUND'))
 
     await expect(
-      askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+      askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
     ).rejects.toMatchObject({ code: 'UPSTREAM_ERROR' })
   })
 
@@ -628,7 +600,7 @@ describe('askResearchAssistant — error kinds', () => {
         })
       })
 
-      const promise = askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
+      const promise = askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
       const assertion = expect(promise).rejects.toMatchObject({ code: 'TIMEOUT' })
       await vi.runAllTimersAsync()
       await assertion
@@ -816,12 +788,6 @@ describe('askResearchAssistant — structured Block output', () => {
     process.env.OPENROUTER_API_KEY = 'test-api-key'
   })
 
-  function blocksReplyBody(blocks) {
-    return okResponse({
-      choices: [{ message: { content: JSON.stringify({ blocks }), annotations: [] } }]
-    })
-  }
-
   it('a "blocks"-format Custom Prompt attaches the strict json_schema response_format', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       blocksReplyBody([{ type: 'paragraph', text: null, items: null, label: null, value: null }])
@@ -851,16 +817,16 @@ describe('askResearchAssistant — structured Block output', () => {
     expect(body.response_format).toBeUndefined()
   })
 
-  it('a typed Ask never attaches response_format, even if outputFormat somehow leaked onto the request', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+  it('a typed Ask always attaches response_format', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(blocksReplyBody([]))
 
     await askResearchAssistant(
-      { kind: 'voice', query: 'x', context: '', notes: '', outputFormat: 'blocks' },
+      { kind: 'ask', question: 'x', context: '', notes: '', outputFormat: 'blocks' },
       { fetchImpl }
     )
 
     const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
-    expect(body.response_format).toBeUndefined()
+    expect(body.response_format).toEqual(expect.objectContaining({ type: 'json_schema' }))
   })
 
   it('parses a well-formed blocks reply into result.blocks, and flattens it into result.answer as a fallback', async () => {
@@ -899,11 +865,8 @@ describe('askResearchAssistant — structured Block output', () => {
     expect(JSON.parse(result.answer).mainTakeaway).toBe('')
   })
 
-  it('result.blocks is null for every non-"blocks" request — typed Ask and "text"-format Custom alike', async () => {
+  it('result.blocks is null for a text-format Custom Prompt', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
-
-    const askResult = await askResearchAssistant({ kind: 'voice', query: 'x', context: '', notes: '' }, { fetchImpl })
-    expect(askResult.blocks).toBe(null)
 
     const customResult = await askResearchAssistant(
       { kind: 'custom', instruction: 'Summarize {selection}', selection: 'x', outputFormat: 'text' },

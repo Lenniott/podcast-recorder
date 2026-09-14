@@ -843,6 +843,10 @@
         researchPanel?.applyAnnotationError?.(msg)
         roomTabs?.applyAnnotationError?.(msg)
       }
+      if (msg.type === 'annotation_removed') {
+        researchPanel?.applyAnnotationRemove?.(msg)
+        roomTabs?.applyAnnotationRemove?.(msg)
+      }
       if (msg.type === 'yt_duck')    roomTabs?.applyDuck?.(msg)
       // The "something's coming" pulse moved with the Transcript itself
       // (ticket 06): it now rides the panel's Transcript facet button (and

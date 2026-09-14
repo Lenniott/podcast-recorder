@@ -135,7 +135,8 @@ describe('buildAnnotationAskPayload', () => {
     quote: '  the moon landing  ',
     currentTab: 'all the notes',
     transcript: 'Host: hello',
-    videoTitle: ' Episode 12 '
+    videoTitle: ' Episode 12 ',
+    participantContext: '  Check the year in particular.  '
   }
 
   it('is a card ask carrying the trimmed excerpt as the quote', () => {
@@ -148,12 +149,14 @@ describe('buildAnnotationAskPayload', () => {
       quote: 'the moon landing',
       currentTab: 'all the notes',
       transcript: 'Host: hello',
-      videoTitle: 'Episode 12'
+      videoTitle: 'Episode 12',
+      participantContext: 'Check the year in particular.'
     })
   })
 
-  it('carries no typed follow-up of any kind — a Custom Prompt fires as it stands', () => {
+  it('carries participant context as an explicit trigger-time addendum, not a question or Comment', () => {
     const payload = buildAnnotationAskPayload(base)
+    expect(payload.participantContext).toBe('Check the year in particular.')
     expect(payload).not.toHaveProperty('question')
     expect(payload).not.toHaveProperty('text')
   })
@@ -168,7 +171,7 @@ describe('buildAnnotationAskPayload', () => {
 
   it('defaults missing context to empty strings rather than undefined on the wire', () => {
     const payload = buildAnnotationAskPayload({ id: 'a', tabId: 't', customPromptId: 'p', quote: 'q' })
-    expect(payload).toMatchObject({ currentTab: '', transcript: '', videoTitle: '' })
+    expect(payload).toMatchObject({ currentTab: '', transcript: '', videoTitle: '', participantContext: '' })
   })
 })
 

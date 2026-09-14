@@ -13,13 +13,10 @@
  * discipline RoomTabs.svelte's `viewingTranscript` now follows.
  */
 import { parseResearchCard } from './research-card.js'
-import { upsertResearchEntry, makeResearchEntryId, MAX_RESEARCH_QUESTION_LEN } from './research-sync.js'
-import { MAX_TAB_TEXT_LEN } from '../room/tab-sync.js'
+import { upsertResearchEntry, makeResearchEntryId } from './research-sync.js'
 import { TRANSCRIPT_TAB_ID } from '../room/transcript-sync.js'
 
 export { makeResearchEntryId }
-
-const RESEARCH_TRANSCRIPT_BUDGET = MAX_TAB_TEXT_LEN
 
 /** Applies a `research_entry` (create/update) broadcast into entriesByTab. */
 export function applyResearchEntry(entriesByTab, msg) {
@@ -46,6 +43,25 @@ export function visibleEntries(entriesByTab, activeTabId) {
   return newestFirst((entriesByTab[activeTabId] || []).filter(isSkimVisibleEntry))
 }
 
+/**
+ * The panel's one display projection. Storage remains split because an
+ * Annotation has an anchor while a research entry does not; the UI merges
+ * only the rows that belong in the current view.
+ */
+export function panelFeed({ annotationsByTab = {}, entriesByTab = {}, activeTabId } = {}) {
+  const notesAnnotations = activeTabId && activeTabId !== TRANSCRIPT_TAB_ID
+    ? annotationsByTab[activeTabId] || []
+    : []
+  const transcriptAnnotations = annotationsByTab[TRANSCRIPT_TAB_ID] || []
+  const researchEntries = (entriesByTab[activeTabId] || []).filter(isSkimVisibleEntry)
+
+  return [
+    ...notesAnnotations.map((entry) => ({ ...entry, type: 'annotation', key: `annotation:${entry.id}` })),
+    ...transcriptAnnotations.map((entry) => ({ ...entry, type: 'annotation', key: `annotation:${entry.id}` })),
+    ...researchEntries.map((entry) => ({ ...entry, type: 'research', key: `research:${entry.id}` }))
+  ].sort((a, b) => (b.at || 0) - (a.at || 0) || a.key.localeCompare(b.key))
+}
+
 export function newestFirst(entries) {
   return (entries || [])
     .map((entry, index) => ({ entry, index }))
@@ -63,39 +79,6 @@ export function isSkimVisibleEntry(entry) {
   return false
 }
 
-/**
- * Turns a typed question into a request body for POST /rec/[slug]/research
- * (ticket 02's endpoint) — reuses the `voice` shape, with `query` set to the
- * typed question.
- *
- * Judgment call: `context`/`notes` are left empty rather than pulling in,
- * say, the Transcript-so-far. A manually typed question is already a
- * complete, self-contained ask — the participant chose exactly what to ask
- * — unlike a future Voice Trigger (ticket 06), which has no typed question
- * at all and genuinely needs the surrounding conversation as `context`, or
- * a Quick Action (ticket 05), which supplies the active tab's own text as
- * grounding. Wiring transcript/tab-text into this ticket's manual ask would
- * blur scope better left to those tickets' own judgment calls.
- *
- * `currentTab`/`transcript` are sent anyway, separately from `context`/
- * `notes` — not folded into the question automatically, only substituted
- * server-side (research-assistant.js) if the asker wrote a `{current_tab}`/
- * `{transcript}` Placeholder into `query` themselves (see CONTEXT.md).
- */
-export function buildManualAskRequest(question, currentTabText = '', transcriptLines = [], videoTitle = '') {
-  return {
-    kind: 'voice',
-    query: String(question || '').trim().slice(0, MAX_RESEARCH_QUESTION_LEN),
-    context: '',
-    notes: '',
-    currentTab: formatCurrentTabContext(currentTabText, videoTitle).slice(0, MAX_TAB_TEXT_LEN),
-    transcript: joinTranscriptLines(transcriptLines).trim().slice(0, RESEARCH_TRANSCRIPT_BUDGET),
-    // Sent alongside `currentTab` rather than only inside it, so a prompt can
-    // ask for the title on its own via `{video_title}` (see CONTEXT.md).
-    videoTitle: String(videoTitle || '').trim()
-  }
-}
-
 /** Applies a `transcript_state` replay (the full Transcript-so-far) into
  *  ResearchPanel's own copy of the transcript lines. */
 export function applyTranscriptState(transcriptLines, msg) {
@@ -106,14 +89,6 @@ export function applyTranscriptState(transcriptLines, msg) {
  *  or dropped (see ADR-0002). */
 export function applyTranscriptLine(transcriptLines, msg) {
   return [...transcriptLines, { id: msg.id, speaker: msg.speaker, text: msg.text, at: msg.at }]
-}
-
-function formatTranscriptLine(line) {
-  return `${line.speaker}: ${line.text}`
-}
-
-function joinTranscriptLines(lines) {
-  return (lines || []).map(formatTranscriptLine).join('\n')
 }
 
 /** Collapses a card's citations to one per source site, shown as its bare
@@ -206,24 +181,4 @@ export function panelPromptButtons(prompts, { canRun = false } = {}) {
         title: canRun ? `Run “${label}”` : 'Only the host can run a prompt in this room'
       }
     })
-}
-
-// Maps the research endpoint's error codes (see
-// src/routes/rec/[slug]/research/+server.js's mapErrorReason) to a short,
-// user-visible explanation — a failed ask must always resolve to a visible
-// message, never a stuck, unexplained pending card.
-const ERROR_MESSAGES = {
-  unauthorized: 'You need to rejoin the room to ask a question.',
-  forbidden: 'You do not have access to Custom in this room.',
-  'room-unavailable': 'This room is no longer available.',
-  NOT_CONFIGURED: 'The Research Assistant is not configured for this room.',
-  TIMEOUT: 'The Research Assistant took too long to respond. Try again.',
-  UPSTREAM_ERROR: 'The Research Assistant could not be reached. Try again.',
-  EMPTY_ANSWER: 'The Research Assistant had no answer for that. Try rephrasing.'
-}
-
-const GENERIC_ERROR_MESSAGE = 'Something went wrong asking the Research Assistant.'
-
-export function describeResearchError(body) {
-  return ERROR_MESSAGES[body?.error] || GENERIC_ERROR_MESSAGE
 }

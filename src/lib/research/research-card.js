@@ -17,7 +17,7 @@
  * not JSON — it's asked for "exactly these fields, in this order, nothing
  * else" — parsed server-side in research-assistant.js by splitting on those
  * labels; (2) `serializeResearchCard`'s JSON string is what actually goes
- * out over the wire as `research_resolve`'s `answer`, and the panel calls
+ * out over the wire as a `research_entry`'s `answer`, and the panel calls
  * `parseResearchCard` again on *that* to render it. Skipping the JSON
  * branch here means the client-side call falls through to the leftover-
  * prose fallback and renders the raw `{"provenInTranscript":...}` blob

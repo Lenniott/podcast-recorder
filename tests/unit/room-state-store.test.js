@@ -535,7 +535,7 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
       status: 'answered',
       answer: 'A haiku is a three-line Japanese poem.',
       citations: [{ url: 'https://example.com/haiku', title: 'Haiku basics' }],
-      // No blocks passed in — a typed Ask never produces one.
+      // No blocks passed in — the store still accepts legacy/plain entries.
       blocks: null,
       error: null
     })
@@ -582,7 +582,7 @@ describe('createRoomStateStore — research entries (per-tab, shared — see ADR
       expect(result.entry.answer).toBe('Talked about the tour dates.')
     })
 
-    it('resolveResearchEntry stores null blocks for a plain "text"-format prompt or typed Ask — no field left over from a previous resolve', () => {
+    it('resolveResearchEntry stores null blocks when no structured reply is supplied', () => {
       const store = createRoomStateStore({ durable: fakeDurable() })
       store.addResearchEntry('room1', 'tabA', { id: 'e1', question: 'What is a haiku?' })
       const result = store.resolveResearchEntry('room1', 'e1', { answer: 'a plain answer', citations: [] })
@@ -840,7 +840,7 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
     const { ok, entry } = store.addAnnotation('room1', tabId, valid)
     expect(ok).toBe(true)
     expect(Object.keys(entry).sort()).toEqual([
-      'at', 'author', 'blocks', 'citations', 'customPromptId', 'error', 'id', 'kind', 'quote', 'status', 'tabId', 'text'
+      'at', 'author', 'blocks', 'citations', 'customPromptId', 'error', 'id', 'kind', 'participantContext', 'quote', 'status', 'tabId', 'text'
     ])
     expect(entry).toMatchObject({
       id: 'a1', tabId, kind: 'comment', quote: 'the moon landing', text: 'check the date', author: 'Host',
@@ -871,6 +871,20 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
     expect(store.getRoom('room1').annotations[tabId]).toHaveLength(1)
   })
 
+  it('removeAnnotation deletes one Annotation and returns its fixed tab for broadcasting', () => {
+    const { store, tabId } = storeWithRoom()
+    store.addAnnotation('room1', tabId, valid)
+    store.addAnnotation('room1', tabId, { ...valid, id: 'keep' })
+
+    expect(store.removeAnnotation('room1', 'a1')).toEqual(expect.objectContaining({
+      ok: true,
+      tabId,
+      annotationId: 'a1'
+    }))
+    expect(store.getRoom('room1').annotations[tabId].map((item) => item.id)).toEqual(['keep'])
+    expect(store.removeAnnotation('room1', 'missing')).toEqual(expect.objectContaining({ ok: false }))
+  })
+
   it('refuses an unknown tab, an unknown kind, an empty quote, an empty comment and a missing id', () => {
     const { store, tabId } = storeWithRoom()
     expect(store.addAnnotation('room1', 'tab-nope', valid).ok).toBe(false)
@@ -883,18 +897,30 @@ describe('createRoomStateStore — Annotations (ADR-0008, ticket 03)', () => {
 
   // ── Card Annotations (ADR-0008, ticket 05) ──────────────────────────────
 
-  const card = { id: 'c1', kind: 'card', quote: 'the moon landing', author: 'Fact check', customPromptId: 'cp_1' }
+  const card = {
+    id: 'c1', kind: 'card', quote: 'the moon landing', author: 'Fact check', customPromptId: 'cp_1',
+    participantContext: '  Check the year in particular.  '
+  }
 
   it('a Card is born pending with an empty body — its answer does not exist yet', () => {
     const { store, tabId } = storeWithRoom()
     const { ok, entry } = store.addAnnotation('room1', tabId, card)
     expect(ok).toBe(true)
     expect(entry).toMatchObject({
-      id: 'c1', kind: 'card', status: 'pending', text: '', error: null, customPromptId: 'cp_1', author: 'Fact check'
+      id: 'c1', kind: 'card', status: 'pending', text: '', error: null, customPromptId: 'cp_1', author: 'Fact check',
+      participantContext: 'Check the year in particular.'
     })
     // Real, stored state from the instant it is created, not a client-only
     // illusion — a rejoiner replaying this tab sees the pending Card.
     expect(store.getRoom('room1').annotations[tabId]).toHaveLength(1)
+  })
+
+  it('bounds participant context on the stored Card and preserves it through resolution', () => {
+    const { store, tabId } = storeWithRoom()
+    const created = store.addAnnotation('room1', tabId, { ...card, participantContext: `  ${'x'.repeat(2500)}  ` })
+    expect(created.entry.participantContext).toHaveLength(2000)
+    const resolved = store.resolveAnnotation('room1', 'c1', { text: 'An answer.' })
+    expect(resolved.entry.participantContext).toBe('x'.repeat(2000))
   })
 
   it('a Card still needs its quote — the excerpt is what the prompt runs on', () => {

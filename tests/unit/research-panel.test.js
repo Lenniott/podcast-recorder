@@ -4,14 +4,13 @@ import {
   applyResearchState,
   applyResearchRemove,
   visibleEntries,
-  buildManualAskRequest,
+  panelFeed,
   applyTranscriptState,
   applyTranscriptLine,
   activeNotesTabText,
   activeTabVideoTitle,
   formatCurrentTabContext,
   isSkimVisibleEntry,
-  describeResearchError,
   makeResearchEntryId,
   dedupeCitationsByHost,
   panelPromptButtons
@@ -131,44 +130,33 @@ describe('isSkimVisibleEntry', () => {
   })
 })
 
-describe('buildManualAskRequest', () => {
-  it('reuses the voice request shape with the typed question as query, no extra context/notes', () => {
-    expect(buildManualAskRequest('What is a haiku?')).toEqual({
-      kind: 'voice',
-      query: 'What is a haiku?',
-      context: '',
-      notes: '',
-      currentTab: '',
-      transcript: '',
-      videoTitle: ''
+describe('panelFeed', () => {
+  it('projects one newest-first feed from active-tab research, active-tab Annotations, and room-wide Transcript Annotations', () => {
+    const activeTabId = 'tab-1'
+    const annotationsByTab = {
+      'tab-1': [{ id: 'same', tabId: 'tab-1', kind: 'comment', quote: 'notes', text: 'note', at: 20 }],
+      'tab-2': [{ id: 'hidden', tabId: 'tab-2', kind: 'comment', quote: 'other', text: 'other', at: 99 }],
+      transcript: [{ id: 'turn', tabId: 'transcript', kind: 'comment', quote: 'turn', text: 'note', at: 30 }]
+    }
+    const entriesByTab = {
+      'tab-1': [{ id: 'same', tabId: 'tab-1', question: 'Ask?', status: 'pending', at: 10 }],
+      'tab-2': [{ id: 'hidden-research', tabId: 'tab-2', question: 'No', status: 'pending', at: 100 }]
+    }
+
+    expect(panelFeed({ annotationsByTab, entriesByTab, activeTabId }).map(({ type, key, id }) => ({ type, key, id }))).toEqual([
+      { type: 'annotation', key: 'annotation:turn', id: 'turn' },
+      { type: 'annotation', key: 'annotation:same', id: 'same' },
+      { type: 'research', key: 'research:same', id: 'same' }
+    ])
+  })
+
+  it('breaks timestamp ties by composite key so projection order is deterministic', () => {
+    const rows = panelFeed({
+      annotationsByTab: { 'tab-1': [{ id: 'z', tabId: 'tab-1', kind: 'comment', quote: 'q', text: 'n', at: 5 }] },
+      entriesByTab: { 'tab-1': [{ id: 'a', tabId: 'tab-1', question: 'Ask?', status: 'pending', at: 5 }] },
+      activeTabId: 'tab-1'
     })
-  })
-
-  it('sends the video title as its own Placeholder ingredient, not only folded into currentTab', () => {
-    const request = buildManualAskRequest('What is this?', 'my notes', [], 'Episode 12')
-    expect(request.videoTitle).toBe('Episode 12')
-    expect(request.currentTab).toBe('Video: Episode 12\n\nmy notes')
-  })
-
-  it('trims whitespace and caps an overlong question', () => {
-    const huge = 'x'.repeat(1000)
-    const result = buildManualAskRequest(`  ${huge}  `)
-    expect(result.query).toBe(huge.slice(0, 500))
-  })
-
-  // currentTab/transcript are Placeholder ingredients only (see
-  // CONTEXT.md) — sent along so the asker can opt in with {current_tab}/
-  // {transcript} in their own question text, never auto-injected into it.
-  it('carries currentTab/transcript as separate fields, capped the same way Custom caps them', () => {
-    const lines = [{ speaker: 'Host', text: 'hello there' }]
-    const result = buildManualAskRequest('Summarize {current_tab}', 'the active tab text', lines)
-    expect(result.currentTab).toBe('the active tab text')
-    expect(result.transcript).toBe('Host: hello there')
-  })
-
-  it('bundles a video title ahead of notes into currentTab when one is available', () => {
-    const result = buildManualAskRequest('Summarize {current_tab}', 'the lyrics', [], 'Never Gonna Give You Up')
-    expect(result.currentTab).toBe('Video: Never Gonna Give You Up\n\nthe lyrics')
+    expect(rows.map((row) => row.key)).toEqual(['annotation:z', 'research:a'])
   })
 })
 
@@ -224,20 +212,6 @@ describe('formatCurrentTabContext / video title', () => {
     expect(activeTabVideoTitle(titles, 'tabA')).toBe('Song A')
     expect(activeTabVideoTitle(titles, 'tabB')).toBe('Song B')
     expect(activeTabVideoTitle(titles, TRANSCRIPT_TAB_ID)).toBe('')
-  })
-})
-
-describe('describeResearchError', () => {
-  it('maps a known error code to a short, user-visible explanation', () => {
-    expect(describeResearchError({ error: 'TIMEOUT' })).toMatch(/took too long/i)
-    expect(describeResearchError({ error: 'UPSTREAM_ERROR' })).toMatch(/could not be reached/i)
-    expect(describeResearchError({ error: 'unauthorized' })).toMatch(/rejoin/i)
-  })
-
-  it('falls back to a generic explanation for an unknown or missing error code', () => {
-    expect(describeResearchError({ error: 'SOMETHING_NEW' })).toMatch(/something went wrong/i)
-    expect(describeResearchError(null)).toMatch(/something went wrong/i)
-    expect(describeResearchError(undefined)).toMatch(/something went wrong/i)
   })
 })
 
