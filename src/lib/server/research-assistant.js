@@ -1,9 +1,9 @@
 /**
  * Research Assistant Client — one entry point, `askResearchAssistant(request)`,
  * turns a lookup into `{ answer, citations, blocks }`. Callers never see
- * prompt text. `blocks` (ticket 01 of the structured-output line, see
- * `.scratch/structured-research-output/`) is a parsed Block array for typed
- * Ask and for a `custom` request whose `outputFormat` is `'blocks'`; it is
+ * prompt text. `blocks` (defined by research-blocks.js) is a parsed Block
+ * array for typed Ask and for a `custom` request whose `outputFormat` is
+ * `'blocks'`; it is
  * null for a text-format Custom Prompt or a Blocks reply with nothing to
  * report. `answer` is always populated (a flattened-text
  * fallback for a blocks reply), so an existing caller that only reads
@@ -131,8 +131,7 @@ function resolveConditionalBlocks(template, resolved) {
  * Returns null for an unknown/blank template: the caller decides whether
  * that's an error worth surfacing.
  *
- * `outputFormat` (ticket 01 of the structured-output line, see
- * `.scratch/structured-research-output/`) is a separate axis from all of
+ * `outputFormat` (see research-blocks.js) is a separate axis from all of
  * the above — it decides *how the reply is shaped* (typed Blocks vs. free
  * text), never what the prompt is allowed to know. Defaults to `'text'` so
  * every existing Custom Prompt keeps behaving exactly as it does today.
@@ -258,6 +257,35 @@ function researchPromptForLog(request) {
   return String(request.question ?? request.researchPrompt ?? '')
 }
 
+function boundedLogText(value, max = 1000) {
+  if (typeof value !== 'string') return null
+  return value.slice(0, max)
+}
+
+// Diagnostic shape for the provider boundary. It deliberately records
+// structure and bounded error/refusal text, never request headers or the
+// API key. This makes an HTTP-200 response with no usable content
+// distinguishable from an empty choices array or a structured empty reply.
+function providerResponseForLog(data, res, message) {
+  const providerError = data?.error
+  return {
+    status: res?.status ?? null,
+    choiceCount: Array.isArray(data?.choices) ? data.choices.length : null,
+    finishReason: data?.choices?.[0]?.finish_reason ?? null,
+    nativeFinishReason: data?.choices?.[0]?.native_finish_reason ?? null,
+    contentType: message ? typeof message.content : null,
+    contentLength: typeof message?.content === 'string' ? message.content.length : null,
+    refusal: boundedLogText(message?.refusal),
+    reasoningLength: typeof message?.reasoning === 'string' ? message.reasoning.length : null,
+    error: providerError
+      ? {
+          code: boundedLogText(String(providerError.code ?? ''), 100),
+          message: boundedLogText(String(providerError.message ?? ''))
+        }
+      : null
+  }
+}
+
 // Typed Ask always uses Blocks. Custom Prompts choose their saved format.
 function wantsBlocks(request) {
   return request.kind === 'ask' || (request.kind === 'custom' && request.outputFormat === 'blocks')
@@ -327,20 +355,38 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
 
   const message = data?.choices?.[0]?.message
   const raw = message?.content?.trim()
-  if (!raw) {
-    throw new ResearchAssistantError('EMPTY_ANSWER', 'OpenRouter returned no usable answer')
-  }
+  const provider = providerResponseForLog(data, res, message)
 
-  const citations = (message.annotations ?? [])
-    .filter((a) => a.type === 'url_citation')
-    .map((a) => ({ url: a.url_citation.url, title: a.url_citation.title }))
-
+  // OpenRouter can bill a request that returns no usable content. Count it
+  // before answer validation so the Usage Dashboard never silently drops a
+  // paid failure.
   recordResearchUsage({
     roomSlug,
     mode,
     tokens: usageMeta.usage?.total_tokens ?? null,
     cost: usageMeta.usage?.cost ?? null
   })
+
+  if (!raw) {
+    await appendResearchEvalLog({
+      kind: request.kind,
+      mode,
+      ...usageMeta,
+      researchPrompt: researchPromptForLog(request),
+      messages,
+      raw: null,
+      card: null,
+      suppressReason: 'empty-answer',
+      usable: false,
+      error: { code: 'EMPTY_ANSWER', message: 'OpenRouter returned no usable answer' },
+      provider
+    })
+    throw new ResearchAssistantError('EMPTY_ANSWER', 'OpenRouter returned no usable answer')
+  }
+
+  const citations = (message.annotations ?? [])
+    .filter((a) => a.type === 'url_citation')
+    .map((a) => ({ url: a.url_citation.url, title: a.url_citation.title }))
 
   // A `'blocks'`-format request's raw reply is the schema's JSON, not prose
   // — parse it into typed Blocks instead of treating it as the takeaway
@@ -366,6 +412,7 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     outputType: mode,
     mainTakeaway
   }
+  const usable = !!mainTakeaway
   await appendResearchEvalLog({
     kind: request.kind,
     mode,
@@ -374,8 +421,15 @@ export async function askResearchAssistant(request, { fetchImpl = fetch, pressTi
     messages,
     raw,
     card,
-    suppressReason: null,
-    usable: true
+    suppressReason: usable ? null : 'empty-answer',
+    usable,
+    error: usable
+      ? null
+      : { code: 'EMPTY_ANSWER', message: 'OpenRouter returned an empty structured answer' },
+    provider
   })
+  if (!usable) {
+    throw new ResearchAssistantError('EMPTY_ANSWER', 'OpenRouter returned an empty structured answer')
+  }
   return { answer: serializeResearchCard(card), citations, blocks }
 }

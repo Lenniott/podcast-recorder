@@ -91,8 +91,8 @@ const CASES = {
       { speaker: 'Host', text: "Wait really? That seems made up.", afterMs: 3500 }
     ]
   },
-  // Gold case from `.scratch/context/example_tests/` — only the male-POV
-  // Jolene question is a live ask; Diane is already in the transcript.
+  // Regression case retained from the original prompt exploration — only
+  // the male-POV Jolene question is live; Diane is already in the transcript.
   'jolene-male-pov': {
     description: 'One live ask buried in filler: is there a Jolene cover from the man\'s perspective? Diane is already answered in-window.',
     lines: [

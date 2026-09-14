@@ -71,7 +71,12 @@ function fieldAnswer(mode, overrides = {}) {
     .join('\n')
 }
 
-function successBody({ answer = fieldAnswer('ask'), citations = [] } = {}) {
+function successBody({
+  answer = JSON.stringify({
+    blocks: [{ type: 'paragraph', text: 'The actual answer, stated as fact.', items: null, label: null, value: null }]
+  }),
+  citations = []
+} = {}) {
   return {
     choices: [
       {
@@ -558,11 +563,23 @@ describe('askResearchAssistant — error kinds', () => {
   })
 
   it('throws EMPTY_ANSWER when OpenRouter returns no usable answer text', async () => {
+    appendResearchEvalLog.mockClear()
     const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody({ answer: '' })))
 
     await expect(
       askResearchAssistant({ kind: 'ask', question: 'x', context: '', notes: '' }, { fetchImpl })
     ).rejects.toMatchObject({ code: 'EMPTY_ANSWER' })
+
+    expect(appendResearchEvalLog).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'ask',
+      usable: false,
+      error: expect.objectContaining({ code: 'EMPTY_ANSWER' }),
+      provider: expect.objectContaining({
+        status: 200,
+        choiceCount: 1,
+        contentType: 'string'
+      })
+    }))
   })
 
   it('throws EMPTY_ANSWER when the response has no choices at all', async () => {
@@ -790,7 +807,7 @@ describe('askResearchAssistant — structured Block output', () => {
 
   it('a "blocks"-format Custom Prompt attaches the strict json_schema response_format', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      blocksReplyBody([{ type: 'paragraph', text: null, items: null, label: null, value: null }])
+      blocksReplyBody([{ type: 'paragraph', text: 'Answer.', items: null, label: null, value: null }])
     )
 
     await askResearchAssistant(
@@ -818,7 +835,9 @@ describe('askResearchAssistant — structured Block output', () => {
   })
 
   it('a typed Ask always attaches response_format', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(blocksReplyBody([]))
+    const fetchImpl = vi.fn().mockResolvedValue(
+      blocksReplyBody([{ type: 'paragraph', text: 'Answer.', items: null, label: null, value: null }])
+    )
 
     await askResearchAssistant(
       { kind: 'ask', question: 'x', context: '', notes: '', outputFormat: 'blocks' },
@@ -853,16 +872,21 @@ describe('askResearchAssistant — structured Block output', () => {
     )
   })
 
-  it('an empty blocks: [] reply means "nothing to report" — result.blocks is null, same as an empty mainTakeaway', async () => {
+  it('logs and rejects an empty blocks reply instead of returning an unusable result', async () => {
+    appendResearchEvalLog.mockClear()
     const fetchImpl = vi.fn().mockResolvedValue(blocksReplyBody([]))
 
-    const result = await askResearchAssistant(
+    await expect(askResearchAssistant(
       { kind: 'custom', instruction: 'Explain {selection}', selection: 'x', outputFormat: 'blocks' },
       { fetchImpl }
-    )
+    )).rejects.toMatchObject({ code: 'EMPTY_ANSWER' })
 
-    expect(result.blocks).toBe(null)
-    expect(JSON.parse(result.answer).mainTakeaway).toBe('')
+    expect(appendResearchEvalLog).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'custom',
+      raw: JSON.stringify({ blocks: [] }),
+      usable: false,
+      error: expect.objectContaining({ code: 'EMPTY_ANSWER' })
+    }))
   })
 
   it('result.blocks is null for a text-format Custom Prompt', async () => {

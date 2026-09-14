@@ -1,6 +1,6 @@
 /**
  * Research Card — the field-based shape the model returns (see
- * `.scratch/research-assistant/findings.md`'s system prompt: PROVEN IN
+ * research-assistant.js's system prompt: PROVEN IN
  * TRANSCRIPT, UBIQUITOUS KNOWLEDGE, OUTPUT TYPE, MAIN TAKEAWAY — CONTEXT
  * SUMMARY was dropped as a redundant field that just restated part of MAIN
  * TAKEAWAY for an extra output-token cost every call). There is

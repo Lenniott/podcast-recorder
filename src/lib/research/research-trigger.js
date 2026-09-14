@@ -5,9 +5,8 @@
  * utterance contain a Voice Trigger phrase, and if so, what topic (if
  * any) follows it?
  *
- * Deliberately separate from `$lib/server/research-assistant.js` — see
- * `.scratch/research-assistant/issues/02-research-endpoint.md`: this
- * module doesn't call that one, and doesn't know it exists. Ticket 06's
+ * Deliberately separate from `$lib/server/research-assistant.js`: this
+ * module doesn't call that one, and doesn't know it exists. The caller's
  * voice wiring is what decides, using this function's result, whether to
  * call the Research Assistant Client at all.
  */

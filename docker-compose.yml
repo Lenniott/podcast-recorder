@@ -9,6 +9,9 @@ services:
       - "7799:3000"
     volumes:
       - podcast-recorder-data:/app/data
+      # The production .env uses this relative path; expose it on the host
+      # so operators can inspect/copy calls.jsonl without entering Docker.
+      - ./.research-eval-logs:/app/.research-eval-logs
     environment:
       - HOST=0.0.0.0
       - PORT=3000
@@ -30,9 +33,9 @@ services:
       # Research Assistant credentials remain server-only
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-}
-      # Optional eval logs live on the same persisted volume as room data
-      - RESEARCH_EVAL_LOG=${RESEARCH_EVAL_LOG:-}
-      - RESEARCH_EVAL_LOG_DIR=${RESEARCH_EVAL_LOG_DIR:-/app/data/research-eval-logs}
+      # Eval logs are bind-mounted above for direct host access
+      - RESEARCH_EVAL_LOG=${RESEARCH_EVAL_LOG:-true}
+      - RESEARCH_EVAL_LOG_DIR=${RESEARCH_EVAL_LOG_DIR:-/app/.research-eval-logs}
       - HIDE_TEST_ROOMS_IN_DASHBOARD=${HIDE_TEST_ROOMS_IN_DASHBOARD:-}
 
 volumes:
