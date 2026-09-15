@@ -16,6 +16,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
 
 vi.mock('../../src/lib/server/auth.js', () => ({
   getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token'),
+  verifySessionToken: vi.fn((token, slug) => token === 'valid-session-token'),
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
