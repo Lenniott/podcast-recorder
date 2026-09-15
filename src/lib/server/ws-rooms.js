@@ -9,6 +9,13 @@
  * Rooms are capped at 2 connections (host + guest). A third attempt is
  * rejected immediately.
  *
+ * A connection must carry the same `pr_auth_<slug>` room-password session
+ * cookie every HTTP route under /rec/[slug] already requires (set once the
+ * room password is entered — see +page.server.js) — verified before
+ * anything else on 'connection', same as an unknown/expired room. This is
+ * the WS side of the room's password gate, not a separate one: the room
+ * password is the only secret here, the slug in the URL is not.
+ *
  * Protocol (client → server):
  *   { type: 'join', name, clientId }     — announce on connect
  *   { type: 'ping', seq, sentAt }        — clock sync probe
@@ -460,7 +467,7 @@
  */
 
 import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
-import { getHostClaim, makeServerCopyToken } from './auth.js'
+import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
@@ -833,6 +840,22 @@ export function setupWss(wss) {
     }
 
     const cookies = parseCookies(req.headers.cookie || '')
+
+    // Same room-password session cookie every HTTP route under /rec/[slug]
+    // already requires (see +page.server.js's isAuthenticatedForRoom and
+    // server-copy-session.js's authorizeServerCopyRequest) — the WS
+    // connection is just another way into the same room, so it must pass
+    // the same gate. Without this, a connection could join a room's live
+    // Transcript/Notes/Annotations, occupy one of the room's 2 peer slots,
+    // and (if the room allows it) spend a Research Assistant call, having
+    // never entered the room password at all.
+    const sessionToken = cookies.get(`pr_auth_${slug}`)
+    if (!verifySessionToken(sessionToken, slug, roomRow.password_hash, process.env.SECRET)) {
+      send(ws, { type: 'error', message: 'Not authorized for this room' })
+      ws.close(4401, 'Unauthorized')
+      return
+    }
+
     const connectionHostClaim = getHostClaim(slug, cookies, roomRow, process.env.SECRET)
 
     if (!rooms.has(slug)) rooms.set(slug, new Map())

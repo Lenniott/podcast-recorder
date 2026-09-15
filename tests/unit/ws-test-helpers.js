@@ -23,9 +23,24 @@ export function mockWss() {
   const handlers = {}
   return {
     on(event, fn) { handlers[event] = fn },
-    connect(ws, slug, { asHost = false } = {}) {
-      const headers = asHost ? { cookie: `pr_host_${slug}=valid-host-token` } : {}
+    // `authed` defaults to true — nearly every test in this suite is about
+    // what happens once inside a room, not about the room-password gate
+    // itself, so callers get a valid session cookie for free unless they
+    // explicitly opt out (see the "rejects a connection without a valid
+    // room session" tests).
+    connect(ws, slug, { asHost = false, authed = true } = {}) {
+      const cookies = []
+      if (authed) cookies.push(`pr_auth_${slug}=valid-session-token`)
+      if (asHost) cookies.push(`pr_host_${slug}=valid-host-token`)
+      const headers = cookies.length ? { cookie: cookies.join('; ') } : {}
       const req = { url: `/ws?slug=${slug}`, headers }
+      handlers.connection?.(ws, req)
+    },
+    // Escape hatch for a test that needs an exact, non-standard cookie
+    // header (e.g. a session token that fails verification rather than one
+    // simply absent) — bypasses connect()'s cookie-building above.
+    connectWithCookie(ws, slug, cookieHeader) {
+      const req = { url: `/ws?slug=${slug}`, headers: { cookie: cookieHeader } }
       handlers.connection?.(ws, req)
     }
   }

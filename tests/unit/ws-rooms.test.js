@@ -12,6 +12,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
 // ─── Mock auth so a known cookie value grants the host claim ────────────────
 vi.mock('../../src/lib/server/auth.js', () => ({
   getHostClaim: vi.fn((slug, cookies, room) => !!room && cookies.get(`pr_host_${slug}`) === 'valid-host-token'),
+  verifySessionToken: vi.fn((token, slug) => token === 'valid-session-token'),
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
@@ -51,6 +52,27 @@ describe('setupWss — connection handling', () => {
     const ws = mockWs()
     wss.connect(ws, 'badslug')
     expect(ws.closed).toBe(true)
+  })
+
+  it('rejects a connection with no room-password session cookie at all', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1', { authed: false })
+    expect(ws.closed).toBe(true)
+    expect(ws.sent.some((m) => m.type === 'error')).toBe(true)
+  })
+
+  it('rejects a connection whose room-password session cookie does not verify', () => {
+    const ws = mockWs()
+    wss.connectWithCookie(ws, 'room1', 'pr_auth_room1=wrong-token')
+    expect(ws.closed).toBe(true)
+    expect(ws.sent.some((m) => m.type === 'error')).toBe(true)
+  })
+
+  it('does not join the room (no presence broadcast) after a rejected connection', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1', { authed: false })
+    join(ws, 'Alice', 'c1')
+    expect(ws.sent.some((m) => m.type === 'presence')).toBe(false)
   })
 
   it('grants the host role to the peer holding a valid host-claim cookie', () => {
