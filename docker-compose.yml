@@ -33,6 +33,7 @@ services:
       # Research Assistant credentials remain server-only
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-}
+      - OPENROUTER_PROVIDER_ONLY=${OPENROUTER_PROVIDER_ONLY:-}
       # Eval logs are bind-mounted above for direct host access
       - RESEARCH_EVAL_LOG=${RESEARCH_EVAL_LOG:-true}
       - RESEARCH_EVAL_LOG_DIR=${RESEARCH_EVAL_LOG_DIR:-/app/.research-eval-logs}

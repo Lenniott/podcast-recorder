@@ -28,6 +28,8 @@ vi.mock('../../src/lib/server/db.js', () => ({
 beforeEach(() => {
   delete process.env.OPENROUTER_API_KEY
   delete process.env.OPENROUTER_MODEL
+  delete process.env.OPENROUTER_PROVIDER_ONLY
+  delete process.env.OPENROUTER_ALLOW_FALLBACKS
 })
 
 describe('askResearchAssistant — not configured', () => {
@@ -123,6 +125,28 @@ describe('askResearchAssistant — building the OpenRouter request', () => {
     const body = JSON.parse(init.body)
     expect(body.model).toBe('openai/gpt-4o-mini')
     expect(body.plugins).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'web' })]))
+  })
+
+  it('omits provider routing when OPENROUTER_PROVIDER_ONLY is unset', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant({ kind: 'ask', question: 'topic', context: '', notes: '' }, { fetchImpl })
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    expect(body.provider).toBeUndefined()
+  })
+
+  it('pins the OpenRouter request to the configured provider list and does not allow fallbacks', async () => {
+    process.env.OPENROUTER_PROVIDER_ONLY = 'openai/flex'
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(successBody()))
+
+    await askResearchAssistant({ kind: 'ask', question: 'topic', context: '', notes: '' }, { fetchImpl })
+
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+    expect(body.provider).toEqual({
+      only: ['openai/flex'],
+      allow_fallbacks: false
+    })
   })
 
   it('defaults to a cheap model when OPENROUTER_MODEL is not set', async () => {

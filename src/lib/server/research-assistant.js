@@ -291,6 +291,18 @@ function wantsBlocks(request) {
   return request.kind === 'ask' || (request.kind === 'custom' && request.outputFormat === 'blocks')
 }
 
+/** OpenRouter `provider` pin. Blank OPENROUTER_PROVIDER_ONLY leaves
+ *  routing to OpenRouter. A comma-separated list becomes `only`, with
+ *  `allow_fallbacks: false` so a miss fails instead of hopping vendors. */
+function providerRouting() {
+  const only = String(process.env.OPENROUTER_PROVIDER_ONLY || '')
+    .split(',')
+    .map((slug) => slug.trim())
+    .filter(Boolean)
+  if (only.length === 0) return {}
+  return { provider: { only, allow_fallbacks: false } }
+}
+
 function buildRequestBody(request, pressTime) {
   const { mode, messages } = buildMessages(request, pressTime)
   return {
@@ -304,6 +316,7 @@ function buildRequestBody(request, pressTime) {
       // ADR-0007 — so the Usage Dashboard doesn't need to price each model
       // itself from a maintained table.
       usage: { include: true },
+      ...providerRouting(),
       ...(wantsBlocks(request) ? { response_format: blocksResponseSchema() } : {})
     }
   }
