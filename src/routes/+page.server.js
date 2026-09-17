@@ -10,8 +10,7 @@ import {
 } from '$lib/server/db.js'
 import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
-import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
-import { createHmac, timingSafeEqual } from 'crypto'
+import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken, makePasswordToken, verifyPasswordToken } from '$lib/server/auth.js'
 
 const SITE_COOKIE = 'pr_site_auth'
 const ROOM_COOKIE = (slug) => `pr_auth_${slug}`
@@ -23,19 +22,11 @@ function isSecure() {
   return env.HTTPS === 'true' || env.FORCE_HTTPS === 'true'
 }
 
-function makeSiteToken() {
-  const secret   = env.SECRET
-  const password = env.SITE_PASSWORD || ''
-  return createHmac('sha256', secret).update('site:' + password).digest('hex')
-}
-
+// "No password configured" means open access — a decision made here at the
+// call site, not inside verifyPasswordToken itself.
 function verifySiteToken(token) {
-  if (!env.SITE_PASSWORD) return true   // no password set — open access
-  if (!token) return false
-  const expected = makeSiteToken()
-  try {
-    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))
-  } catch { return false }
+  if (!env.SITE_PASSWORD) return true
+  return verifyPasswordToken('site', env.SITE_PASSWORD, token, env.SECRET)
 }
 
 /** No SITE_PASSWORD set means open access — same rule as verifySiteToken. */
@@ -78,18 +69,13 @@ export const actions = {
     const data     = await request.formData()
     const password = String(data.get('password') || '').trim()
 
-    const provided = createHmac('sha256', env.SECRET).update('site:' + password).digest('hex')
-    const expected = makeSiteToken()
-    let match = false
-    try {
-      match = timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))
-    } catch { match = false }
-    if (!match) {
+    const provided = makePasswordToken('site', password, env.SECRET)
+    if (!verifyPasswordToken('site', env.SITE_PASSWORD, provided, env.SECRET)) {
       return fail(403, { siteError: 'Wrong password.' })
     }
 
     console.log('[action site_enter] correct — setting cookie (secure=%s)', isSecure())
-    cookies.set(SITE_COOKIE, makeSiteToken(), {
+    cookies.set(SITE_COOKIE, makePasswordToken('site', env.SITE_PASSWORD, env.SECRET), {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',

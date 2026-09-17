@@ -7,7 +7,9 @@ import {
   makeHostClaimToken,
   verifyHostClaimToken,
   getHostClaim,
-  generateSlug
+  generateSlug,
+  makePasswordToken,
+  verifyPasswordToken
 } from '../../src/lib/server/auth.js'
 
 // ─── Password hashing ───────────────────────────────────────────────────────
@@ -202,6 +204,68 @@ describe('getHostClaim', () => {
     } finally {
       process.env.SECRET = previous
     }
+  })
+})
+
+// ─── Purpose-scoped password tokens ────────────────────────────────────────
+// The shared gate behind the site password today, and every future
+// purpose-scoped password (e.g. a Friend password) later — see
+// .scratch/friend-password-auth/issues/01-shared-password-gate-helper.md.
+
+describe('makePasswordToken / verifyPasswordToken', () => {
+  const secret = 'test-secret-do-not-use-in-prod'
+
+  it('round-trips: a token made for a purpose+password verifies against that same purpose+password', () => {
+    const token = makePasswordToken('site', 'hunter2', secret)
+    expect(verifyPasswordToken('site', 'hunter2', token, secret)).toBe(true)
+  })
+
+  it('rejects the wrong password', () => {
+    const token = makePasswordToken('site', 'hunter2', secret)
+    expect(verifyPasswordToken('site', 'wrong', token, secret)).toBe(false)
+  })
+
+  it('rejects the right password under the wrong purpose', () => {
+    const token = makePasswordToken('site', 'hunter2', secret)
+    expect(verifyPasswordToken('friend', 'hunter2', token, secret)).toBe(false)
+  })
+
+  it('rejects a tampered token', () => {
+    const token = makePasswordToken('site', 'hunter2', secret)
+    const tampered = token.slice(0, -2) + '00'
+    expect(verifyPasswordToken('site', 'hunter2', tampered, secret)).toBe(false)
+  })
+
+  it('rejects a garbage/non-hex token without throwing', () => {
+    expect(verifyPasswordToken('site', 'hunter2', 'not-a-real-token', secret)).toBe(false)
+  })
+
+  it('rejects a short/malformed token without throwing', () => {
+    expect(verifyPasswordToken('site', 'hunter2', 'zz', secret)).toBe(false)
+  })
+
+  it('rejects an empty token', () => {
+    expect(verifyPasswordToken('site', 'hunter2', '', secret)).toBe(false)
+  })
+
+  it('rejects a null/undefined token', () => {
+    expect(verifyPasswordToken('site', 'hunter2', null, secret)).toBe(false)
+    expect(verifyPasswordToken('site', 'hunter2', undefined, secret)).toBe(false)
+  })
+
+  it('rejects a token made with a different secret', () => {
+    const token = makePasswordToken('site', 'hunter2', 'other-secret')
+    expect(verifyPasswordToken('site', 'hunter2', token, secret)).toBe(false)
+  })
+
+  it('produces the same token format the site-password gate already relies on (HMAC-SHA256 hex of "purpose:password")', () => {
+    const token = makePasswordToken('site', 'hunter2', secret)
+    expect(token).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('uses process.env.SECRET when no secret argument is passed', () => {
+    const token = makePasswordToken('site', 'hunter2')
+    expect(verifyPasswordToken('site', 'hunter2', token)).toBe(true)
   })
 })
 

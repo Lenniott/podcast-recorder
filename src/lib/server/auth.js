@@ -104,6 +104,27 @@ export function getHostClaim(slug, cookies, room, secret = getSecret()) {
   return verifyHostClaimToken(token, slug, room.password_hash, secret)
 }
 
+/**
+ * Purpose-scoped password gate: one HMAC token kind, parameterized by a
+ * `purpose` string so multiple passwords (today's site password, a future
+ * Friend password) can share this mechanism without hand-copying it.
+ * `verifyPasswordToken` recomputes the expected token from `purpose` +
+ * `password` and compares with `timingSafeEqualHex`, so a malformed token
+ * never throws — it just fails to verify.
+ *
+ * Whether "no password configured" means open access is a decision each
+ * caller makes for its own purpose, not something this helper bakes in —
+ * see `.scratch/friend-password-auth/issues/01-shared-password-gate-helper.md`.
+ */
+export function makePasswordToken(purpose, password, secret = getSecret()) {
+  return hmacHex(secret, `${purpose}:${password}`)
+}
+
+export function verifyPasswordToken(purpose, password, token, secret = getSecret()) {
+  if (!token) return false
+  return timingSafeEqualHex(token, makePasswordToken(purpose, password, secret))
+}
+
 export function generateSlug() {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789'
   const bytes = randomBytes(10)

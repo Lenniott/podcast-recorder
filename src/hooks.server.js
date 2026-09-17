@@ -1,6 +1,6 @@
 import { redirect, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { createHmac, timingSafeEqual } from 'crypto'
+import { verifyPasswordToken } from '$lib/server/auth.js'
 
 const SITE_COOKIE = 'pr_site_auth'
 
@@ -70,15 +70,11 @@ function isServerCopyUpload(pathname) {
 
 // ── Site auth ────────────────────────────────────────────────────────────────
 
+// "No password configured" means open access — a decision made here at the
+// call site, not inside verifyPasswordToken itself.
 function verifySiteToken(token) {
   if (!env.SITE_PASSWORD) return true
-  if (!token) return false
-  const expected = createHmac('sha256', env.SECRET)
-    .update('site:' + (env.SITE_PASSWORD || ''))
-    .digest('hex')
-  try {
-    return timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(expected, 'hex'))
-  } catch { return false }
+  return verifyPasswordToken('site', env.SITE_PASSWORD, token, env.SECRET)
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
