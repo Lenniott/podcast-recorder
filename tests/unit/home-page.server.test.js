@@ -5,9 +5,14 @@ import * as roomsDb from '../../src/lib/server/db.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
 const SITE_PASSWORD = 'gate-pass'
+const FRIEND_PASSWORD = 'friend-pass'
 
 function siteToken(password = SITE_PASSWORD) {
   return createHmac('sha256', SECRET).update('site:' + password).digest('hex')
+}
+
+function friendToken(password = FRIEND_PASSWORD) {
+  return createHmac('sha256', SECRET).update('friend:' + password).digest('hex')
 }
 
 function makeCookies(seed = {}) {
@@ -51,6 +56,7 @@ describe('+page.server', () => {
     process.env.DB_PATH = ':memory:'
     process.env.SECRET = SECRET
     delete process.env.SITE_PASSWORD
+    delete process.env.FRIEND_PASSWORD
     delete process.env.HTTPS
     delete process.env.FORCE_HTTPS
     _resetDb()
@@ -64,6 +70,8 @@ describe('+page.server', () => {
       expect(data).toEqual({
         siteAuthed: true,
         siteProtected: false,
+        friendProtected: false,
+        role: 'host',
         notFound: false,
         expired: false,
         customPrompts: [],
@@ -80,6 +88,7 @@ describe('+page.server', () => {
       })
       expect(data.siteAuthed).toBe(false)
       expect(data.siteProtected).toBe(true)
+      expect(data.role).toBeNull()
     })
 
     it('maps ?notfound=1 and ?expired=1', async () => {
@@ -95,6 +104,46 @@ describe('+page.server', () => {
       })
       expect(notFound.notFound).toBe(true)
       expect(expired.expired).toBe(true)
+    })
+
+    describe('Friend role', () => {
+      beforeEach(() => {
+        process.env.SITE_PASSWORD = SITE_PASSWORD
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+      })
+
+      it('reports friendProtected and role="friend" with a valid Friend cookie, but not siteAuthed', async () => {
+        const { load } = await loadPage()
+        const data = await load({
+          cookies: makeCookies({ pr_friend_auth: friendToken() }),
+          url: new URL('http://test/')
+        })
+        expect(data.role).toBe('friend')
+        expect(data.friendProtected).toBe(true)
+        expect(data.siteAuthed).toBe(false)
+      })
+
+      it('does not compute the Usage Dashboard or Custom Prompts for a Friend session', async () => {
+        roomsDb.createCustomPrompt({ title: 'Kept', prompt: 'kept text' })
+        const { load } = await loadPage()
+        const data = await load({
+          cookies: makeCookies({ pr_friend_auth: friendToken() }),
+          url: new URL('http://test/')
+        })
+        expect(data.usageDashboard).toBeNull()
+        expect(data.customPrompts).toEqual([])
+      })
+
+      it('a Host session is unaffected by FRIEND_PASSWORD being set', async () => {
+        const { load } = await loadPage()
+        const data = await load({
+          cookies: makeCookies({ pr_site_auth: siteToken() }),
+          url: new URL('http://test/')
+        })
+        expect(data.role).toBe('host')
+        expect(data.siteAuthed).toBe(true)
+        expect(data.usageDashboard).not.toBeNull()
+      })
     })
   })
 
@@ -135,6 +184,59 @@ describe('+page.server', () => {
         maxAge: 60 * 60 * 24 * 3,
         secure: true
       })
+    })
+  })
+
+  describe('actions.friend_enter', () => {
+    it('refuses when FRIEND_PASSWORD is not configured', async () => {
+      const { actions } = await loadPage()
+      const result = await actions.friend_enter({
+        request: formRequest({ password: 'anything' }),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 403,
+        data: { friendError: 'Friend login is not enabled.' }
+      })
+    })
+
+    it('rejects the wrong password', async () => {
+      process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+      const { actions } = await loadPage()
+      const result = await actions.friend_enter({
+        request: formRequest({ password: 'nope' }),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 403,
+        data: { friendError: 'Wrong password.' }
+      })
+    })
+
+    it('sets the Friend cookie (not the Host cookie) and redirects on the correct password', async () => {
+      process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+      process.env.HTTPS = 'true'
+      const { actions } = await loadPage()
+      const cookies = makeCookies()
+      const err = await expectRedirect(
+        () => actions.friend_enter({
+          request: formRequest({ password: FRIEND_PASSWORD }),
+          cookies
+        }),
+        303,
+        '/'
+      )
+      expect(err.location).toBe('/')
+      const stored = cookies.jar.get('pr_friend_auth')
+      expect(stored.value).toBe(friendToken())
+      expect(stored.options).toMatchObject({
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 3,
+        secure: true
+      })
+      expect(cookies.jar.has('pr_site_auth')).toBe(false)
     })
   })
 
@@ -276,6 +378,87 @@ describe('+page.server', () => {
       expect(host.options).toMatchObject({
         httpOnly: true,
         secure: true
+      })
+    })
+
+    it('a Host room honors a posted guest-ai-allowed=on and is not flagged as a friend_room', async () => {
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () => actions.create({
+          request: formRequest({
+            'room-episode-name': 'Host Show',
+            'room-episode-code': 'pass',
+            'guest-ai-allowed': 'on'
+          }),
+          cookies: makeCookies()
+        }),
+        303,
+        /^\/rec\//
+      )
+      const room = db.getDb().prepare('SELECT * FROM rooms').get()
+      expect(room.guest_ai_allowed).toBe(1)
+      expect(room.friend_room).toBe(0)
+    })
+
+    describe('as a Friend session', () => {
+      beforeEach(() => {
+        process.env.SITE_PASSWORD = SITE_PASSWORD
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+      })
+
+      it('rejects create with no cookie at all (same as an unauthenticated Host request)', async () => {
+        const { actions } = await loadPage()
+        const result = await actions.create({
+          request: formRequest({ 'room-episode-name': 'Ep', 'room-episode-code': 'pass' }),
+          cookies: makeCookies()
+        })
+        expect(result).toMatchObject({ status: 403, data: { siteError: 'Not authorised.' } })
+      })
+
+      it('creates a room flagged friend_room=1 with AI forced off, ignoring a posted guest-ai-allowed=on', async () => {
+        const { actions } = await loadPage()
+        const cookies = makeCookies({ pr_friend_auth: friendToken() })
+        const err = await expectRedirect(
+          () => actions.create({
+            request: formRequest({
+              'room-episode-name': 'Friend Show',
+              'room-episode-code': 'pass',
+              // Tampered: a Friend session posting an AI-on field must not
+              // turn AI on (TDD seam 2 / ticket checklist).
+              'guest-ai-allowed': 'on'
+            }),
+            cookies
+          }),
+          303,
+          /^\/rec\//
+        )
+        const room = db.getDb().prepare('SELECT * FROM rooms').get()
+        expect(room.name).toBe('Friend Show')
+        expect(room.friend_room).toBe(1)
+        expect(room.guest_ai_allowed).toBe(0)
+        expect(err.location).toBe(`/rec/${room.slug}`)
+
+        // A Friend-created room still gets the same host-claim cookie a
+        // Host room does — everything except AI works exactly like a Host
+        // room (README's locked decision).
+        const host = cookies.jar.get(`pr_host_${room.slug}`)
+        expect(host.value).toHaveLength(64)
+      })
+
+      it('creates a room with AI off even when guest-ai-allowed is entirely absent from the post', async () => {
+        const { actions } = await loadPage()
+        const cookies = makeCookies({ pr_friend_auth: friendToken() })
+        await expectRedirect(
+          () => actions.create({
+            request: formRequest({ 'room-episode-name': 'Friend Show 2', 'room-episode-code': 'pass' }),
+            cookies
+          }),
+          303,
+          /^\/rec\//
+        )
+        const room = db.getDb().prepare('SELECT * FROM rooms').all().find((r) => r.name === 'Friend Show 2')
+        expect(room.friend_room).toBe(1)
+        expect(room.guest_ai_allowed).toBe(0)
       })
     })
   })
@@ -483,6 +666,31 @@ describe('+page.server', () => {
             'custom-prompt-text': 'nope'
           }),
           cookies: makeCookies()
+        })
+        expect(result).toMatchObject({ status: 403, data: { promptError: 'Not authorised.' } })
+        expect(roomsDb.listCustomPrompts()).toEqual([
+          { id: existing.id, title: 'Kept', prompt: 'kept text', outputFormat: 'text' }
+        ])
+      }
+    )
+
+    // A Friend session is a real, valid role — not "no session" — but it
+    // must still get the exact same not-authorised outcome as an
+    // unauthenticated request here (ticket checklist item 4).
+    it.each(['create_custom_prompt', 'update_custom_prompt', 'delete_custom_prompt'])(
+      'rejects %s for a valid Friend session, same failure mode as unauthenticated',
+      async (actionName) => {
+        process.env.SITE_PASSWORD = SITE_PASSWORD
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+        const existing = roomsDb.createCustomPrompt({ title: 'Kept', prompt: 'kept text' })
+        const { actions } = await loadPage()
+        const result = await actions[actionName]({
+          request: promptForm({
+            'custom-prompt-id': existing.id,
+            'custom-prompt-title': 'Nope',
+            'custom-prompt-text': 'nope'
+          }),
+          cookies: makeCookies({ pr_friend_auth: friendToken() })
         })
         expect(result).toMatchObject({ status: 403, data: { promptError: 'Not authorised.' } })
         expect(roomsDb.listCustomPrompts()).toEqual([

@@ -3,6 +3,12 @@
   import { noAutofill } from "$lib/actions.js";
 
   export let form;
+  // Friend room (friend-password-auth, ticket 02): a Friend session's room
+  // is unconditionally AI-off, enforced server-side (+page.server.js's
+  // create action ignores this field entirely for a Friend session) — this
+  // just keeps the checkbox from being shown where it could never do
+  // anything, per the ticket's "no checkbox shown" requirement.
+  export let hideAiToggle = false;
 
   let loading = false;
 
@@ -91,12 +97,14 @@
       >
     </div>
 
-    <div class="field field-checkbox">
-      <label class="checkbox-label">
-        <input class="checkbox-input" type="checkbox" name="guest-ai-allowed" />
-        Guest AI access
-      </label>
-    </div>
+    {#if !hideAiToggle}
+      <div class="field field-checkbox">
+        <label class="checkbox-label">
+          <input class="checkbox-input" type="checkbox" name="guest-ai-allowed" />
+          Guest AI access
+        </label>
+      </div>
+    {/if}
 
     <button type="submit" class="btn-primary btn-block" disabled={loading}>
       {loading ? "Creating…" : "Create Room & Get Link"}

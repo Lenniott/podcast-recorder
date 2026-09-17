@@ -177,8 +177,36 @@ A per-room, host-set-at-creation checkbox letting every guest in that room
 use every Research Assistant action — Ask and every Custom Prompt alike
 — not just the Host. One flag, no per-action carve-outs. Off by default.
 Set once, at room creation, on the create-room form — not editable
-afterward from inside the room.
+afterward from inside the room. In a **Friend room** this checkbox is
+never shown and is always off, overriding even the room's own host claim
+— see **Friend room** above.
 _Avoid_: RESEARCH_GUEST_CAN_ASK (the retired deployment-wide env var this replaced)
+
+**Friend** _(friend-password-auth, ticket 02)_:
+A second, weaker login role alongside the **Host**, reached with its own
+`FRIEND_PASSWORD` — one shared secret, not a per-person credential; there
+is no way to tell two Friends apart or revoke one without changing the
+password for everyone. A Friend reaches the create-room page and can
+create rooms, but cannot reach the **Usage Dashboard** or **Custom
+Prompt** management (same failure mode as no session at all), and every
+room a Friend creates is a **Friend room**. `role.js`'s `resolveRole` is
+the single source of truth for whether a request/session is a Host, a
+Friend, or neither.
+_Avoid_: guest (that's a room participant who isn't its Host — an
+unrelated, pre-existing meaning), co-host
+
+**Friend room** _(friend-password-auth, ticket 02)_:
+A room created by a **Friend** session, flagged at creation
+(`rooms.friend_room`). Research Assistant/AI is unconditionally off — no
+checkbox, no way to turn it on, not even for the room's own host claim
+(the Friend who created it) — enforced both server-side
+(`ws-rooms.js`'s `friendRoomAiDisabled`) and in the UI (no Ask/Custom
+Prompt controls shown). Everything else — recording, notes, video, and
+especially **Transcript** — works exactly like a Host room. The Host's own
+dashboard room list visually distinguishes a Friend room from a Host room.
+_Avoid_: guest room (a Friend room's participants can still include a
+Host-room-style "guest"; this term is about who created the room, not who
+is in it)
 
 **Usage Dashboard**:
 The section of the create-room page (visible once past the site password,

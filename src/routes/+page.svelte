@@ -1,12 +1,17 @@
 <script>
   import SitePasswordGate from "$lib/home/SitePasswordGate.svelte";
+  import FriendPasswordGate from "$lib/home/FriendPasswordGate.svelte";
   import CreateEpisodeModal from "$lib/home/CreateEpisodeModal.svelte";
   import UsageDashboardStats from "$lib/home/UsageDashboardStats.svelte";
   import CustomPromptListEditor from "$lib/home/CustomPromptListEditor.svelte";
   import { HomeRecorLogo, Plus } from "$lib/icons";
   import { shouldOpenCreateEpisodeModal } from "$lib/home/create-episode-modal.js";
 
-  export let data; // { siteAuthed, siteProtected }
+  // { siteAuthed, siteProtected, friendProtected, role, notFound, expired,
+  //   customPrompts, usageDashboard } — role.js's 'host' | 'friend' | null
+  // is the single source of truth for which of the three views below
+  // renders (see +page.server.js's load).
+  export let data;
   export let form;
   let openTab = "dashboard";
 
@@ -18,8 +23,11 @@
 </svelte:head>
 
 <main>
-  <!-- ── Site password gate ───────────────────────────────────────── -->
-  {#if data.siteProtected && !data.siteAuthed}
+  <!-- ── Login gate — neither role passed ────────────────────────────
+       Host and Friend are separate, independently-configured logins on
+       this same entry page (friend-password-auth ticket 02): show
+       whichever of the two the deployment actually has a password for. ── -->
+  {#if !data.role}
     <div class="hero">
       <div class="logo-container">
         <HomeRecorLogo size={48} viewBox="0 0 48 48" />
@@ -29,7 +37,58 @@
         </div>
       </div>
     </div>
-    <SitePasswordGate formError={form?.siteError} />
+    {#if data.siteProtected}
+      <SitePasswordGate formError={form?.siteError} />
+    {/if}
+    {#if data.friendProtected}
+      <FriendPasswordGate formError={form?.friendError} />
+    {/if}
+  {:else if data.role === "friend"}
+    <!-- ── Friend view — create-room only, no dashboard/Custom Prompts ──
+         A Friend session cannot reach the Usage Dashboard or Custom Prompt
+         management at all (not hidden-but-present) — see +page.server.js's
+         load, which never computes them for this role. ─────────────────── -->
+    <div class="main-content">
+      <div class="dashboard-card">
+        <div class="page-header">
+          <div class="logo-container">
+            <HomeRecorLogo size={24} />
+            <h1>Home Recor</h1>
+          </div>
+          <div class="page-tabs">
+            <button
+              type="button"
+              class="btn-primary btn-sm new-room"
+              on:click={() => (createOpen = true)}
+            >
+              <Plus />
+              New room
+            </button>
+          </div>
+        </div>
+        {#if data.expired}
+          <div class="notice-banner notice-warn">
+            That room has expired and is no longer available.
+          </div>
+        {:else if data.notFound}
+          <div class="notice-banner notice-warn">
+            Room not found — it may have been deleted.
+          </div>
+        {/if}
+        <div class="page-content">
+          <div class="notice-banner notice-warn">
+            create a new room to get started
+          </div>
+        </div>
+      </div>
+
+      <CreateEpisodeModal
+        open={createOpen}
+        {form}
+        hideAiToggle={true}
+        onClose={() => (createOpen = false)}
+      />
+    </div>
   {:else}
     <div class="main-content">
       <!-- ── Usage Dashboard (see CONTEXT.md) — stats + Research Prompt

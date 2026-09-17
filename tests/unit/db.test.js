@@ -59,6 +59,16 @@ describe('createRoom / getRoomBySlug', () => {
     createRoom(ROOM)
     expect(() => createRoom(ROOM)).toThrow()
   })
+
+  it('defaults friend_room to 0 (Host room) when not specified', () => {
+    createRoom(ROOM)
+    expect(getRoomBySlug(ROOM.slug).friend_room).toBe(0)
+  })
+
+  it('stores friend_room as 1 when friendRoom is passed', () => {
+    createRoom({ ...ROOM, friendRoom: true })
+    expect(getRoomBySlug(ROOM.slug).friend_room).toBe(1)
+  })
 })
 
 describe('roomExists', () => {

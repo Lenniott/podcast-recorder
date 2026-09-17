@@ -1,8 +1,6 @@
 import { redirect, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { verifyPasswordToken } from '$lib/server/auth.js'
-
-const SITE_COOKIE = 'pr_site_auth'
+import { resolveRole } from '$lib/server/role.js'
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
 // Sliding window: track POST timestamps per IP for sensitive actions.
@@ -68,15 +66,6 @@ function isServerCopyUpload(pathname) {
   return /^\/rec\/[^/]+\/server-copy\/(?:session|chunks|finalize)$/.test(pathname)
 }
 
-// ── Site auth ────────────────────────────────────────────────────────────────
-
-// "No password configured" means open access — a decision made here at the
-// call site, not inside verifyPasswordToken itself.
-function verifySiteToken(token) {
-  if (!env.SITE_PASSWORD) return true
-  return verifyPasswordToken('site', env.SITE_PASSWORD, token, env.SECRET)
-}
-
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export async function handle({ event, resolve }) {
@@ -99,11 +88,14 @@ export async function handle({ event, resolve }) {
     }
   }
 
-  // Site password gate (only when SITE_PASSWORD is set)
+  // Site password gate (only when SITE_PASSWORD is set) — admits either a
+  // Host or a Friend session (see role.js); which one a downstream
+  // load/action got is re-derived there the same way, from the same
+  // cookies, rather than threaded through here.
   if (env.SITE_PASSWORD) {
     // Room pages and WS use their own room-password auth
     if (!pathname.startsWith('/rec/') && pathname !== '/ws') {
-      if (!verifySiteToken(event.cookies.get(SITE_COOKIE))) {
+      if (!resolveRole(event.cookies, env)) {
         if (pathname !== '/') throw redirect(303, '/')
       }
     }

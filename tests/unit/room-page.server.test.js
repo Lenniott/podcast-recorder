@@ -54,13 +54,14 @@ async function loadPage() {
   return import('../../src/routes/rec/[slug]/+page.server.js')
 }
 
-async function seedRoom({ createdAt } = {}) {
+async function seedRoom({ createdAt, friendRoom = false } = {}) {
   const passwordHash = await hashPassword(ROOM_PASS)
   createRoom({
     slug: SLUG,
     name: 'Test Episode',
     passwordHash,
-    passwordPlain: ROOM_PASS
+    passwordPlain: ROOM_PASS,
+    friendRoom
   })
   if (createdAt != null) {
     db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(createdAt, SLUG)
@@ -130,8 +131,30 @@ describe('rec/[slug]/+page.server', () => {
         authenticated: false,
         isHostClaim: false,
         participantName: '',
-        roomPassword: null
+        roomPassword: null,
+        researchAssistantEnabled: true
       })
+    })
+
+    it('reports researchAssistantEnabled=false for a Friend-created room, even for the room\'s own host claim', async () => {
+      const passwordHash = await seedRoom({ friendRoom: true })
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET)
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.isHostClaim).toBe(true) // unaffected — same host-claim behavior as a Host room
+      expect(data.researchAssistantEnabled).toBe(false)
+    })
+
+    it('reports researchAssistantEnabled=true for an ordinary Host-created room', async () => {
+      const passwordHash = await seedRoom({ friendRoom: false })
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET)
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.researchAssistantEnabled).toBe(true)
     })
 
     it('returns authenticated with a valid session cookie', async () => {

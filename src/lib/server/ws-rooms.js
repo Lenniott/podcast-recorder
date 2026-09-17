@@ -495,8 +495,8 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, guestAiAllowed,
-//         joinedAt, talking, transcribing, serverCopyState, serverCopyPercent,
-//         serverCopyTakeId, micLabel, checking }
+//         friendRoomAiDisabled, joinedAt, talking, transcribing, serverCopyState,
+//         serverCopyPercent, serverCopyTakeId, micLabel, checking }
 const rooms = new Map()
 
 // A room's tabs/text/video, Transcript (ticket 01), per-tab Research
@@ -892,6 +892,13 @@ export function setupWss(wss) {
       // room, read once here off `roomRow` rather than re-checked per
       // message; see research_ask/research_remove below.
       guestAiAllowed: !!roomRow.guest_ai_allowed,
+      // Friend room (friend-password-auth, ticket 02): Research
+      // Assistant/AI is unconditionally off for a Friend-created room —
+      // including for the room's OWN host claim (the Friend who created
+      // it), which `guestAiAllowed` alone can't cover since a room-host
+      // always bypasses that check below. Fixed for the life of the room,
+      // same as guestAiAllowed above.
+      friendRoomAiDisabled: !!roomRow.friend_room,
       joinedAt: Date.now(),
       talking: false,
       serverCopyState: 'unavailable',
@@ -1131,7 +1138,9 @@ export function setupWss(wss) {
         // Assistant action (annotation_ask included) — see Guest Research
         // Access in CONTEXT.md — cached on the peer at connect (see
         // `guestAiAllowed` above), not re-read per message.
-        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+        // Friend room override: unconditionally off regardless of role or
+        // guestAiAllowed (see friendRoomAiDisabled above).
+        if (peer.friendRoomAiDisabled || (peer.role !== 'host' && !peer.guestAiAllowed)) {
           send(ws, { type: 'error', message: 'Only the host can ask the Research Assistant.' })
           return
         }
@@ -1165,7 +1174,9 @@ export function setupWss(wss) {
         // Same Guest Research Access gate as annotation_ask/research_ask — a
         // Custom Prompt spends a Research Assistant call on the room's
         // behalf whether it needs a highlight or not.
-        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+        // Friend room override: unconditionally off regardless of role or
+        // guestAiAllowed (see friendRoomAiDisabled above).
+        if (peer.friendRoomAiDisabled || (peer.role !== 'host' && !peer.guestAiAllowed)) {
           send(ws, { type: 'error', message: 'Only the host can run a prompt in this room.' })
           return
         }
@@ -1214,7 +1225,9 @@ export function setupWss(wss) {
       if (msg.type === 'research_remove' && clientId) {
         // Same gate as research_ask above — a guest can view the list but
         // not create or delete an entry unless Guest Research Access is on.
-        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+        // Friend room override: unconditionally off regardless of role or
+        // guestAiAllowed (see friendRoomAiDisabled above).
+        if (peer.friendRoomAiDisabled || (peer.role !== 'host' && !peer.guestAiAllowed)) {
           send(ws, { type: 'error', message: 'Only the host can remove a research card.' })
           return
         }
@@ -1281,7 +1294,9 @@ export function setupWss(wss) {
         // new rule of its own. A Card spends a Research Assistant call on
         // the room's behalf, which is exactly what that gate controls; the
         // Comment path above stays ungated because a typed note doesn't.
-        if (peer.role !== 'host' && !peer.guestAiAllowed) {
+        // Friend room override: unconditionally off regardless of role or
+        // guestAiAllowed (see friendRoomAiDisabled above).
+        if (peer.friendRoomAiDisabled || (peer.role !== 'host' && !peer.guestAiAllowed)) {
           send(ws, { type: 'error', message: 'Only the host can run a prompt in this room.' })
           return
         }

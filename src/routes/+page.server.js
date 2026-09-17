@@ -11,8 +11,8 @@ import {
 import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken, makePasswordToken, verifyPasswordToken } from '$lib/server/auth.js'
+import { resolveRole, SITE_COOKIE, FRIEND_COOKIE } from '$lib/server/role.js'
 
-const SITE_COOKIE = 'pr_site_auth'
 const ROOM_COOKIE = (slug) => `pr_auth_${slug}`
 const HOST_COOKIE = (slug) => `pr_host_${slug}`
 
@@ -20,18 +20,6 @@ const HOST_COOKIE = (slug) => `pr_host_${slug}`
 // Avoids cookie being silently rejected during HTTP-only LAN/Docker testing.
 function isSecure() {
   return env.HTTPS === 'true' || env.FORCE_HTTPS === 'true'
-}
-
-// "No password configured" means open access — a decision made here at the
-// call site, not inside verifyPasswordToken itself.
-function verifySiteToken(token) {
-  if (!env.SITE_PASSWORD) return true
-  return verifyPasswordToken('site', env.SITE_PASSWORD, token, env.SECRET)
-}
-
-/** No SITE_PASSWORD set means open access — same rule as verifySiteToken. */
-function isSiteAuthed(cookies) {
-  return !env.SITE_PASSWORD || verifySiteToken(cookies.get(SITE_COOKIE))
 }
 
 async function readCustomPromptForm(request) {
@@ -47,17 +35,26 @@ async function readCustomPromptForm(request) {
 }
 
 export async function load({ cookies, url }) {
-  const siteAuthed = verifySiteToken(cookies.get(SITE_COOKIE))
-  console.log('[load /] siteProtected=%s siteAuthed=%s', !!env.SITE_PASSWORD, siteAuthed)
+  // role.js is the single source of truth for "what role does this request
+  // have" — 'host', 'friend', or null. `siteAuthed` keeps its original
+  // meaning (a Host session) so nothing about Host behavior/shape changes;
+  // `role`/`friendProtected` are new, additive fields the template uses to
+  // show a Friend the create-room page without the dashboard.
+  const role = resolveRole(cookies, env)
+  const siteAuthed = role === 'host'
+  console.log('[load /] siteProtected=%s siteAuthed=%s role=%s', !!env.SITE_PASSWORD, siteAuthed, role)
   return {
     siteAuthed,
     siteProtected: !!env.SITE_PASSWORD,
+    friendProtected: !!env.FRIEND_PASSWORD,
+    role,
     notFound: url.searchParams.has('notfound'),
     expired: url.searchParams.has('expired'),
-    // Usage Dashboard (see CONTEXT.md) — same page, gated by the same
-    // siteAuthed check as the create form, not a separate admin secret.
-    // Only computed once past that gate: it's a handful of DB/filesystem
-    // reads per room and has no reason to run for an unauthenticated hit.
+    // Usage Dashboard (see CONTEXT.md) and Custom Prompts are deployment-wide
+    // Host-only config — gated on role === 'host', never reachable by a
+    // Friend session (same failure mode as no session at all). Only
+    // computed once past that gate: it's a handful of DB/filesystem reads
+    // per room and has no reason to run for an unauthenticated/Friend hit.
     customPrompts: siteAuthed ? listCustomPrompts() : [],
     usageDashboard: siteAuthed ? getUsageDashboard(env) : null
   }
@@ -86,12 +83,45 @@ export const actions = {
     throw redirect(303, '/')
   },
 
-  // Custom Prompt CRUD (see CONTEXT.md) — deployment-wide, gated by the same
-  // site password as room creation, exactly like the single Research Prompt
-  // these three replaced. Not per-room and not reachable from inside a room:
-  // a Host can't edit these mid-show (ADR-0008).
+  // Friend login (friend-password-auth, ticket 02) — a second, weaker,
+  // separate-cookie login on this same entry page, gated by its own
+  // FRIEND_PASSWORD. Unlike site_enter above, an unset FRIEND_PASSWORD
+  // means this action can never succeed (see role.js) rather than being
+  // open access — there is deliberately no way to become a Friend until an
+  // operator opts in.
+  friend_enter: async ({ request, cookies }) => {
+    console.log('[action friend_enter] called')
+    const data     = await request.formData()
+    const password = String(data.get('password') || '').trim()
+
+    if (!env.FRIEND_PASSWORD) {
+      return fail(403, { friendError: 'Friend login is not enabled.' })
+    }
+
+    const provided = makePasswordToken('friend', password, env.SECRET)
+    if (!verifyPasswordToken('friend', env.FRIEND_PASSWORD, provided, env.SECRET)) {
+      return fail(403, { friendError: 'Wrong password.' })
+    }
+
+    console.log('[action friend_enter] correct — setting cookie (secure=%s)', isSecure())
+    cookies.set(FRIEND_COOKIE, makePasswordToken('friend', env.FRIEND_PASSWORD, env.SECRET), {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 3,
+      secure: isSecure()
+    })
+
+    throw redirect(303, '/')
+  },
+
+  // Custom Prompt CRUD (see CONTEXT.md) — deployment-wide, gated to Host
+  // sessions only (role.js), exactly like the single Research Prompt these
+  // three replaced. A Friend session gets the same "Not authorised." outcome
+  // as no session at all — this config isn't per-room or reachable from
+  // inside a room either: a Host can't edit these mid-show (ADR-0008).
   create_custom_prompt: async ({ request, cookies }) => {
-    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.', promptErrorId: 'new' })
+    if (resolveRole(cookies, env) !== 'host') return fail(403, { promptError: 'Not authorised.', promptErrorId: 'new' })
     const { title, prompt, outputFormat } = await readCustomPromptForm(request)
     const promptError = validateCustomPrompt({ title, prompt })
     if (promptError) {
@@ -103,7 +133,7 @@ export const actions = {
   },
 
   update_custom_prompt: async ({ request, cookies }) => {
-    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.' })
+    if (resolveRole(cookies, env) !== 'host') return fail(403, { promptError: 'Not authorised.' })
     const { id, title, prompt, outputFormat } = await readCustomPromptForm(request)
     if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
     const promptError = validateCustomPrompt({ title, prompt })
@@ -115,7 +145,7 @@ export const actions = {
   },
 
   delete_custom_prompt: async ({ request, cookies }) => {
-    if (!isSiteAuthed(cookies)) return fail(403, { promptError: 'Not authorised.' })
+    if (resolveRole(cookies, env) !== 'host') return fail(403, { promptError: 'Not authorised.' })
     const { id } = await readCustomPromptForm(request)
     if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
     deleteCustomPrompt(id)
@@ -125,17 +155,26 @@ export const actions = {
   create: async ({ request, cookies }) => {
     console.log('[action create] called')
 
-    if (env.SITE_PASSWORD && !verifySiteToken(cookies.get(SITE_COOKIE))) {
-      console.log('[action create] not site-authed')
+    // Either role may create a room — a Friend reaches this exact same
+    // action a Host does. Everything that differs (AI, the friend_room
+    // flag) is decided below from `role`, never from anything posted.
+    const role = resolveRole(cookies, env)
+    if (!role) {
+      console.log('[action create] not authorised (no role)')
       return fail(403, { siteError: 'Not authorised.' })
     }
+    const friendRoom = role === 'friend'
 
     const data            = await request.formData()
     const name            = String(data.get('room-episode-name') || '').trim()
     const password        = String(data.get('room-episode-code') || '').trim()
-    const guestAiAllowed  = data.get('guest-ai-allowed') === 'on'
+    // A Friend room's AI is unconditionally off — the server decides this
+    // from `role`, ignoring whatever a posted `guest-ai-allowed` field says
+    // (tampering with the form cannot turn it on; see TDD seam 2). The
+    // field is only ever read at all for a Host session.
+    const guestAiAllowed  = friendRoom ? false : data.get('guest-ai-allowed') === 'on'
 
-    console.log('[action create] name=%s passwordLen=%d guestAiAllowed=%s', name, password.length, guestAiAllowed)
+    console.log('[action create] name=%s passwordLen=%d guestAiAllowed=%s friendRoom=%s', name, password.length, guestAiAllowed, friendRoom)
 
     if (!name)               return fail(400, { error: 'Episode name is required', name, password })
     if (name.length > 100)   return fail(400, { error: 'Name too long (max 100 chars)', name, password })
@@ -149,7 +188,7 @@ export const actions = {
         if (!getRoomBySlug(slug)) break
       }
       const passwordHash = await hashPassword(password)
-      createRoom({ slug, name, passwordHash, passwordPlain: password, guestAiAllowed })
+      createRoom({ slug, name, passwordHash, passwordPlain: password, guestAiAllowed, friendRoom })
       const roomToken = makeSessionToken(slug, passwordHash, env.SECRET)
       const hostToken = makeHostClaimToken(slug, passwordHash, env.SECRET)
       cookies.set(ROOM_COOKIE(slug), roomToken, {

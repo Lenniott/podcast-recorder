@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
 const SITE_PASSWORD = 'gate-pass'
+const FRIEND_PASSWORD = 'friend-pass'
 
 function siteToken(password = SITE_PASSWORD) {
   return createHmac('sha256', SECRET).update('site:' + password).digest('hex')
+}
+
+function friendToken(password = FRIEND_PASSWORD) {
+  return createHmac('sha256', SECRET).update('friend:' + password).digest('hex')
 }
 
 function makeEvent({
@@ -13,13 +18,15 @@ function makeEvent({
   search = '',
   method = 'GET',
   headers = {},
-  cookie
+  cookie,
+  friendCookie
 } = {}) {
   const url = new URL(`http://test${pathname}${search}`)
+  const jar = { pr_site_auth: cookie, pr_friend_auth: friendCookie }
   return {
     url,
     request: { method, headers: new Headers(headers) },
-    cookies: { get: (name) => (name === 'pr_site_auth' ? cookie : undefined) }
+    cookies: { get: (name) => jar[name] }
   }
 }
 
@@ -32,6 +39,7 @@ describe('hooks.server handle', () => {
   beforeEach(() => {
     vi.resetModules()
     delete process.env.SITE_PASSWORD
+    delete process.env.FRIEND_PASSWORD
     delete process.env.HTTPS
     delete process.env.FORCE_HTTPS
     process.env.SECRET = SECRET
@@ -309,6 +317,54 @@ describe('hooks.server handle', () => {
           resolve: vi.fn()
         })
       ).rejects.toMatchObject({ status: 303, location: '/' })
+    })
+
+    describe('Friend cookie', () => {
+      it('passes through with a valid Friend cookie when FRIEND_PASSWORD is set', async () => {
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+        const handle = await loadHandle()
+        const resolve = vi.fn(async () => 'ok')
+        const result = await handle({
+          event: makeEvent({ pathname: '/somewhere', friendCookie: friendToken() }),
+          resolve
+        })
+        expect(result).toBe('ok')
+      })
+
+      it('rejects a Friend cookie when FRIEND_PASSWORD is not configured (Friend role disabled)', async () => {
+        delete process.env.FRIEND_PASSWORD
+        const handle = await loadHandle()
+        await expect(
+          handle({
+            event: makeEvent({ pathname: '/somewhere', friendCookie: friendToken() }),
+            resolve: vi.fn()
+          })
+        ).rejects.toMatchObject({ status: 303, location: '/' })
+      })
+
+      it('does not let a Friend cookie satisfy the Host gate (cross-role isolation)', async () => {
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+        const handle = await loadHandle()
+        // A well-formed Friend token in the friend slot is fine (covered
+        // above); a token minted for the wrong purpose/password is not.
+        await expect(
+          handle({
+            event: makeEvent({ pathname: '/somewhere', friendCookie: siteToken() }),
+            resolve: vi.fn()
+          })
+        ).rejects.toMatchObject({ status: 303, location: '/' })
+      })
+
+      it('rejects a malformed Friend cookie', async () => {
+        process.env.FRIEND_PASSWORD = FRIEND_PASSWORD
+        const handle = await loadHandle()
+        await expect(
+          handle({
+            event: makeEvent({ pathname: '/somewhere', friendCookie: 'not-hex' }),
+            resolve: vi.fn()
+          })
+        ).rejects.toMatchObject({ status: 303, location: '/' })
+      })
     })
   })
 })

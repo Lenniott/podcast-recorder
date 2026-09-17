@@ -1109,6 +1109,7 @@
     slug={data.slug}
     isHostClaim={data.isHostClaim}
     guestCanAskResearch={data.guestCanAskResearch}
+    researchAssistantEnabled={data.researchAssistantEnabled}
     customPrompts={data.customPrompts}
     roomPassword={data.roomPassword}
     {wsStatus}

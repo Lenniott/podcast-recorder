@@ -46,6 +46,17 @@
   export let slug = "";
   export let isHostClaim = false;
   export let guestCanAskResearch = false;
+  // Friend room (friend-password-auth, ticket 02): true for every room
+  // except one created by a Friend session, where Research Assistant/AI is
+  // unconditionally off — no checkbox, no way to turn it on, not even for
+  // the room's own host claim (see rec/[slug]/+page.server.js and
+  // ws-rooms.js's server-side `friendRoomAiDisabled`, the real
+  // enforcement this only mirrors here to keep the AI UI from showing at
+  // all). ANDed into both AI-eligibility computations below rather than
+  // threaded into ResearchPanel/RoomTabs themselves, so isHostClaim keeps
+  // its normal, unrelated meaning everywhere else it's used (room
+  // password, presence table, sidebar).
+  export let researchAssistantEnabled = true;
   // [{id, title, usesSelection}] — every configured Custom Prompt. Passed to
   // both RoomTabs (the selection popup's one-button-per-prompt row,
   // ADR-0008 ticket 05 — only the usesSelection ones) and ResearchPanel
@@ -164,7 +175,7 @@
       bind:tabTexts
       bind:tabVideoTitles
       {customPrompts}
-      canRunCustomPrompts={isHostClaim || guestCanAskResearch}
+      canRunCustomPrompts={researchAssistantEnabled && (isHostClaim || guestCanAskResearch)}
     />
   </main>
 
@@ -172,8 +183,8 @@
     {send}
     {tabTexts}
     {tabVideoTitles}
-    {isHostClaim}
-    {guestCanAskResearch}
+    isHostClaim={researchAssistantEnabled && isHostClaim}
+    guestCanAskResearch={researchAssistantEnabled && guestCanAskResearch}
     {transcriptLines}
     {transcriptionStatus}
     {customPrompts}

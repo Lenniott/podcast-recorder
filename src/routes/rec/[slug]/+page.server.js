@@ -47,6 +47,13 @@ export async function load({ params, cookies }) {
     participantName: cookies.get(NAME_COOKIE(slug)) || '',
     isHostClaim,
     guestCanAskResearch: !!room.guest_ai_allowed,
+    // Friend room (friend-password-auth, ticket 02): Research Assistant/AI
+    // is unconditionally off in a Friend-created room, for every
+    // participant including the room's own host claim — see role.js and
+    // ws-rooms.js's `friendRoomAiDisabled`, the actual server-side
+    // enforcement this only mirrors for the UI (hiding the Ask/Custom
+    // Prompt controls). Everything else about a Friend room is unaffected.
+    researchAssistantEnabled: !room.friend_room,
     // id + title only — one selection-popup button per Custom Prompt
     // (ADR-0008, ticket 05). Deliberately NOT the template text: the server
     // resolves that by id when an annotation_ask arrives, so a participant's

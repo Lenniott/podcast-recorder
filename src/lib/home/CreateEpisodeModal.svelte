@@ -7,6 +7,7 @@
   export let open = false;
   export let form;
   export let onClose = () => {};
+  export let hideAiToggle = false;
 
   function setBodyScrollLocked(locked) {
     if (!browser) return;
@@ -37,7 +38,7 @@
         <X />
       </button>
 
-      <CreateEpisodeForm {form} />
+      <CreateEpisodeForm {form} {hideAiToggle} />
 
       <p class="footer-note">
         Share the room link and password with your guest.<br />

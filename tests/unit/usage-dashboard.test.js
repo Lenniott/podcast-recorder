@@ -50,7 +50,16 @@ describe('getUsageDashboard', () => {
       recordingSeconds: 0,
       transcriptWords: 0,
       tabCount: 1, // a fresh room always starts with one tab — see room-state-store.js
-      researchCardCount: 0
+      researchCardCount: 0,
+      friendRoom: false
     })
+  })
+
+  it('flags a Friend-created room so the dashboard can distinguish it from a Host room', () => {
+    createRoom({ slug: 'friendroom01', name: 'A friend episode', passwordHash: 'x', friendRoom: true })
+    const { rooms } = getUsageDashboard({})
+    expect(rooms.find((r) => r.slug === 'friendroom01')).toMatchObject({ friendRoom: true })
+    // The pre-existing Host rooms from the outer beforeEach stay unflagged.
+    expect(rooms.find((r) => r.slug === SLUG_REAL)).toMatchObject({ friendRoom: false })
   })
 })

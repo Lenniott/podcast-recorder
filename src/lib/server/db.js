@@ -46,6 +46,22 @@ function getDb() {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
 
+  // Friend room (friend-password-auth, ticket 02) — set once, at room
+  // creation: 1 when the creating session's role was 'friend' (see
+  // role.js), 0 for a Host-created room. Read back as a JS boolean by
+  // getUsageDashboard's room mapping and ws-rooms.js's connect-time AI gate
+  // (`!!room.friend_room`), the same `!!` pattern as guest_ai_allowed above.
+  // Same ALTER-then-ignore-duplicate-column migration pattern as
+  // password_plain/guest_ai_allowed. A single boolean column, not a role
+  // table — there is exactly one non-Host room-creating role today (see
+  // .scratch/friend-password-auth/README.md's "deep modules, thin
+  // interface" note) and ticket 03's room cap/expiry can filter on it.
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN friend_room INTEGER NOT NULL DEFAULT 0`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
   // Drop retired columns from existing DBs (SQLite 3.35+). No-op if a column
   // is already gone, or if the SQLite version can't drop columns.
   for (const column of ['show_upload', 'guest_can_control_playback']) {
@@ -137,11 +153,11 @@ export function _resetDb() {
   _db = null
 }
 
-export function createRoom({ slug, name, passwordHash, passwordPlain = null, guestAiAllowed = false }) {
+export function createRoom({ slug, name, passwordHash, passwordPlain = null, guestAiAllowed = false, friendRoom = false }) {
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, password_plain, guest_ai_allowed, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, Date.now())
+    INSERT INTO rooms (slug, name, password_hash, password_plain, guest_ai_allowed, friend_room, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, friendRoom ? 1 : 0, Date.now())
 }
 
 export function getRoomBySlug(slug) {

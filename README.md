@@ -65,7 +65,10 @@ git clone https://github.com/Lenniott/podcast-recorder.git
 cd podcast-recorder
 cp .env.example .env
 # Set SECRET — this is required. SITE_PASSWORD is optional; set it if you
-# want to lock the "create episode" page behind a password.
+# want to lock the "create episode" page behind a password. FRIEND_PASSWORD
+# is also optional: a second, weaker password for people you trust with
+# room creation but not your Usage Dashboard — rooms they create always
+# have Research Assistant/AI off. Leave it blank to disable Friend login.
 # Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
 # proxy is the one handling HTTPS). ROOM_MAX_AGE_HOURS controls how long
 # rooms remain available; it defaults to 12.

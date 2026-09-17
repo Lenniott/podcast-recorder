@@ -74,6 +74,10 @@ export function getUsageDashboard(env = process.env) {
         slug: room.slug,
         name: room.name,
         createdAt: room.created_at,
+        // friend-password-auth ticket 02: lets the dashboard's room list
+        // visually distinguish a Friend-created room from a Host-created
+        // one — see rooms.friend_room in db.js.
+        friendRoom: !!room.friend_room,
         calls: usage?.calls ?? 0,
         tokens: usage?.tokens ?? 0,
         cost: usage?.cost ?? 0,

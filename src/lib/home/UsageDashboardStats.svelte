@@ -54,7 +54,14 @@
       <tbody>
         {#each usageDashboard.rooms as room (room.slug)}
           <tr>
-            <td>{room.name}</td>
+            <td
+              >{room.name}
+              {#if room.friendRoom}
+                <span class="room-badge" title="Created by a Friend session — Research Assistant is off"
+                  >Friend</span
+                >
+              {/if}</td
+            >
             <td>{room.calls}</td>
             <td>{room.tokens.toLocaleString()}</td>
             <td>{formatCost(room.cost)}</td>
@@ -131,5 +138,21 @@
     text-transform: uppercase;
     font-size: 10px;
     letter-spacing: 0.04em;
+  }
+
+  /* friend-password-auth ticket 02: visually distinguishes a Friend-created
+     room from a Host-created one in the dashboard's room list. */
+  .room-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(96, 165, 250, 0.15);
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    color: var(--accent-text, #60a5fa);
+    white-space: nowrap;
   }
 </style>
