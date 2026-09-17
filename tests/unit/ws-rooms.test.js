@@ -19,6 +19,10 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
+import {
+  encodeInt16PcmBase64,
+  MAX_SHARE_PCM_BASE64_CHARS
+} from '../../src/lib/recording/recording-check-share.js'
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -325,6 +329,66 @@ describe('setupWss — connection handling', () => {
     ws2.emit('message', JSON.stringify({ type: 'mic_info', label: 'Shure SM7B' }))
     const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterResync.peers.find(p => p.name === 'Host').micLabel).toBe('Shure SM7B')
+  })
+
+  it('recording_check is stored on the peer and shown via presence, forgotten on reconnect until resync', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    const guest = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: true }))
+
+    for (const ws of [ws1, guest]) {
+      const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+      expect(presence.peers.find(p => p.name === 'Host').checking).toBe(true)
+      expect(presence.peers.find(p => p.name === 'Guest').checking).toBe(false)
+    }
+
+    wss.connect(ws2, 'room1'); join(ws2, 'Host', 'c1')
+    const afterJoin = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterJoin.peers.find(p => p.name === 'Host').checking).toBe(false)
+
+    ws2.emit('message', JSON.stringify({ type: 'recording_check', open: true }))
+    const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
+    expect(afterResync.peers.find(p => p.name === 'Host').checking).toBe(true)
+  })
+
+  it('recording_check_preview is relayed to the other peer with the sender clientId and is not stored', () => {
+    const pcm = encodeInt16PcmBase64(new Int16Array([1, 2, 3, 4]))
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({
+      type: 'recording_check_preview',
+      sampleRate: 48000,
+      pcm
+    }))
+
+    expect(ws2.sent.some((m) => m.type === 'recording_check_preview' && m.clientId === 'c1' && m.pcm === pcm && m.sampleRate === 48000)).toBe(true)
+    expect(ws1.sent.filter((m) => m.type === 'recording_check_preview').length).toBe(0)
+    const presence = ws2.sent.filter((m) => m.type === 'presence').at(-1)
+    expect(presence.peers.find((p) => p.clientId === 'c1').pcm).toBeUndefined()
+  })
+
+  it('recording_check_preview drops oversized or invalid payloads', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    const before = ws2.sent.length
+    ws1.emit('message', JSON.stringify({
+      type: 'recording_check_preview',
+      sampleRate: 48000,
+      pcm: 'a'.repeat(MAX_SHARE_PCM_BASE64_CHARS + 1)
+    }))
+    ws1.emit('message', JSON.stringify({
+      type: 'recording_check_preview',
+      sampleRate: 12,
+      pcm: encodeInt16PcmBase64(new Int16Array([1, 2]))
+    }))
+    expect(ws2.sent.slice(before).some((m) => m.type === 'recording_check_preview')).toBe(false)
   })
 
   it('removes peer and updates presence on disconnect', () => {

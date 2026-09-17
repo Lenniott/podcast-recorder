@@ -37,6 +37,17 @@
  *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
  *                                          and included in presence. Re-announce on
  *                                          registerResync after reconnect (server forgets it).
+ *   { type: 'recording_check', open }    — listen-back modal is up for this peer.
+ *                                          Stored as presence `checking` (ephemeral,
+ *                                          same as mic_info: forgotten on reconnect
+ *                                          until registerResync). Not the audio itself.
+ *   { type: 'recording_check_preview', sampleRate, pcm }
+ *                                        — one-shot Int16 PCM (base64) from confirmed
+ *                                          writes during the listen-back check. Relayed
+ *                                          to the other peer, never stored, never
+ *                                          written to disk. pcm is capped
+ *                                          (MAX_SHARE_PCM_BASE64_CHARS). Re-sent when
+ *                                          the recorder clicks Listen back.
  *   { type: 'yt_duck', talking }         — hold-to-talk; any peer; room ORs all holds
  *   { type: 'transcript_activity', active }
  *                                        — sent by transcript-capture.js while an
@@ -280,7 +291,10 @@
  *                                          spend a second lookup.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording, serverCopyState, serverCopyPercent, micLabel}] }
+ *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}] }
+ *   { type: 'recording_check_preview', clientId, sampleRate, pcm }
+ *                                        — relay of the sender's listen-back clip;
+ *                                          `clientId` is the recorder, not the listener.
  *   { type: 'server_copy_token', clientId, token }
  *                                        — sent ONLY to the connection whose 'join' just
  *                                          claimed this clientId, never broadcast (ticket
@@ -471,6 +485,7 @@ import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
+import { decodeInt16PcmBase64 } from '../recording/recording-check-share.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -481,7 +496,7 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 // rooms: Map<slug, Map<clientId, peer>>
 // peer: { ws, clientId, name, recording, slug, role, claimedHost, guestAiAllowed,
 //         joinedAt, talking, transcribing, serverCopyState, serverCopyPercent,
-//         serverCopyTakeId, micLabel }
+//         serverCopyTakeId, micLabel, checking }
 const rooms = new Map()
 
 // A room's tabs/text/video, Transcript (ticket 01), per-tab Research
@@ -529,7 +544,8 @@ function sendPresence(slug) {
     serverCopyState: p.serverCopyState || 'unavailable',
     serverCopyPercent: p.serverCopyPercent || 0,
     serverCopyTakeId: p.serverCopyTakeId || null,
-    micLabel: p.micLabel || ''
+    micLabel: p.micLabel || '',
+    checking: !!p.checking
   }))
   const msg = { type: 'presence', peers }
   for (const peer of room.values()) send(peer.ws, msg)
@@ -881,7 +897,8 @@ export function setupWss(wss) {
       serverCopyState: 'unavailable',
       serverCopyPercent: 0,
       serverCopyTakeId: null,
-      micLabel: ''
+      micLabel: '',
+      checking: false
     }
 
     ws.on('message', (raw) => {
@@ -988,6 +1005,24 @@ export function setupWss(wss) {
       if (msg.type === 'mic_info' && clientId) {
         peer.micLabel = String(msg.label || '').slice(0, 80)
         sendPresence(slug)
+      }
+
+      if (msg.type === 'recording_check' && clientId) {
+        peer.checking = !!msg.open
+        sendPresence(slug)
+      }
+
+      if (msg.type === 'recording_check_preview' && clientId) {
+        const sampleRate = Number(msg.sampleRate)
+        if (!Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 96000) return
+        const pcm = decodeInt16PcmBase64(msg.pcm)
+        if (!pcm) return
+        broadcast(slug, {
+          type: 'recording_check_preview',
+          clientId,
+          sampleRate,
+          pcm: msg.pcm
+        }, clientId)
       }
 
       if (msg.type === 'yt_duck' && clientId) {

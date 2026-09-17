@@ -217,6 +217,16 @@ _Avoid_: highlight (that's the visual, not the note), block comment
 An Annotation authored by a person, not a Custom Prompt.
 _Avoid_: note, margin note
 
+**Listen-back check** / **test audio**:
+The modal that opens the instant a participant starts recording. They read
+a sentence; **Listen back** plays a short WAV built only from
+confirmed-written chunks (same invariant as the live waveform). That clip
+is also relayed to the **Host** (auto after a few seconds of written
+audio, and again if they click Listen back) so it can be played from the
+presence table without downloading a server copy or stopping the take.
+The server forwards the PCM and forgets it. Not live monitoring.
+_Avoid_: talk, WebRTC, server copy download (that's a different file)
+
 **Card** _(renamed from **Research Card** — see ADR-0008)_:
 An Annotation authored by a Custom Prompt: the glanceable result of a
 lookup, a short takeaway meant to be skimmed during conversation, not

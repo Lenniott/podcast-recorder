@@ -78,6 +78,7 @@
   export let myPeerIsRecording = false;
   export let recordingSeconds = 0;
   export let bytesWritten = 0;
+  export let checkPreviewByClientId = {};
   export let onToggleRecording = () => {};
   export let onClap = () => {};
   export let formatTime = (s) => String(s);
@@ -148,6 +149,7 @@
         {isHostClaim}
         {bytesWritten}
         {formatBytes}
+        {checkPreviewByClientId}
       >
       <ThemeToggle floating={false} />
       </RoomPresenceTable>

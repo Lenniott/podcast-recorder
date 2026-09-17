@@ -3,7 +3,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
-  import { buildWavHeader, float32ToInt16 } from '$lib/recording/audio-utils.js'
+  import { buildWavHeader, float32ToInt16, buildWavBlob } from '$lib/recording/audio-utils.js'
   import { createCaptureWriter } from '$lib/recording/capture-writer.js'
   import { createServerCopyUpload } from '$lib/server-copy/server-copy-upload.js'
   import {
@@ -23,6 +23,10 @@
   import { createRoomConnection } from '$lib/room/room-connection.js'
   import { createClockSync } from '$lib/recording/clock-sync.js'
   import { createRecordingCheck } from '$lib/recording/recording-check.js'
+  import {
+    encodeInt16PcmBase64,
+    decodeInt16PcmBase64
+  } from '$lib/recording/recording-check-share.js'
   import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
   import { createAudioEngine } from '$lib/recording/audio-engine.js'
   import { createLevelMeter } from '$lib/recording/level-meter.js'
@@ -41,7 +45,7 @@
 
   // ─── WebSocket state ────────────────────────────────────────────────
   let wsStatus = 'disconnected' // connected | connecting | disconnected
-  let peers = []               // [{ clientId, name, recording, role, isHost, micLabel }]
+  let peers = []               // [{ clientId, name, recording, checking, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
   let researchPanel = null     // ResearchPanel component instance
   // tabId -> string — RoomTabs.svelte's own true, complete, current copy
@@ -138,6 +142,9 @@
   let checkModalOpen = false
   let checkSentence = ''
   const recordingCheck = createRecordingCheck()
+  // Host-side object URLs of the other peer's listen-back clip, keyed by
+  // that peer's clientId. Rebuilt from relayed PCM; never a server-copy file.
+  let checkPreviewByClientId = {}
 
   // ─── Clap state ─────────────────────────────────────────────────────
   let lastClapFrom = null
@@ -497,6 +504,7 @@
   function handleWritten(i16) {
     writtenRing?.push(i16)
     recordingCheck.handleWritten(i16)
+    if (recordingCheck.consumeAutoShare()) sendRecordingCheckPreview()
     // Same seam, chained: the server-copy mirror only ever sees a chunk
     // after it's already been handed to writtenRing/the preview buffer,
     // i.e. after captureWriter has confirmed it hit local disk.
@@ -551,9 +559,57 @@
     recordingCheck.start()
     checkModalOpen = recordingCheck.open
     checkSentence = recordingCheck.sentence
+    sendRecordingCheck(true)
+  }
+
+  function sendRecordingCheck(open) {
+    room.send({ type: 'recording_check', open: !!open })
+  }
+
+  function sendRecordingCheckPreview() {
+    const pcm = recordingCheck.sharePcm()
+    if (pcm.length === 0) return
+    room.send({
+      type: 'recording_check_preview',
+      sampleRate: recordingSampleRate,
+      pcm: encodeInt16PcmBase64(pcm)
+    })
+  }
+
+  function applyCheckPreview(msg) {
+    const pcm = decodeInt16PcmBase64(msg.pcm)
+    const id = String(msg.clientId || '')
+    const sampleRate = Number(msg.sampleRate)
+    if (!pcm || !id || !Number.isFinite(sampleRate)) return
+    const blob = buildWavBlob([pcm], sampleRate)
+    const prev = checkPreviewByClientId[id]
+    if (prev) URL.revokeObjectURL(prev)
+    checkPreviewByClientId = { ...checkPreviewByClientId, [id]: URL.createObjectURL(blob) }
+  }
+
+  function pruneCheckPreviews(nextPeers) {
+    const keep = new Set(
+      nextPeers.filter((p) => p.recording).map((p) => p.clientId)
+    )
+    const next = {}
+    let changed = false
+    for (const [id, url] of Object.entries(checkPreviewByClientId)) {
+      if (keep.has(id)) next[id] = url
+      else {
+        URL.revokeObjectURL(url)
+        changed = true
+      }
+    }
+    if (changed) checkPreviewByClientId = next
+  }
+
+  function clearAllCheckPreviews() {
+    for (const url of Object.values(checkPreviewByClientId)) URL.revokeObjectURL(url)
+    checkPreviewByClientId = {}
   }
 
   function buildCheckPreview() {
+    sendRecordingCheckPreview()
     return recordingCheck.buildPreview(recordingSampleRate)
   }
 
@@ -561,12 +617,14 @@
     recordingCheck.confirm()
     checkModalOpen = recordingCheck.open
     checkSentence = recordingCheck.sentence
+    sendRecordingCheck(false)
   }
 
   async function rejectRecordingCheck() {
     recordingCheck.reject()
     checkModalOpen = recordingCheck.open
     checkSentence = recordingCheck.sentence
+    sendRecordingCheck(false)
     await stopRecording()
   }
 
@@ -667,6 +725,7 @@
       recordingCheck.close()
       checkModalOpen = recordingCheck.open
       checkSentence = recordingCheck.sentence
+      sendRecordingCheck(false)
     }
 
     // Record through one final short grace window so a nearly-full worklet
@@ -768,7 +827,10 @@
       syncClock()
     },
     onMessage(msg) {
-      if (msg.type === 'presence')  peers = msg.peers
+      if (msg.type === 'presence') {
+        peers = msg.peers
+        pruneCheckPreviews(msg.peers)
+      }
       // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
       // Guard on clientId anyway: never let a stale/mismatched token from
       // a previous identity get applied to this one.
@@ -852,6 +914,7 @@
       // (ticket 06): it now rides the panel's Transcript facet button (and
       // its collapse toggle when the panel is shut), not a tab-strip pill.
       if (msg.type === 'transcript_activity') researchPanel?.applyTranscriptActivity?.(msg)
+      if (msg.type === 'recording_check_preview') applyCheckPreview(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {
@@ -875,6 +938,11 @@
   })
   room.registerResync(() => {
     sendMicInfo(true)
+  })
+  room.registerResync(() => {
+    if (!checkModalOpen) return
+    sendRecordingCheck(true)
+    sendRecordingCheckPreview()
   })
   room.registerResync(() => {
     // A Comment submitted into a dropped socket is real, local, unsaved
@@ -1011,6 +1079,7 @@
     window.removeEventListener('themechange', refreshWaveformColors)
     room.disconnect()
     audioEngine.close()
+    clearAllCheckPreviews()
     navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange)
   })
 </script>
@@ -1067,6 +1136,7 @@
     {myPeerIsRecording}
     {recordingSeconds}
     {bytesWritten}
+    {checkPreviewByClientId}
     onToggleRecording={toggleRecording}
     onClap={sendClap}
     {formatTime}

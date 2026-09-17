@@ -24,10 +24,12 @@ silence` for the full diagnosis if you need it. Don't reintroduce an
 "expected-vs-actual timing" comparison as a stand-in for "did the mic drop out."
 
 Anything that shows recording health to the user (waveform, level meter, status
-pill) must be sourced from what was actually confirmed written
-(`capture-writer.js`'s `onWritten` hook), never from the live mic signal. The mic
-can look perfectly healthy while the file quietly diverges from it — that gap is
-what let the original bug go unnoticed for an hour.
+pill, **host play of a guest's mic-check clip**) must be sourced from what was
+actually confirmed written (`capture-writer.js`'s `onWritten` hook), never from
+the live mic signal. The mic can look perfectly healthy while the file quietly
+diverges from it — that gap is what let the original bug go unnoticed for an
+hour. The table Play control is that same listen-back buffer, relayed over the
+room WebSocket; it is not a live talk path.
 
 ## Keeping host and guest in sync
 

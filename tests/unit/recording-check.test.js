@@ -71,4 +71,43 @@ describe('createRecordingCheck', () => {
     check.start()
     expect(check.buildPreview(48000).size).toBe(44)
   })
+
+  it('sharePcm() is empty until start() has written samples', () => {
+    const check = createRecordingCheck()
+    expect(Array.from(check.sharePcm())).toEqual([])
+    check.start()
+    expect(Array.from(check.sharePcm())).toEqual([])
+  })
+
+  it('sharePcm() returns written samples up to maxShareSamples, not the full 30s preview cap', () => {
+    const check = createRecordingCheck({ maxPreviewSamples: 20, maxShareSamples: 4 })
+    check.start()
+    check.handleWritten(new Int16Array([1, 2, 3, 4, 5, 6]))
+    expect(Array.from(check.sharePcm())).toEqual([1, 2, 3, 4])
+    check.handleWritten(new Int16Array([7, 8, 9]))
+    expect(Array.from(check.sharePcm())).toEqual([1, 2, 3, 4])
+  })
+
+  it('consumeAutoShare() fires once when written samples first reach shareAfterSamples', () => {
+    const check = createRecordingCheck({ shareAfterSamples: 5, maxShareSamples: 20 })
+    check.start()
+    check.handleWritten(new Int16Array([1, 2, 3]))
+    expect(check.consumeAutoShare()).toBe(false)
+    check.handleWritten(new Int16Array([4, 5, 6]))
+    expect(check.consumeAutoShare()).toBe(true)
+    expect(check.consumeAutoShare()).toBe(false)
+    check.handleWritten(new Int16Array([7, 8]))
+    expect(check.consumeAutoShare()).toBe(false)
+  })
+
+  it('a new start() allows auto-share to fire again', () => {
+    const check = createRecordingCheck({ shareAfterSamples: 2 })
+    check.start()
+    check.handleWritten(new Int16Array([1, 2]))
+    expect(check.consumeAutoShare()).toBe(true)
+    check.confirm()
+    check.start()
+    check.handleWritten(new Int16Array([9, 8]))
+    expect(check.consumeAutoShare()).toBe(true)
+  })
 })

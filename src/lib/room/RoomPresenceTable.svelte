@@ -3,8 +3,9 @@
     formatServerCopyLine,
     canShowServerCopyDownload,
   } from "../server-copy/server-copy-status.js";
+  import { canPlayRecordingCheck } from "../recording/recording-check-share.js";
   import { participantPresence } from "./participant-display.js";
-  import { ChevronDown, ChevronUp, Download02, Microphone02 } from "../icons";
+  import { ChevronDown, ChevronUp, Download02, Headphones, Microphone02 } from "../icons";
 
   export let peers = [];
   export let clientId = null;
@@ -13,8 +14,10 @@
   export let isHostClaim = false;
   export let bytesWritten = 0;
   export let formatBytes = (b) => String(b);
+  export let checkPreviewByClientId = {};
 
   let open = false;
+  let checkAudio;
 
   $: presence = participantPresence(wsStatus);
   $: others = peers.filter((p) => p.clientId !== clientId);
@@ -40,6 +43,13 @@
       ? `&takeId=${encodeURIComponent(peer.serverCopyTakeId)}`
       : "";
     return `/rec/${slug}/server-copy/download?clientId=${encodeURIComponent(peer.clientId)}${takeParam}`;
+  }
+
+  function playCheckPreview(peer) {
+    const url = checkPreviewByClientId[peer.clientId];
+    if (!url || !checkAudio) return;
+    checkAudio.src = url;
+    checkAudio.play().catch(() => {});
   }
 </script>
 
@@ -101,6 +111,7 @@
           <col class="col-mic" />
           <col class="col-size" />
           <col class="col-copy" />
+          <col class="col-check" />
           <col class="col-dl" />
         </colgroup>
         <thead>
@@ -111,6 +122,7 @@
             <th>mic</th>
             <th>size</th>
             <th>Server copy</th>
+            <th></th>
             <th></th>
           </tr>
         </thead>
@@ -169,6 +181,33 @@
                 >{copyLine(peer)}</span>
               </td>
               <td class="dl-cell">
+                {#if canPlayRecordingCheck({
+                  isHost: isHostClaim,
+                  isSelf,
+                  hasPreview: !!checkPreviewByClientId[peer.clientId],
+                })}
+                  <button
+                    type="button"
+                    class="dl"
+                    data-testid="check-preview-play"
+                    aria-label="Play test audio"
+                    title="Play test audio"
+                    on:click={() => playCheckPreview(peer)}
+                  >
+                    <Headphones />
+                  </button>
+                {:else if isHostClaim && !isSelf && peer.checking}
+                  <span
+                    class="dl waiting"
+                    data-testid="check-preview-waiting"
+                    title="Waiting for test audio"
+                    aria-label="Waiting for test audio"
+                  >
+                    <Headphones />
+                  </span>
+                {/if}
+              </td>
+              <td class="dl-cell">
                 {#if showDownload(peer)}
                   <a
                     class="dl"
@@ -184,13 +223,14 @@
           {/each}
           {#if others.length === 0}
             <tr>
-              <td colspan="7" class="empty">Waiting for guest…</td>
+              <td colspan="8" class="empty">Waiting for guest…</td>
             </tr>
           {/if}
         </tbody>
       </table>
     </div>
   {/if}
+  <audio bind:this={checkAudio} class="check-preview-audio"></audio>
 </section>
 
 <style>
@@ -270,6 +310,7 @@
   .col-mic { width: 32%; }
   .col-size { width: 5.5rem; }
   .col-copy { width: 9rem; }
+  .col-check { width: 2.75rem; }
   .col-dl { width: 2.75rem; }
   th,
   td {
@@ -330,6 +371,19 @@
   .dl:hover {
     background: color-mix(in srgb, var(--text) 10%, transparent);
     color: var(--text);
+  }
+  button.dl {
+    border: none;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  .dl.waiting {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .check-preview-audio {
+    display: none;
   }
   .empty {
     color: var(--muted);
