@@ -4,9 +4,9 @@
 locks + definition of done) and CONTEXT.md **Usage Dashboard**.
 
 **What to build:** From the Usage Dashboard table, a host can **filter
-rooms by name or slug**, **open a still-active room**, and see each row's
-**original creation date**. No delete, no reactivate, no change to expiry
-semantics in this ticket.
+rooms by name or slug**, **open a room that still exists**, and see each
+row's **original creation date**. No delete, no unlock, no guest-lock
+behaviour in this ticket.
 
 The aggregation payload already carries `createdAt`; the table just does
 not show it and room names are plain text. Search is client-side over
@@ -23,7 +23,7 @@ the flag in the test env the same way other dashboard tests would need).
 
 1. Dashboard payload: every room row includes a numeric `createdAt` that
    matches the room's insert time (already true — lock it with an
-   assertion so later tickets cannot "fix" expiry by rewriting it).
+   assertion so later tickets cannot "fix" lock by rewriting it).
 2. Table: given a fixture list, filtering by a substring of **name** or
    **slug** shows only matches; empty query shows all; no matches shows
    an empty/honest state, not a broken table. Extract the filter so it
@@ -35,10 +35,10 @@ the flag in the test env the same way other dashboard tests would need).
 **Blocked by:** None (can start immediately).
 
 **Hands off to later tickets:** Keep row identity as `slug`. Do not cram
-checkboxes, status, or action menus into this ticket. If the table
+checkboxes, lock status, or action menus into this ticket. If the table
 component starts absorbing search + formatting, split formatting/filter
-into a small module now — tickets 04–05 will attach actions to the same
-rows.
+into a small module now — later tickets will attach unlock, delete, and
+status to the same rows.
 
 **Status:** ready-for-agent
 
@@ -47,8 +47,8 @@ rows.
       seen" or "last activity".
 - [ ] Search filters the table by room name and slug; clearing it restores
       the full list.
-- [ ] An active room is enterable from its row and lands on the existing
-      room password/session flow (no new auth).
+- [ ] A room that exists is enterable from its row and lands on the
+      existing room password/session flow (no new auth).
 - [ ] Filter logic lives in a tested module, not an anonymous inline in
       the Svelte file.
 - [ ] TDD: red → green on the seams above; no tests of CSS class names or
