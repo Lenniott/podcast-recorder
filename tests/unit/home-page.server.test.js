@@ -460,6 +460,122 @@ describe('+page.server', () => {
         expect(room.friend_room).toBe(1)
         expect(room.guest_ai_allowed).toBe(0)
       })
+
+      // friend-password-auth ticket 03 — the Friend room cap. Room ages are
+      // seeded directly on `created_at` (same pattern db.test.js uses),
+      // with FRIEND_ROOM_MAX_AGE_HOURS/ROOM_MAX_AGE_HOURS set so the room's
+      // age vs. `Date.now()` at test-run time is unambiguous.
+      describe('Friend room cap', () => {
+        beforeEach(() => {
+          process.env.FRIEND_ROOM_MAX_AGE_HOURS = '12'
+          process.env.ROOM_MAX_AGE_HOURS = '12'
+        })
+
+        function seedActiveFriendRoom(slug) {
+          roomsDb.createRoom({ slug, name: `Existing ${slug}`, passwordHash: 'hash', friendRoom: true })
+          // created "now" — well inside the 12h window, unambiguously active.
+          db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(Date.now(), slug)
+        }
+
+        function seedExpiredFriendRoom(slug) {
+          roomsDb.createRoom({ slug, name: `Expired ${slug}`, passwordHash: 'hash', friendRoom: true })
+          db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1, slug)
+        }
+
+        it('with 2 active Friend rooms, a 3rd create attempt still succeeds (boundary)', async () => {
+          seedActiveFriendRoom('f1')
+          seedActiveFriendRoom('f2')
+          const { actions } = await loadPage()
+          await expectRedirect(
+            () => actions.create({
+              request: formRequest({ 'room-episode-name': 'Third Friend Room', 'room-episode-code': 'pass' }),
+              cookies: makeCookies({ pr_friend_auth: friendToken() })
+            }),
+            303,
+            /^\/rec\//
+          )
+          const rooms = db.getDb().prepare('SELECT * FROM rooms WHERE friend_room = 1').all()
+          expect(rooms).toHaveLength(3)
+        })
+
+        it('with exactly 3 active Friend rooms, a 4th create attempt is refused without creating a room (boundary)', async () => {
+          seedActiveFriendRoom('f1')
+          seedActiveFriendRoom('f2')
+          seedActiveFriendRoom('f3')
+          const { actions } = await loadPage()
+          const result = await actions.create({
+            request: formRequest({ 'room-episode-name': 'Fourth Friend Room', 'room-episode-code': 'pass' }),
+            cookies: makeCookies({ pr_friend_auth: friendToken() })
+          })
+          expect(result).toMatchObject({ status: 409, data: { friendRoomsFull: true } })
+          expect(result.data.activeFriendRooms).toHaveLength(3)
+          const rooms = db.getDb().prepare('SELECT * FROM rooms WHERE friend_room = 1').all()
+          expect(rooms).toHaveLength(3)
+          expect(rooms.map((r) => r.name)).not.toContain('Fourth Friend Room')
+        })
+
+        it('the cap check runs before field validation — a blank name with 3 active rooms still returns Rooms full, not a validation error', async () => {
+          seedActiveFriendRoom('f1')
+          seedActiveFriendRoom('f2')
+          seedActiveFriendRoom('f3')
+          const { actions } = await loadPage()
+          const result = await actions.create({
+            request: formRequest({ 'room-episode-name': '  ', 'room-episode-code': '' }),
+            cookies: makeCookies({ pr_friend_auth: friendToken() })
+          })
+          expect(result).toMatchObject({ status: 409, data: { friendRoomsFull: true } })
+        })
+
+        it('lists the exact 3 active rooms, soonest-to-expire first', async () => {
+          roomsDb.createRoom({ slug: 'oldest', name: 'Oldest', passwordHash: 'hash', friendRoom: true })
+          db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(Date.now() - 3000, 'oldest')
+          roomsDb.createRoom({ slug: 'newest', name: 'Newest', passwordHash: 'hash', friendRoom: true })
+          db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(Date.now() - 1000, 'newest')
+          roomsDb.createRoom({ slug: 'middle', name: 'Middle', passwordHash: 'hash', friendRoom: true })
+          db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(Date.now() - 2000, 'middle')
+
+          const { actions } = await loadPage()
+          const result = await actions.create({
+            request: formRequest({ 'room-episode-name': 'Blocked', 'room-episode-code': 'pass' }),
+            cookies: makeCookies({ pr_friend_auth: friendToken() })
+          })
+          // Oldest-created expires soonest.
+          expect(result.data.activeFriendRooms.map((r) => r.name)).toEqual(['Oldest', 'Middle', 'Newest'])
+        })
+
+        it('Host room creation is never subject to the Friend room cap, even with 3+ active Friend rooms', async () => {
+          seedActiveFriendRoom('f1')
+          seedActiveFriendRoom('f2')
+          seedActiveFriendRoom('f3')
+          const { actions } = await loadPage()
+          await expectRedirect(
+            () => actions.create({
+              request: formRequest({ 'room-episode-name': 'Host Room', 'room-episode-code': 'pass' }),
+              cookies: makeCookies({ pr_site_auth: siteToken() })
+            }),
+            303,
+            /^\/rec\//
+          )
+          const room = db.getDb().prepare('SELECT * FROM rooms WHERE name = ?').get('Host Room')
+          expect(room.friend_room).toBe(0)
+        })
+
+        it('the stale-count race: once one of the 3 has actually expired, a new Friend room can be created — no manual step needed', async () => {
+          seedExpiredFriendRoom('f1') // created_at=1, expired given a 12h window and real Date.now()
+          seedActiveFriendRoom('f2')
+          seedActiveFriendRoom('f3')
+          const { actions } = await loadPage()
+          const err = await expectRedirect(
+            () => actions.create({
+              request: formRequest({ 'room-episode-name': 'New Friend Room', 'room-episode-code': 'pass' }),
+              cookies: makeCookies({ pr_friend_auth: friendToken() })
+            }),
+            303,
+            /^\/rec\//
+          )
+          expect(err.location).toMatch(/^\/rec\//)
+        })
+      })
     })
   })
 

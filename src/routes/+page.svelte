@@ -1,6 +1,7 @@
 <script>
   import SitePasswordGate from "$lib/home/SitePasswordGate.svelte";
   import FriendPasswordGate from "$lib/home/FriendPasswordGate.svelte";
+  import FriendRoomsFullNotice from "$lib/home/FriendRoomsFullNotice.svelte";
   import CreateEpisodeModal from "$lib/home/CreateEpisodeModal.svelte";
   import UsageDashboardStats from "$lib/home/UsageDashboardStats.svelte";
   import CustomPromptListEditor from "$lib/home/CustomPromptListEditor.svelte";
@@ -16,6 +17,12 @@
   let openTab = "dashboard";
 
   let createOpen = shouldOpenCreateEpisodeModal(form);
+
+  // Friend room cap (friend-password-auth ticket 03) — a create attempt
+  // that comes back Rooms-full closes the modal so the Rooms-full view
+  // underneath (rendered from this same `form` below) is what the Friend
+  // actually lands on, instead of the create form staying open over it.
+  $: if (form?.friendRoomsFull) createOpen = false;
 </script>
 
 <svelte:head>
@@ -76,9 +83,18 @@
           </div>
         {/if}
         <div class="page-content">
-          <div class="notice-banner notice-warn">
-            create a new room to get started
-          </div>
+          {#if form?.friendRoomsFull}
+            <!-- Friend room cap (friend-password-auth ticket 03) — this
+                 session's create attempt hit the cap; +page.server.js's
+                 create action already computed which rooms and their
+                 remaining time (friend-room-cap.js), so this only
+                 displays that result. No such view exists for a Host. -->
+            <FriendRoomsFullNotice rooms={form.activeFriendRooms ?? []} />
+          {:else}
+            <div class="notice-banner notice-warn">
+              create a new room to get started
+            </div>
+          {/if}
         </div>
       </div>
 

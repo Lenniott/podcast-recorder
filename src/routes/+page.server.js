@@ -12,6 +12,7 @@ import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-pr
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken, makePasswordToken, verifyPasswordToken } from '$lib/server/auth.js'
 import { resolveRole, SITE_COOKIE, FRIEND_COOKIE } from '$lib/server/role.js'
+import { getFriendRoomCapStatus } from '$lib/server/friend-room-cap.js'
 
 const ROOM_COOKIE = (slug) => `pr_auth_${slug}`
 const HOST_COOKIE = (slug) => `pr_host_${slug}`
@@ -164,6 +165,21 @@ export const actions = {
       return fail(403, { siteError: 'Not authorised.' })
     }
     const friendRoom = role === 'friend'
+
+    // Friend room cap (friend-password-auth ticket 03) — checked before
+    // any other validation and before a room is ever created, from a
+    // freshly re-derived count rather than one read earlier in the
+    // request, so a room that expires between an earlier read and this
+    // attempt can't wrongly block it (see friend-room-cap.js, TDD seam 3).
+    // Host room creation never reaches this — friendRoom is only true for
+    // a Friend session, and Host rooms are never counted toward the cap.
+    if (friendRoom) {
+      const capStatus = getFriendRoomCapStatus(env)
+      if (capStatus.full) {
+        console.log('[action create] Friend room cap full (%d active)', capStatus.rooms.length)
+        return fail(409, { friendRoomsFull: true, activeFriendRooms: capStatus.rooms })
+      }
+    }
 
     const data            = await request.formData()
     const name            = String(data.get('room-episode-name') || '').trim()

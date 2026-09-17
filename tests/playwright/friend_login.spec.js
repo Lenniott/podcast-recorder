@@ -4,7 +4,7 @@ import { stubYouTubeApi, fillField, openCreateRoom, trackLiveSockets, roomTabsRe
 /**
  * Friend login (friend-password-auth, ticket 02) — a second, weaker login
  * on the same entry page SITE_PASSWORD gates today, reached with its own
- * FRIEND_PASSWORD. See CONTEXT.md's **Friend**/**Friend room** entries and
+ * FRIEND_PASSWORD. See CONTEXT.md's **Friend** and **Friend room** entries and
  * .scratch/friend-password-auth/issues/02-friend-login-ai-off-dashboard-block.md.
  *
  * Like wrong_site_password.spec.js, this only actually exercises anything

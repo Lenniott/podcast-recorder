@@ -208,6 +208,30 @@ _Avoid_: guest room (a Friend room's participants can still include a
 Host-room-style "guest"; this term is about who created the room, not who
 is in it)
 
+**Friend room cap** _(friend-password-auth, ticket 03)_:
+At most 3 **Friend room**s may be active (non-expired) at once, counted
+globally across every Friend — there's no per-Friend identity to count
+against (one shared `FRIEND_PASSWORD`; see **Friend**). Host rooms never
+count toward this and are invisible to it. A Friend room expires on its
+own clock, `FRIEND_ROOM_MAX_AGE_HOURS` (`room-lifetime.js`'s
+`isRoomExpired`, parameterized by the room's own `friend_room` flag) —
+completely independent of the Host's `ROOM_MAX_AGE_HOURS`. One function,
+`friend-room-cap.js`'s `getFriendRoomCapStatus`, is the single source of
+truth for whether the cap is full right now and which rooms/remaining
+times to show; the create action and the **Rooms full** view both read
+its result rather than recomputing it.
+_Avoid_: rate limit (this caps concurrently-active rooms, not requests)
+
+**Rooms full** _(friend-password-auth, ticket 03)_:
+The view a Friend session lands on instead of a plain validation error
+when their create-room attempt hits the **Friend room cap**: the 3
+active Friend rooms, soonest-to-expire first, each with time remaining
+until it expires. No Host equivalent exists — Host room creation is
+never subject to the cap. A slot frees up the moment one of the 3
+expires, with no manual step or Host action needed.
+_Avoid_: waitlist (nothing is queued — creating again once a slot is free
+just works), rooms full error (it's a listing, not a bare error)
+
 **Usage Dashboard**:
 The section of the create-room page (visible once past the site password,
 same as the create form) showing Research Assistant cost/usage across every

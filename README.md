@@ -71,7 +71,10 @@ cp .env.example .env
 # have Research Assistant/AI off. Leave it blank to disable Friend login.
 # Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
 # proxy is the one handling HTTPS). ROOM_MAX_AGE_HOURS controls how long
-# rooms remain available; it defaults to 12.
+# Host rooms remain available (defaults to 12); FRIEND_ROOM_MAX_AGE_HOURS
+# is the same, independent knob for Friend rooms (also defaults to 12).
+# At most 3 Friend rooms may be active at once, globally — a Friend who
+# already has 3 sees a "Rooms full" view until one expires.
 
 chmod +x update.sh
 docker compose up -d --build
