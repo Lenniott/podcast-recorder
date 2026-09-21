@@ -4,6 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+./scripts/ensure-dev-env.sh
+
 vite_port=5173
 ws_port=3001
 if [[ -f .env ]]; then

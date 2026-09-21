@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { fillField, openCreateRoom } from './helpers.js'
+import { fillField, openCreateRoom, unlockAsFriend } from './helpers.js'
 
 /**
  * Friend room cap (friend-password-auth, ticket 03) — at most 3 active
@@ -24,17 +24,6 @@ import { fillField, openCreateRoom } from './helpers.js'
  * FRIEND_ROOM_MAX_AGE_HOURS_TEST_SECS set to a matching number of seconds.
  */
 
-async function friendLogin(page, password) {
-  await page.goto('/')
-  const friendField = page.getByRole('textbox', { name: 'Friend Password' })
-  const newRoom = page.getByRole('button', { name: 'New room' })
-  await expect(friendField.or(newRoom)).toBeVisible({ timeout: 15_000 })
-  test.skip(!(await friendField.isVisible()), 'Friend login gate is off (FRIEND_PASSWORD not set on this server)')
-  await friendField.fill(password)
-  await page.getByRole('button', { name: 'Unlock' }).click()
-  await expect(newRoom).toBeVisible({ timeout: 15_000 })
-}
-
 // Submits the create form and returns without waiting for a `/rec/` — the
 // caller decides what should happen next (a redirect, or the Rooms-full view
 // appearing in place on this same page).
@@ -55,7 +44,8 @@ async function createFriendRoomAndReturnHome(page, name) {
 }
 
 test('Friend room cap: a 4th create attempt lands on Rooms full with the 3 active rooms and countdowns, soonest first', async ({ page }) => {
-  await friendLogin(page, process.env.FRIEND_PASSWORD || '')
+  await page.goto('/')
+  await unlockAsFriend(page, process.env.FRIEND_PASSWORD || '')
 
   const stamp = Date.now()
   const roomNames = [1, 2, 3].map((n) => `E2E FriendCap ${stamp}-${n}`)
@@ -83,7 +73,8 @@ test('Friend room cap: once a room actually expires, a Friend can create a new o
   const expirySecs = Number(process.env.FRIEND_ROOM_MAX_AGE_HOURS_TEST_SECS || '')
   test.skip(!expirySecs, 'FRIEND_ROOM_MAX_AGE_HOURS_TEST_SECS not set — see this file\'s header comment')
 
-  await friendLogin(page, process.env.FRIEND_PASSWORD || '')
+  await page.goto('/')
+  await unlockAsFriend(page, process.env.FRIEND_PASSWORD || '')
 
   const stamp = Date.now()
   const roomNames = [1, 2, 3].map((n) => `E2E FriendCapExpiry ${stamp}-${n}`)

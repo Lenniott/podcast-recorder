@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, fillField, openCreateRoom, trackLiveSockets, roomTabsReady } from './helpers.js'
+import { stubYouTubeApi, fillField, openCreateRoom, trackLiveSockets, roomTabsReady, unlockAsFriend, unlockIfNeeded } from './helpers.js'
 
 /**
  * Friend login (friend-password-auth, ticket 02) — a second, weaker login
@@ -19,19 +19,9 @@ import { stubYouTubeApi, fillField, openCreateRoom, trackLiveSockets, roomTabsRe
 const askInput = (page) => page.getByLabel('Ask the Research Assistant')
 const transcriptFacetButton = (page) => page.getByTestId('facet-transcript')
 
-async function friendLogin(page, password) {
-  await page.goto('/')
-  const friendField = page.getByRole('textbox', { name: 'Friend Password' })
-  const newRoom = page.getByRole('button', { name: 'New room' })
-  await expect(friendField.or(newRoom)).toBeVisible({ timeout: 15_000 })
-  test.skip(!(await friendField.isVisible()), 'Friend login gate is off (FRIEND_PASSWORD not set on this server)')
-  await friendField.fill(password)
-  await page.getByRole('button', { name: 'Unlock' }).click()
-  await expect(newRoom).toBeVisible({ timeout: 15_000 })
-}
-
 async function createRoomAsFriend(page, { name, password }) {
-  await friendLogin(page, process.env.FRIEND_PASSWORD || '')
+  await page.goto('/')
+  await unlockAsFriend(page, process.env.FRIEND_PASSWORD || '')
   await openCreateRoom(page)
   await fillField(page.locator('#room-episode-name'), name)
   await fillField(page.locator('#room-episode-code'), password)
@@ -77,12 +67,7 @@ test('Friend login creates an AI-off room; Transcript still works; Host sees it 
   const hostContext = await browser.newContext()
   const host = await hostContext.newPage()
   await host.goto('/')
-  const siteField = host.getByRole('textbox', { name: 'Site Password' })
-  if (await siteField.isVisible()) {
-    await siteField.fill(process.env.SITE_PASSWORD || '')
-    await host.getByRole('button', { name: 'Unlock' }).click()
-  }
-  await expect(host.getByRole('button', { name: 'New room' })).toBeVisible({ timeout: 15_000 })
+  await unlockIfNeeded(host)
 
   const friendRow = host.locator('.dashboard-table tbody tr', { hasText: roomName })
   await expect(friendRow).toBeVisible({ timeout: 15_000 })

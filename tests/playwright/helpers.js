@@ -1,4 +1,4 @@
-import { expect } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 /**
  * Keep a handle on live WebSockets so a test can close the room socket
@@ -166,16 +166,22 @@ export async function fillField(locator, value) {
 /**
  * Home is behind SITE_PASSWORD when .env has one; Playwright's own webServer
  * blanks that var so the gate is off. Handle both: unlock if the field is there.
+ *
+ * Scoped to the Site Password form specifically — when FRIEND_PASSWORD is
+ * also set, the Friend Password form renders its own "Unlock" button
+ * alongside this one, so an unscoped getByRole('button', { name: 'Unlock' })
+ * is ambiguous (Playwright strict mode).
  */
 export async function unlockIfNeeded(page) {
-  const site = page.getByRole('textbox', { name: 'Site Password' })
+  const form = page.locator('form').filter({ hasText: 'Site Password' })
+  const site = form.getByRole('textbox', { name: 'Site Password' })
   const newRoom = page.getByRole('button', { name: 'New room' })
   await expect(site.or(newRoom)).toBeVisible({ timeout: 15_000 })
   if (await site.isVisible()) {
     const pw = process.env.SITE_PASSWORD
     if (!pw) throw new Error('SITE_PASSWORD is not set but the site gate is showing')
     await site.fill(pw)
-    await page.getByRole('button', { name: 'Unlock' }).click()
+    await form.getByRole('button', { name: 'Unlock' }).click()
     const blocked = page.getByText(/Too many requests/i)
     await expect(newRoom.or(blocked)).toBeVisible({ timeout: 15_000 })
     if (await blocked.isVisible()) {
@@ -184,6 +190,26 @@ export async function unlockIfNeeded(page) {
       )
     }
   }
+}
+
+/**
+ * Friend-role counterpart to unlockIfNeeded — logs in via the Friend
+ * Password form specifically (scoped the same way, for the same reason:
+ * both forms can render "Unlock" at once). Unlike unlockIfNeeded, this
+ * always expects the Friend gate to be there and fails loudly if it isn't
+ * — every spec that calls this is specifically testing Friend behavior, so
+ * a missing gate means the server under test wasn't started with
+ * FRIEND_PASSWORD set, not something to silently skip past.
+ */
+export async function unlockAsFriend(page, password) {
+  const form = page.locator('form').filter({ hasText: 'Friend Password' })
+  const friendField = form.getByRole('textbox', { name: 'Friend Password' })
+  const newRoom = page.getByRole('button', { name: 'New room' })
+  await expect(friendField.or(newRoom)).toBeVisible({ timeout: 15_000 })
+  test.skip(!(await friendField.isVisible()), 'Friend login gate is off (FRIEND_PASSWORD not set on this server)')
+  await friendField.fill(password)
+  await form.getByRole('button', { name: 'Unlock' }).click()
+  await expect(newRoom).toBeVisible({ timeout: 15_000 })
 }
 
 export async function openCreateRoom(page) {

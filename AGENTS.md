@@ -59,7 +59,17 @@ Don't hand-build a fix for a new flag; register it on the existing mechanism.
 - `npm run build` — production build check.
 - Playwright e2e needs a local `.env` with `SECRET` set (gitignored, not
   committed) — `npm run dev` fails outright with `.env: not found` otherwise.
+  `npm run test:e2e` generates a throwaway one automatically now
+  (`scripts/ensure-dev-env.sh`, dummy values only) if none exists.
 - A sandboxed container may have a Chromium revision that doesn't match the
   pinned `@playwright/test` version. If `browserType.launch` complains about a
   missing revision, add `executablePath: '/opt/pw-browsers/chromium'` to
   `playwright.config.js`'s `launchOptions` for that run — don't commit it.
+- `npm run test:e2e:friend` (`scripts/run-e2e-friend.sh`) runs the three
+  specs `npm run test:e2e` always skips by design — `wrong_site_password`,
+  `friend_login`, `friend_room_cap` — which only exercise anything against a
+  server with `SITE_PASSWORD`/`FRIEND_PASSWORD` actually set (the shared e2e
+  webServer deliberately blanks `SITE_PASSWORD` for every other spec's
+  isolation/speed). It starts its own `npm run dev` with both set plus a
+  few-second `FRIEND_ROOM_MAX_AGE_HOURS`, so the cap-expiry case doesn't need
+  a real 12-hour wait, and tears it down after.
