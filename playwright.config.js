@@ -1,5 +1,16 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
+
+// Every Playwright entry point (npm run test:e2e, test:e2e:friend, or a
+// direct `npx playwright test some-spec.js`) loads this file first, so
+// this is the one place that guarantees a .env exists before anything
+// else runs — `npm run dev`/`start` use `node --env-file=.env`, which
+// errors outright if the file is missing (see AGENTS.md). Only writes one
+// when there isn't one already; never touches a real .env a developer set
+// up themselves. See scripts/ensure-dev-env.sh for what it writes (dummy,
+// non-production values only).
+execFileSync('./scripts/ensure-dev-env.sh', { stdio: 'inherit' })
 
 // Specs inherit this process env. Playwright does not load .env on its own.
 if (existsSync('.env')) process.loadEnvFile('.env')

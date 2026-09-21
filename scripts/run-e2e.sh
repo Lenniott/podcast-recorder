@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-./scripts/ensure-dev-env.sh
+# .env is ensured by playwright.config.js itself (every entry point loads
+# it first) — not duplicated here.
 
 vite_port=5173
 ws_port=3001
