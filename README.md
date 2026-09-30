@@ -1,6 +1,7 @@
 # Home Recor — Local Podcast Recorder
 
 Record great-quality audio together, even when you're in different places. Every recording is saved straight to each person's own computer — nothing gets uploaded anywhere.
+<img width="1183" height="683" alt="home-recor-room" src="https://github.com/user-attachments/assets/677da90b-e51b-4705-ba02-0b2730947c0c" />
 
 ## How it works
 
