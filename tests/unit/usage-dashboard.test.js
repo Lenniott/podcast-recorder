@@ -1,5 +1,9 @@
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createRoom, getRoomBySlug, _resetDb } from '../../src/lib/server/db.js'
+import { createRoom, getRoomBySlug, setGuestLockAt, _resetDb } from '../../src/lib/server/db.js'
+import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
 import { getUsageDashboard, hideTestRoomsInDashboard } from '../../src/lib/server/usage-dashboard.js'
 
 const SLUG_REAL = 'realroom01'
@@ -49,6 +53,33 @@ describe('getUsageDashboard', () => {
     expect(row.createdAt).toBe(room.created_at)
     expect(row.createdAt).toBeGreaterThanOrEqual(before)
     expect(row.createdAt).toBeLessThanOrEqual(after)
+  })
+
+  it('marks guestLocked from server audio plus an old guest-lock clock, and keeps createdAt as the insert time', () => {
+    process.env.GUEST_LOCK_HOURS = '12'
+    const copyRoot = join(tmpdir(), `usage-guest-lock-${process.pid}-${Date.now()}`)
+    process.env.SERVER_COPY_DIR = copyRoot
+    const old = Date.now() - 13 * 60 * 60 * 1000
+    setGuestLockAt(SLUG_REAL, old)
+    setGuestLockAt(SLUG_E2E, old)
+    const dir = getServerCopyRoomDir(SLUG_REAL)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'mic.wav'), Buffer.from([1, 2, 3, 4]))
+
+    try {
+      const inserted = getRoomBySlug(SLUG_REAL)
+      const quiet = getRoomBySlug(SLUG_E2E)
+      const { rooms } = getUsageDashboard({})
+      const withAudio = rooms.find((room) => room.slug === SLUG_REAL)
+      const withoutAudio = rooms.find((room) => room.slug === SLUG_E2E)
+      expect(withAudio.guestLocked).toBe(true)
+      expect(withAudio.createdAt).toBe(inserted.created_at)
+      expect(inserted.guest_lock_at).toBe(old)
+      expect(withoutAudio.guestLocked).toBe(false)
+      expect(withoutAudio.createdAt).toBe(quiet.created_at)
+    } finally {
+      rmSync(copyRoot, { recursive: true, force: true })
+    }
   })
 
   it('every room row carries the shape the dashboard renders, defaulting to zero with no usage yet', () => {

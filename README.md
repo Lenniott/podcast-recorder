@@ -70,8 +70,10 @@ cp .env.example .env
 # Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
 # proxy is the one handling HTTPS). A room is removed only by an explicit
 # delete. ROOM_MAX_AGE_HOURS (default 12) does not delete a room. Each room
-# stores guest_lock_at separately from its created date. Guest lock is a
-# later change, not this one.
+# stores guest_lock_at separately from its created date. GUEST_LOCK_HOURS
+# (default 12) refuses a guest join once the room has server-known audio
+# and that clock is older than the limit. It does not delete the room and
+# does not lock the host out.
 
 chmod +x update.sh
 docker compose up -d --build

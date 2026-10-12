@@ -481,6 +481,7 @@
  */
 
 import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
+import { guestJoinDecision } from './guest-join.js'
 import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
@@ -873,6 +874,14 @@ export function setupWss(wss) {
     }
 
     const connectionHostClaim = getHostClaim(slug, cookies, roomRow, process.env.SECRET)
+
+    // Same guest-lock decision as the room page. A valid session cookie is
+    // not a way around it; the host claim is.
+    if (!guestJoinDecision(roomRow, { isHost: connectionHostClaim }).allowed) {
+      send(ws, { type: 'error', message: 'This room is locked for guests' })
+      ws.close(4403, 'Room locked')
+      return
+    }
 
     if (!rooms.has(slug)) rooms.set(slug, new Map())
     const room = rooms.get(slug)

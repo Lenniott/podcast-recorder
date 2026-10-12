@@ -7,6 +7,8 @@
     roomEnterPath,
     formatRoomCreatedAt,
   } from "$lib/home/room-table-filter.js";
+  import GuestLockCell from "$lib/home/GuestLockCell.svelte";
+  import DeleteRoomButton from "$lib/home/DeleteRoomButton.svelte";
 
   export let usageDashboard;
 
@@ -63,6 +65,7 @@
         <tr>
           <th>Room</th>
           <th>Created</th>
+          <th>Guests</th>
           <th>Calls</th>
           <th>Tokens</th>
           <th>Cost</th>
@@ -70,6 +73,7 @@
           <th>Transcript</th>
           <th>Tabs</th>
           <th>Cards</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -77,6 +81,7 @@
           <tr>
             <td><a href={roomEnterPath(room.slug)}>{room.name}</a></td>
             <td>{formatRoomCreatedAt(room.createdAt)}</td>
+            <td><GuestLockCell slug={room.slug} guestLocked={room.guestLocked} /></td>
             <td>{room.calls}</td>
             <td>{room.tokens.toLocaleString()}</td>
             <td>{formatCost(room.cost)}</td>
@@ -84,6 +89,7 @@
             <td>{room.transcriptWords.toLocaleString()} words</td>
             <td>{room.tabCount}</td>
             <td>{room.researchCardCount}</td>
+            <td><DeleteRoomButton slug={room.slug} roomName={room.name} /></td>
           </tr>
         {/each}
       </tbody>

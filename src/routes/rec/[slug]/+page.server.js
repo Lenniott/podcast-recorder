@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
+import { guestJoinDecision } from '$lib/server/guest-join.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
 const COOKIE = (slug) => `pr_auth_${slug}`
@@ -28,9 +29,13 @@ export async function load({ params, cookies }) {
     throw redirect(303, '/?notfound=1')
   }
 
+  const isHostClaim = getHostClaim(slug, cookies, room, env.SECRET)
+  if (!guestJoinDecision(room, { isHost: isHostClaim }).allowed) {
+    throw redirect(303, '/?guestlocked=1')
+  }
+
   const token = cookies.get(COOKIE(slug))
   const authenticated = verifySessionToken(token, slug, room.password_hash, env.SECRET)
-  const isHostClaim = getHostClaim(slug, cookies, room, env.SECRET)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
   return {
@@ -58,6 +63,10 @@ export const actions = {
     const room = getRoomBySlug(slug)
 
     if (!room) throw redirect(303, '/')
+
+    if (!guestJoinDecision(room, { isHost: getHostClaim(slug, cookies, room, env.SECRET) }).allowed) {
+      throw redirect(303, '/?guestlocked=1')
+    }
 
     const data = await request.formData()
     const password = String(data.get('room-episode-code') || '')
@@ -96,6 +105,10 @@ export const actions = {
     const { slug } = params
     const room = getRoomBySlug(slug)
     if (!room) throw redirect(303, '/')
+
+    if (!guestJoinDecision(room, { isHost: getHostClaim(slug, cookies, room, env.SECRET) }).allowed) {
+      throw redirect(303, '/?guestlocked=1')
+    }
 
     if (!isAuthenticatedForRoom(cookies, slug, room)) {
       return fail(401, { error: 'Not signed in to this room.', name: '' })

@@ -51,8 +51,8 @@ A room older than `ROOM_MAX_AGE_HOURS` stays listed with its original
 job must not call `deleteRoom` or redirect `/?expired=1` because of age.
 Do not reintroduce delete-on-age. `guest_lock_at` is a separate clock
 (same value as `created_at` on insert; a null value is read as
-`created_at`). Guest lock and Unlock are a later ticket — age must not
-lock the host out either.
+`created_at`). Age does not lock the host out. Guest refusal goes
+through `guestJoinDecision` in `guest-join.js`, including the WebSocket.
 
 ## Running things here
 

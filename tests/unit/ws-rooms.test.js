@@ -1,3 +1,6 @@
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join as joinPath } from 'path'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
@@ -6,6 +9,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
+  setGuestLockAt: vi.fn(() => 0),
   default: {}
 }))
 
@@ -17,6 +21,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 }))
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
+import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 import {
@@ -63,6 +68,46 @@ describe('setupWss — connection handling', () => {
     wss.connect(ws, 'room1', { authed: false })
     expect(ws.closed).toBe(true)
     expect(ws.sent.some((m) => m.type === 'error')).toBe(true)
+  })
+
+  it('closes a guest session on a time-locked room and still lets the host connect', () => {
+    const root = joinPath(tmpdir(), `ws-guest-lock-${process.pid}-${Date.now()}`)
+    const previousDir = process.env.SERVER_COPY_DIR
+    const previousHours = process.env.GUEST_LOCK_HOURS
+    process.env.SERVER_COPY_DIR = root
+    process.env.GUEST_LOCK_HOURS = '12'
+    try {
+      const dir = getServerCopyRoomDir('room1')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(joinPath(dir, 'client-a.wav'), Buffer.from([1, 2, 3, 4]))
+      const old = Date.now() - 13 * 60 * 60 * 1000
+      getActiveRoomBySlug.mockReturnValue({
+        slug: 'room1',
+        password_hash: 'mock-hash',
+        created_at: old,
+        guest_lock_at: old
+      })
+
+      const guest = mockWs()
+      wss.connect(guest, 'room1')
+      expect(guest.closed).toBe(true)
+      expect(guest.closeCode).toBe(4403)
+      expect(guest.sent).toContainEqual({ type: 'error', message: 'This room is locked for guests' })
+      join(guest, 'Guest', 'c-guest')
+      expect(guest.sent.some((message) => message.type === 'presence')).toBe(false)
+
+      const host = mockWs()
+      wss.connect(host, 'room1', { asHost: true })
+      expect(host.closed).toBe(false)
+      join(host, 'Host', 'c-host')
+      expect(host.sent.some((message) => message.type === 'presence')).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      if (previousDir == null) delete process.env.SERVER_COPY_DIR
+      else process.env.SERVER_COPY_DIR = previousDir
+      if (previousHours == null) delete process.env.GUEST_LOCK_HOURS
+      else process.env.GUEST_LOCK_HOURS = previousHours
+    }
   })
 
   it('rejects a connection whose room-password session cookie does not verify', () => {
