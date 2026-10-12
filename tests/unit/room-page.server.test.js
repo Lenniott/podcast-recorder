@@ -75,6 +75,23 @@ function plantServerCopy() {
   return dir
 }
 
+function plantServerAudio() {
+  const dir = getServerCopyRoomDir(SLUG)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'guest1.wav'), Buffer.from([1, 2, 3, 4]))
+  return dir
+}
+
+async function seedLockedRoom() {
+  const createdAt = 1_650_000_000_000
+  const guestLockAt = Date.now() - 13 * 60 * 60 * 1000
+  const passwordHash = await seedRoom()
+  db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?')
+    .run(createdAt, guestLockAt, SLUG)
+  const copyDir = plantServerAudio()
+  return { passwordHash, createdAt, guestLockAt, copyDir }
+}
+
 describe('rec/[slug]/+page.server', () => {
   let serverCopyDir
 
@@ -88,6 +105,7 @@ describe('rec/[slug]/+page.server', () => {
     process.env.SECRET = SECRET
     process.env.SERVER_COPY_DIR = serverCopyDir
     process.env.ROOM_MAX_AGE_HOURS = '12'
+    process.env.GUEST_LOCK_HOURS = '12'
     delete process.env.HTTPS
     delete process.env.FORCE_HTTPS
     _resetDb()
@@ -210,6 +228,56 @@ describe('rec/[slug]/+page.server', () => {
       expect(data.customPrompts.some((p) => 'prompt' in p)).toBe(false)
     })
 
+    it('redirects a guest away from a time-locked room and keeps the row', async () => {
+      const { createdAt, guestLockAt, copyDir } = await seedLockedRoom()
+      const { load } = await loadPage()
+      await expectRedirect(
+        () => load({ params: { slug: SLUG }, cookies: makeCookies() }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(getRoomBySlug(SLUG)).toMatchObject({
+        slug: SLUG,
+        created_at: createdAt,
+        guest_lock_at: guestLockAt
+      })
+      expect(existsSync(copyDir)).toBe(true)
+    })
+
+    it('loads a locked room for a host claim and does not delete it', async () => {
+      const { passwordHash, createdAt, guestLockAt, copyDir } = await seedLockedRoom()
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET)
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data).toMatchObject({
+        slug: SLUG,
+        roomName: 'Test Episode',
+        isHostClaim: true,
+        roomPassword: ROOM_PASS,
+        createdAt
+      })
+      expect(getRoomBySlug(SLUG)).toMatchObject({
+        slug: SLUG,
+        created_at: createdAt,
+        guest_lock_at: guestLockAt
+      })
+      expect(existsSync(copyDir)).toBe(true)
+    })
+
+    it('lets a guest load a room with server audio while the clock is still inside the window', async () => {
+      await seedRoom()
+      db.getDb().prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?')
+        .run(Date.now() - 60 * 60 * 1000, SLUG)
+      plantServerAudio()
+      const { load } = await loadPage()
+      const data = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(data.slug).toBe(SLUG)
+      expect(data.isHostClaim).toBe(false)
+      expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
+    })
+
     it('ships no Custom Prompts to someone who has not passed the room password', async () => {
       await seedRoom()
       createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
@@ -277,6 +345,48 @@ describe('rec/[slug]/+page.server', () => {
         status: 403,
         data: { error: 'Wrong password. Try again.', values: { name: 'Alex' } }
       })
+    })
+
+    it('redirects enter as a guest on a locked room and does not set the session cookie', async () => {
+      const { createdAt, guestLockAt, copyDir } = await seedLockedRoom()
+      const { actions } = await loadPage()
+      const cookies = makeCookies()
+      await expectRedirect(
+        () => actions.enter({
+          params: { slug: SLUG },
+          request: formRequest({ name: 'Alex', 'room-episode-code': ROOM_PASS }),
+          cookies
+        }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(cookies.jar.has(`pr_auth_${SLUG}`)).toBe(false)
+      expect(cookies.jar.has(`pr_name_${SLUG}`)).toBe(false)
+      expect(getRoomBySlug(SLUG)).toMatchObject({
+        slug: SLUG,
+        created_at: createdAt,
+        guest_lock_at: guestLockAt
+      })
+      expect(existsSync(copyDir)).toBe(true)
+    })
+
+    it('lets a host claim enter a locked room', async () => {
+      const { passwordHash, createdAt } = await seedLockedRoom()
+      const { actions } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET)
+      })
+      await expectRedirect(
+        () => actions.enter({
+          params: { slug: SLUG },
+          request: formRequest({ name: 'Alex', 'room-episode-code': ROOM_PASS }),
+          cookies
+        }),
+        303,
+        `/rec/${SLUG}`
+      )
+      expect(cookies.jar.get(`pr_auth_${SLUG}`).value).toHaveLength(64)
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: createdAt })
     })
 
     it('sets session and name cookies then redirects', async () => {
@@ -353,6 +463,25 @@ describe('rec/[slug]/+page.server', () => {
       )
       expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: 1000 })
       expect(cookies.jar.get(`pr_name_${SLUG}`).value).toBe('Alex')
+    })
+
+    it('redirects set_display_name for a guest on a locked room', async () => {
+      const { passwordHash, createdAt } = await seedLockedRoom()
+      const { actions } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET)
+      })
+      await expectRedirect(
+        () => actions.set_display_name({
+          params: { slug: SLUG },
+          request: formRequest({ name: 'Alex' }),
+          cookies
+        }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(cookies.jar.has(`pr_name_${SLUG}`)).toBe(false)
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: createdAt })
     })
 
     it('rejects unauthenticated requests', async () => {
