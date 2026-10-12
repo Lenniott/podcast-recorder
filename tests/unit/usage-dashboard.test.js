@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createRoom, _resetDb } from '../../src/lib/server/db.js'
+import { createRoom, getRoomBySlug, _resetDb } from '../../src/lib/server/db.js'
 import { getUsageDashboard, hideTestRoomsInDashboard } from '../../src/lib/server/usage-dashboard.js'
 
 const SLUG_REAL = 'realroom01'
@@ -37,6 +37,18 @@ describe('getUsageDashboard', () => {
   it('excludes rooms named "E2E ..." from the per-room table when the flag is on', () => {
     const { rooms } = getUsageDashboard({ HIDE_TEST_ROOMS_IN_DASHBOARD: 'true' })
     expect(rooms.map((r) => r.slug)).toEqual([SLUG_REAL])
+  })
+
+  it("a room row's createdAt equals the room's insert time", () => {
+    const before = Date.now()
+    createRoom({ slug: 'timedroom1', name: 'Timed episode', passwordHash: 'x' })
+    const after = Date.now()
+    const room = getRoomBySlug('timedroom1')
+    const { rooms } = getUsageDashboard({})
+    const row = rooms.find((r) => r.slug === room.slug)
+    expect(row.createdAt).toBe(room.created_at)
+    expect(row.createdAt).toBeGreaterThanOrEqual(before)
+    expect(row.createdAt).toBeLessThanOrEqual(after)
   })
 
   it('every room row carries the shape the dashboard renders, defaulting to zero with no usage yet', () => {

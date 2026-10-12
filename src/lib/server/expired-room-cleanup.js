@@ -1,5 +1,7 @@
 import { cleanupExpiredRooms } from './db.js'
 
+// The scheduler stays mounted so startup shape does not change.
+// cleanupExpiredRooms deletes nothing (age must not destroy a room).
 export const EXPIRED_ROOM_CLEANUP_INTERVAL_MS = 15 * 60 * 1000
 
 export function runExpiredRoomCleanup({ logger = console } = {}) {

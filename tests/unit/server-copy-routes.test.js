@@ -3,7 +3,7 @@ import { readFileSync, rmSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { hashPassword, makeSessionToken, makeHostClaimToken, makeServerCopyToken } from '../../src/lib/server/auth.js'
-import db, { createRoom, _resetDb } from '../../src/lib/server/db.js'
+import db, { createRoom, deleteRoom, getRoomBySlug, _resetDb } from '../../src/lib/server/db.js'
 import { getServerCopyFilePath, getServerCopyWavPath } from '../../src/lib/server/server-copy-storage.js'
 import { buildWavHeader } from '../../src/lib/recording/audio-utils.js'
 
@@ -41,7 +41,7 @@ async function seedRoom({ createdAt } = {}) {
   const passwordHash = await hashPassword(ROOM_PASS)
   createRoom({ slug: SLUG, name: 'Test Episode', passwordHash })
   if (createdAt != null) {
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(createdAt, SLUG)
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(createdAt, createdAt, SLUG)
   }
   return passwordHash
 }
@@ -110,18 +110,28 @@ describe('POST /rec/[slug]/server-copy/session', () => {
     expect(body).toEqual({ accepted: true, bytesWritten: 0 })
   })
 
-  it('rejects (410) a session request for an expired room — ties upload to room lifetime', async () => {
-    await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+  it('accepts a session for an old room that still exists, and rejects a missing room with 410', async () => {
+    const passwordHash = await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
     const { POST } = await loadSessionRoute()
+    const cookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
 
     const res = await POST({
       params: { slug: SLUG },
-      cookies: makeCookies(),
-      request: { json: async () => ({ clientId: CLIENT_ID }) }
+      cookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken() }) }
     })
 
-    expect(res.status).toBe(410)
-    expect((await res.json()).accepted).toBe(false)
+    expect(res.status).toBe(200)
+    expect((await res.json()).accepted).toBe(true)
+    expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG })
+
+    const missing = await POST({
+      params: { slug: 'nosuchroom' },
+      cookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, token: serverCopyToken() }) }
+    })
+    expect(missing.status).toBe(410)
+    expect((await missing.json()).accepted).toBe(false)
   })
 
   it('rejects (401) a session request without a valid room cookie', async () => {
@@ -212,18 +222,30 @@ describe('POST /rec/[slug]/server-copy/chunks', () => {
     expect(readFileSync(getServerCopyFilePath(SLUG, CLIENT_ID))).toEqual(Buffer.from([1, 2]))
   })
 
-  it('rejects (410) a chunk upload for an expired room and writes nothing', async () => {
-    await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+  it('accepts a chunk for an old room, and rejects a missing room with 410 without writing', async () => {
+    const passwordHash = await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
     const { POST } = await loadChunksRoute()
+    const cookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
 
     const res = await POST({
       params: { slug: SLUG },
-      cookies: makeCookies(),
+      cookies,
       url: chunkUrl(0),
-      request: { arrayBuffer: async () => new Uint8Array([1]).buffer }
+      request: { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }
     })
 
-    expect(res.status).toBe(410)
+    expect(res.status).toBe(200)
+    expect(readFileSync(getServerCopyFilePath(SLUG, CLIENT_ID))).toEqual(Buffer.from([1, 2, 3]))
+    expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG })
+
+    const missing = await POST({
+      params: { slug: 'nosuchroom' },
+      cookies,
+      url: chunkUrl(0),
+      request: { arrayBuffer: async () => new Uint8Array([9]).buffer }
+    })
+    expect(missing.status).toBe(410)
+    expect(() => readFileSync(getServerCopyFilePath('nosuchroom', CLIENT_ID))).toThrow()
   })
 
   it('rejects (401) a chunk upload without a valid room cookie', async () => {
@@ -358,17 +380,34 @@ describe('POST /rec/[slug]/server-copy/finalize', () => {
     expect(await res2.json()).toEqual({ finalized: true, bytesWritten: 2 })
   })
 
-  it('rejects (410) finalizing for an expired room', async () => {
-    await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+  it('finalizes an old room that still exists, and rejects a missing room with 410', async () => {
+    const passwordHash = await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+    const cookies = makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) })
+    const { POST: postChunk } = await loadChunksRoute()
+    await postChunk({
+      params: { slug: SLUG },
+      cookies,
+      url: chunkUrl(0),
+      request: { arrayBuffer: async () => new Uint8Array([1, 2]).buffer }
+    })
     const { POST } = await loadFinalizeRoute()
 
     const res = await POST({
       params: { slug: SLUG },
-      cookies: makeCookies(),
-      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 0 }) }
+      cookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2, token: serverCopyToken() }) }
     })
 
-    expect(res.status).toBe(410)
+    expect(res.status).toBe(200)
+    expect((await res.json()).finalized).toBe(true)
+    expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG })
+
+    const missing = await POST({
+      params: { slug: 'nosuchroom' },
+      cookies,
+      request: { json: async () => ({ clientId: CLIENT_ID, totalBytes: 2, token: serverCopyToken() }) }
+    })
+    expect(missing.status).toBe(410)
   })
 
   it('rejects (401) finalizing without a valid room cookie', async () => {
@@ -701,16 +740,21 @@ describe('GET /rec/[slug]/server-copy/download', () => {
     expect(res.status).toBe(403)
   })
 
-  it('rejects (410) a download for an expired room even though it was finalized while active', async () => {
-    await finalizeAsParticipant()
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?')
-      .run(Date.now() - 13 * 60 * 60 * 1000, SLUG)
+  it('lets the host download from an old room, and returns 410 once the room is deleted', async () => {
+    const passwordHash = await finalizeAsParticipant()
+    const old = Date.now() - 13 * 60 * 60 * 1000
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(old, old, SLUG)
 
-    const cookies = makeCookies({ [`pr_host_${SLUG}`]: 'irrelevant-room-is-checked-first' })
+    const cookies = makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
     const { GET } = await loadDownloadRoute()
     const res = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl() })
 
-    expect(res.status).toBe(410)
+    expect(res.status).toBe(200)
+    expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: old })
+
+    expect(deleteRoom(SLUG)).toBe(1)
+    const gone = await GET({ params: { slug: SLUG }, cookies, url: downloadUrl() })
+    expect(gone.status).toBe(410)
   })
 
   it('rejects (400) an invalid clientId', async () => {

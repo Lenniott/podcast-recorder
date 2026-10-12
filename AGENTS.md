@@ -120,6 +120,16 @@ echo never comes back. It does not wait on the guest. Once closed, a late
 echo must not stop again or clear "the other side may still be
 recording."
 
+## Room age does not delete
+
+A room older than `ROOM_MAX_AGE_HOURS` stays listed with its original
+`created_at`. Visiting `/rec/{slug}`, occupancy, and the periodic cleanup
+job must not call `deleteRoom` or redirect `/?expired=1` because of age.
+Do not reintroduce delete-on-age. `guest_lock_at` is a separate clock
+(same value as `created_at` on insert; a null value is read as
+`created_at`). Guest lock and Unlock are a later ticket — age must not
+lock the host out either.
+
 ## Running things here
 
 - `npm run check:standalone` — confirms `ws-rooms.js` loads under plain Node

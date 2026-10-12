@@ -2,7 +2,18 @@
   // Totals + per-room breakdown half of the Usage Dashboard (see
   // CONTEXT.md) — the Research Prompt editor is the other half,
   // CustomPromptListEditor.svelte, composed alongside this by the page.
+  import {
+    filterRooms,
+    roomEnterPath,
+    formatRoomCreatedAt,
+  } from "$lib/home/room-table-filter.js";
+
   export let usageDashboard;
+
+  // Client-side filter of the list already loaded with the page. Clearing
+  // the box restores every room; it does not refetch.
+  let roomQuery = "";
+  $: visibleRooms = filterRooms(usageDashboard.rooms, roomQuery);
 
   function formatCost(cost) {
     return `$${Number(cost || 0).toFixed(4)}`;
@@ -36,12 +47,22 @@
   </div>
 </div>
 
-{#if usageDashboard.rooms.length}
+<label class="room-search">
+  Search rooms
+  <input type="text" bind:value={roomQuery} />
+</label>
+
+{#if usageDashboard.rooms.length === 0}
+  <p class="sub">No rooms yet.</p>
+{:else if visibleRooms.length === 0}
+  <p class="sub">No rooms match.</p>
+{:else}
   <div class="dashboard-table-wrap">
     <table class="dashboard-table">
       <thead>
         <tr>
           <th>Room</th>
+          <th>Created</th>
           <th>Calls</th>
           <th>Tokens</th>
           <th>Cost</th>
@@ -52,9 +73,10 @@
         </tr>
       </thead>
       <tbody>
-        {#each usageDashboard.rooms as room (room.slug)}
+        {#each visibleRooms as room (room.slug)}
           <tr>
-            <td>{room.name}</td>
+            <td><a href={roomEnterPath(room.slug)}>{room.name}</a></td>
+            <td>{formatRoomCreatedAt(room.createdAt)}</td>
             <td>{room.calls}</td>
             <td>{room.tokens.toLocaleString()}</td>
             <td>{formatCost(room.cost)}</td>
@@ -67,8 +89,6 @@
       </tbody>
     </table>
   </div>
-{:else}
-  <p class="sub">No rooms yet.</p>
 {/if}
 
 <style>
@@ -82,6 +102,11 @@
     display: flex;
     gap: 16px;
     margin-bottom: 20px;
+  }
+
+  .room-search {
+    max-width: 320px;
+    margin-bottom: 16px;
   }
 
   .total-tile {
