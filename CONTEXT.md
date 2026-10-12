@@ -184,7 +184,9 @@ _Avoid_: RESEARCH_GUEST_CAN_ASK (the retired deployment-wide env var this replac
 The section of the create-room page (visible once past the site password,
 same as the create form) showing Research Assistant cost/usage across every
 room — running totals plus a per-room breakdown — and the **Custom
-Prompt** list editor. Not a separate page or route.
+Prompt** list editor. The per-room table has a search box that filters the
+loaded rooms by name or slug, a room-name link that enters that room, and
+each row's original created date. Not a separate page or route.
 _Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
 usage page
 

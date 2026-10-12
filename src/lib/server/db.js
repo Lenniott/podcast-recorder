@@ -2,7 +2,6 @@ import Database from 'better-sqlite3'
 import { randomBytes } from 'crypto'
 import { mkdirSync } from 'fs'
 import { dirname } from 'path'
-import { isRoomExpired } from './room-lifetime.js'
 import { removeServerCopiesForRoom } from './server-copy-storage.js'
 import { normalizeOutputFormat } from '../home/custom-prompts.js'
 import { promptReferencesSelection } from '../research/placeholders.js'
@@ -42,6 +41,15 @@ function getDb() {
   // by getRoomBySlug/getActiveRoomBySlug's callers via `!!room.guest_ai_allowed`.
   try {
     _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_ai_allowed INTEGER NOT NULL DEFAULT 0`).run()
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+
+  // Guest-lock clock, separate from created_at (display/history only).
+  // Nullable so a row from before this column existed stays null and is
+  // read as created_at — do not backfill, and never rewrite created_at.
+  try {
+    _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_lock_at INTEGER`).run()
   } catch (e) {
     if (!/duplicate column/i.test(String(e?.message || e))) throw e
   }
@@ -138,27 +146,39 @@ export function _resetDb() {
 }
 
 export function createRoom({ slug, name, passwordHash, passwordPlain = null, guestAiAllowed = false }) {
+  const now = Date.now()
   getDb().prepare(`
-    INSERT INTO rooms (slug, name, password_hash, password_plain, guest_ai_allowed, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, Date.now())
+    INSERT INTO rooms (slug, name, password_hash, password_plain, guest_ai_allowed, created_at, guest_lock_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, now, now)
 }
 
 export function getRoomBySlug(slug) {
   return getDb().prepare('SELECT * FROM rooms WHERE slug = ?').get(slug) || null
 }
 
-export function getActiveRoomBySlug(slug, { now = Date.now(), cleanupExpired = true } = {}) {
-  const room = getRoomBySlug(slug)
-  if (!room) return null
-  if (!isRoomExpired(room, now)) return room
-  if (cleanupExpired) deleteRoom(slug)
-  return null
+/**
+ * The room row when the slug exists, including rooms older than
+ * ROOM_MAX_AGE_HOURS. Age never deletes. `cleanupExpired` is accepted so
+ * older callers keep working, and it must not delete.
+ */
+export function getActiveRoomBySlug(slug, options = {}) {
+  // cleanupExpired used to delete aged rooms. Ignore it: age never deletes.
+  void options.cleanupExpired
+  return getRoomBySlug(slug)
 }
 
-/** Every non-expired room, newest first — Usage Dashboard's own room list. */
+/** Every room, newest first — Usage Dashboard's own room list. Age does not drop a row. */
 export function listRooms() {
   return getDb().prepare('SELECT * FROM rooms ORDER BY created_at DESC').all()
+}
+
+/**
+ * Moves only the guest-lock clock. A missing slug changes 0 rows and does
+ * not throw. Never writes `created_at`.
+ */
+export function setGuestLockAt(slug, at) {
+  return getDb().prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?').run(at, slug).changes
 }
 
 export function roomExists(slug) {
@@ -339,14 +359,12 @@ export function getResearchUsageByRoom() {
   `).all()
 }
 
-export function cleanupExpiredRooms({ now = Date.now() } = {}) {
-  const rooms = getDb().prepare('SELECT slug, created_at FROM rooms').all()
-  let deleted = 0
-  for (const room of rooms) {
-    if (!isRoomExpired(room, now)) continue
-    deleted += deleteRoom(room.slug)
-  }
-  return deleted
+/**
+ * Age does not delete a room. Always returns 0. The startup scheduler still
+ * calls this so process startup keeps the same shape — do not make it delete.
+ */
+export function cleanupExpiredRooms() {
+  return 0
 }
 
 export default { getDb }

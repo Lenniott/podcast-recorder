@@ -68,8 +68,10 @@ cp .env.example .env
 # Set SECRET — this is required. SITE_PASSWORD is optional; set it if you
 # want to lock the "create episode" page behind a password.
 # Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
-# proxy is the one handling HTTPS). ROOM_MAX_AGE_HOURS controls how long
-# rooms remain available; it defaults to 12.
+# proxy is the one handling HTTPS). A room is removed only by an explicit
+# delete. ROOM_MAX_AGE_HOURS (default 12) does not delete a room. Each room
+# stores guest_lock_at separately from its created date. Guest lock is a
+# later change, not this one.
 
 chmod +x update.sh
 docker compose up -d --build

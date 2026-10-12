@@ -3,11 +3,11 @@
  * (`server-copy/session` and `server-copy/chunks`) — centralized so the
  * two routes can never drift on what counts as an authorized upload.
  *
- * A server-copy upload is only ever authorized for a room that is still
- * active — `getActiveRoomBySlug` already folds in expiry (ticket 02: tie
- * server copies to room lifetime), so an expired or deleted room is
- * rejected here exactly like a room that never existed, with no separate
- * retention clock to maintain. On top of that, the caller must hold the
+ * A server-copy upload is only authorized for a room that still exists.
+ * Age does not delete a room and does not make it unavailable —
+ * `getActiveRoomBySlug` returns an old room. A room that is actually gone
+ * is rejected here exactly like a room that never existed. On top of that,
+ * the caller must hold the
  * same per-room session cookie the rest of the app already uses to gate
  * access to `/rec/[slug]` — no new auth mechanism.
  *
@@ -43,8 +43,8 @@ export function isValidServerCopyClientId(clientId) {
 /**
  * Returns `{ ok: true, room }` for an authorized request, or
  * `{ ok: false, status, reason }` for one that must be rejected — `status`
- * is the HTTP status the route should respond with (410 for an
- * unavailable/expired/deleted room, 401 for a missing/invalid session or
+ * is the HTTP status the route should respond with (410 for a room that
+ * is actually gone, 401 for a missing/invalid session or
  * a `clientId`/`token` mismatch — see the module doc comment above for
  * why both are required).
  *
@@ -72,7 +72,7 @@ export function authorizeServerCopyRequest({ slug, cookies, clientId, token }) {
 
 /**
  * Host-only authorization gate for the server-copy download route
- * (`server-copy/download`). Same room-active check as
+ * (`server-copy/download`). Same still-exists check as
  * authorizeServerCopyRequest above, but instead of any participant's
  * session cookie, requires the room's host-claim cookie — checked via the
  * shared `getHostClaim` helper (`./auth.js`), the same one `/rec/[slug]`'s

@@ -63,7 +63,7 @@ async function seedRoom({ createdAt } = {}) {
     passwordPlain: ROOM_PASS
   })
   if (createdAt != null) {
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(createdAt, SLUG)
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(createdAt, createdAt, SLUG)
   }
   return passwordHash
 }
@@ -107,17 +107,19 @@ describe('rec/[slug]/+page.server', () => {
       )
     })
 
-    it('deletes an expired room and its server copies, then redirects', async () => {
+    it('loads an old room for an unauthenticated visitor without deleting it', async () => {
       await seedRoom({ createdAt: 1000 })
       const copyDir = plantServerCopy()
       const { load } = await loadPage()
-      await expectRedirect(
-        () => load({ params: { slug: SLUG }, cookies: makeCookies() }),
-        303,
-        '/?expired=1'
-      )
-      expect(getRoomBySlug(SLUG)).toBeNull()
-      expect(existsSync(copyDir)).toBe(false)
+      const data = await load({ params: { slug: SLUG }, cookies: makeCookies() })
+      expect(data).toMatchObject({
+        slug: SLUG,
+        roomName: 'Test Episode',
+        authenticated: false,
+        createdAt: 1000
+      })
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: 1000 })
+      expect(existsSync(copyDir)).toBe(true)
     })
 
     it('returns unauthenticated without a session cookie', async () => {
@@ -232,7 +234,7 @@ describe('rec/[slug]/+page.server', () => {
       )
     })
 
-    it('expires the room and removes server copies', async () => {
+    it('lets someone enter an old room without deleting it', async () => {
       await seedRoom({ createdAt: 1000 })
       const copyDir = plantServerCopy()
       const { actions } = await loadPage()
@@ -243,10 +245,10 @@ describe('rec/[slug]/+page.server', () => {
           cookies: makeCookies()
         }),
         303,
-        '/?expired=1'
+        `/rec/${SLUG}`
       )
-      expect(getRoomBySlug(SLUG)).toBeNull()
-      expect(existsSync(copyDir)).toBe(false)
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: 1000 })
+      expect(existsSync(copyDir)).toBe(true)
     })
 
     it('requires a name', async () => {
@@ -323,18 +325,34 @@ describe('rec/[slug]/+page.server', () => {
       )
     })
 
-    it('redirects expired rooms to /?expired=1', async () => {
-      await seedRoom({ createdAt: 1000 })
+    it('sets a display name on an old room without deleting it', async () => {
+      const passwordHash = await seedRoom({ createdAt: 1000 })
       const { actions } = await loadPage()
+      const anon = await actions.set_display_name({
+        params: { slug: SLUG },
+        request: formRequest({ name: 'Alex' }),
+        cookies: makeCookies()
+      })
+      expect(anon).toMatchObject({
+        status: 401,
+        data: { error: 'Not signed in to this room.', name: '' }
+      })
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: 1000 })
+
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET)
+      })
       await expectRedirect(
         () => actions.set_display_name({
           params: { slug: SLUG },
           request: formRequest({ name: 'Alex' }),
-          cookies: makeCookies()
+          cookies
         }),
         303,
-        '/?expired=1'
+        `/rec/${SLUG}`
       )
+      expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: 1000 })
+      expect(cookies.jar.get(`pr_name_${SLUG}`).value).toBe('Alex')
     })
 
     it('rejects unauthenticated requests', async () => {

@@ -1,7 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { deleteRoom, getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
-import { isRoomExpired } from '$lib/server/room-lifetime.js'
+import { getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 
 const COOKIE = (slug) => `pr_auth_${slug}`
@@ -27,12 +26,6 @@ export async function load({ params, cookies }) {
   if (!room) {
     console.log('[load /rec/%s] room not found → redirect /', slug)
     throw redirect(303, '/?notfound=1')
-  }
-
-  if (isRoomExpired(room, Date.now(), env)) {
-    console.log('[load /rec/%s] room expired → redirect /', slug)
-    deleteRoom(slug)
-    throw redirect(303, '/?expired=1')
   }
 
   const token = cookies.get(COOKIE(slug))
@@ -65,10 +58,6 @@ export const actions = {
     const room = getRoomBySlug(slug)
 
     if (!room) throw redirect(303, '/')
-    if (isRoomExpired(room, Date.now(), env)) {
-      deleteRoom(slug)
-      throw redirect(303, '/?expired=1')
-    }
 
     const data = await request.formData()
     const password = String(data.get('room-episode-code') || '')
@@ -107,10 +96,6 @@ export const actions = {
     const { slug } = params
     const room = getRoomBySlug(slug)
     if (!room) throw redirect(303, '/')
-    if (isRoomExpired(room, Date.now(), env)) {
-      deleteRoom(slug)
-      throw redirect(303, '/?expired=1')
-    }
 
     if (!isAuthenticatedForRoom(cookies, slug, room)) {
       return fail(401, { error: 'Not signed in to this room.', name: '' })
