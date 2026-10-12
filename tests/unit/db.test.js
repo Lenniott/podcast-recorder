@@ -9,10 +9,13 @@ import db, {
   deleteRoomContent,
   createCustomPrompt,
   getActiveRoomBySlug,
+  getGuestLastAccess,
   getRoomBySlug,
   listCustomPrompts,
+  listGuestAccess,
   listRooms,
   loadRoomContent,
+  recordGuestAccess,
   roomExists,
   saveRoomContent,
   setGuestLockAt,
@@ -205,6 +208,26 @@ describe('active room cleanup', () => {
     expect(setGuestLockAt('missing-slug', next)).toBe(0)
     expect(getRoomBySlug('missing-slug')).toBeNull()
     expect(getRoomBySlug(ROOM.slug).created_at).toBe(inserted.created_at)
+  })
+
+  it('upserts guest room access per slug and clientId and ignores empty keys', () => {
+    const at = 1_700_000_000_000
+    recordGuestAccess(ROOM.slug, 'guest-a', at)
+    recordGuestAccess('', 'guest-a', at + 1)
+    recordGuestAccess(ROOM.slug, '', at + 1)
+    recordGuestAccess(null, 'guest-a', at + 1)
+    expect(getGuestLastAccess(ROOM.slug, 'guest-a')).toBe(at)
+    expect(getGuestLastAccess(ROOM.slug, 'missing')).toBeNull()
+    expect(getGuestLastAccess('', 'guest-a')).toBeNull()
+
+    recordGuestAccess(ROOM.slug, 'guest-a', at + 50)
+    recordGuestAccess(ROOM.slug, 'guest-b', at + 10)
+    expect(getGuestLastAccess(ROOM.slug, 'guest-a')).toBe(at + 50)
+    expect(listGuestAccess(ROOM.slug).sort((a, b) => a.clientId.localeCompare(b.clientId))).toEqual([
+      { clientId: 'guest-a', lastAccessAt: at + 50 },
+      { clientId: 'guest-b', lastAccessAt: at + 10 }
+    ])
+    expect(listGuestAccess('')).toEqual([])
   })
 })
 

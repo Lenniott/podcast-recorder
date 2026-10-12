@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import db, {
   createCustomPrompt,
   createRoom,
+  getGuestLastAccess,
   getRoomBySlug,
   _resetDb
 } from '../../src/lib/server/db.js'
@@ -82,6 +83,21 @@ function plantServerAudio() {
   return dir
 }
 
+function plantWavBytes(name, byteSize) {
+  const dir = getServerCopyRoomDir(SLUG)
+  mkdirSync(dir, { recursive: true })
+  const fd = openSync(join(dir, name), 'w')
+  try {
+    writeFileSync(fd, Buffer.alloc(Math.min(44, byteSize)))
+    ftruncateSync(fd, byteSize)
+  } finally {
+    closeSync(fd)
+  }
+  return dir
+}
+
+const LONG_WAV_BYTES = 44 + 48000 * 2 * 601
+
 async function seedLockedRoom() {
   const createdAt = 1_650_000_000_000
   const guestLockAt = Date.now() - 13 * 60 * 60 * 1000
@@ -106,6 +122,8 @@ describe('rec/[slug]/+page.server', () => {
     process.env.SERVER_COPY_DIR = serverCopyDir
     process.env.ROOM_MAX_AGE_HOURS = '12'
     process.env.GUEST_LOCK_HOURS = '12'
+    process.env.GUEST_LOCK_RECORDING_MINUTES = '10'
+    process.env.GUEST_LOCK_INACTIVITY_HOURS = '2'
     delete process.env.HTTPS
     delete process.env.FORCE_HTTPS
     _resetDb()
@@ -278,6 +296,37 @@ describe('rec/[slug]/+page.server', () => {
       expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
     })
 
+    it('redirects an authenticated guest with a long copy and no last access', async () => {
+      const passwordHash = await seedRoom()
+      plantWavBytes('longguest01.wav', LONG_WAV_BYTES)
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET),
+        [`pr_client_${SLUG}`]: 'longguest01'
+      })
+      await expectRedirect(
+        () => load({ params: { slug: SLUG }, cookies }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(getGuestLastAccess(SLUG, 'longguest01')).toBeNull()
+      expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
+    })
+
+    it('records last access when an authenticated guest with a client cookie loads', async () => {
+      const passwordHash = await seedRoom()
+      plantWavBytes('shortguest1.wav', 300)
+      const { load } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET),
+        [`pr_client_${SLUG}`]: 'shortguest1'
+      })
+      const data = await load({ params: { slug: SLUG }, cookies })
+      expect(data.authenticated).toBe(true)
+      expect(data.slug).toBe(SLUG)
+      expect(getGuestLastAccess(SLUG, 'shortguest1')).toEqual(expect.any(Number))
+    })
+
     it('ships no Custom Prompts to someone who has not passed the room password', async () => {
       await seedRoom()
       createCustomPrompt({ title: 'Fact check', prompt: 'Fact-check {selection}.' })
@@ -368,6 +417,86 @@ describe('rec/[slug]/+page.server', () => {
         guest_lock_at: guestLockAt
       })
       expect(existsSync(copyDir)).toBe(true)
+    })
+
+    it('redirects enter when that clientId has a long copy and no last access, without a session cookie', async () => {
+      await seedRoom()
+      plantWavBytes('longguest01.wav', LONG_WAV_BYTES)
+      const { actions } = await loadPage()
+      const cookies = makeCookies()
+      await expectRedirect(
+        () => actions.enter({
+          params: { slug: SLUG },
+          request: formRequest({
+            name: 'Alex',
+            'room-episode-code': ROOM_PASS,
+            clientId: 'longguest01'
+          }),
+          cookies
+        }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(cookies.jar.has(`pr_auth_${SLUG}`)).toBe(false)
+      expect(cookies.jar.has(`pr_name_${SLUG}`)).toBe(false)
+      expect(cookies.jar.has(`pr_client_${SLUG}`)).toBe(false)
+      expect(getGuestLastAccess(SLUG, 'longguest01')).toBeNull()
+      expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
+    })
+
+    it('lets a guest enter when that clientId has a short copy and records access', async () => {
+      await seedRoom()
+      plantWavBytes('shortguest1.wav', 300)
+      const { actions } = await loadPage()
+      const cookies = makeCookies()
+      await expectRedirect(
+        () => actions.enter({
+          params: { slug: SLUG },
+          request: formRequest({
+            name: 'Alex',
+            'room-episode-code': ROOM_PASS,
+            clientId: 'shortguest1'
+          }),
+          cookies
+        }),
+        303,
+        `/rec/${SLUG}`
+      )
+      expect(cookies.jar.get(`pr_auth_${SLUG}`).value).toHaveLength(64)
+      const client = cookies.jar.get(`pr_client_${SLUG}`)
+      expect(client.value).toBe('shortguest1')
+      expect(client.options).toMatchObject({
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        secure: false
+      })
+      expect(getGuestLastAccess(SLUG, 'shortguest1')).toEqual(expect.any(Number))
+    })
+
+    it('lets a host claim enter when a clientId has a long copy and no last access', async () => {
+      const passwordHash = await seedRoom()
+      plantWavBytes('longguest01.wav', LONG_WAV_BYTES)
+      const { actions } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET)
+      })
+      await expectRedirect(
+        () => actions.enter({
+          params: { slug: SLUG },
+          request: formRequest({
+            name: 'Alex',
+            'room-episode-code': ROOM_PASS,
+            clientId: 'longguest01'
+          }),
+          cookies
+        }),
+        303,
+        `/rec/${SLUG}`
+      )
+      expect(cookies.jar.get(`pr_auth_${SLUG}`).value).toHaveLength(64)
+      expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
     })
 
     it('lets a host claim enter a locked room', async () => {
@@ -482,6 +611,28 @@ describe('rec/[slug]/+page.server', () => {
       )
       expect(cookies.jar.has(`pr_name_${SLUG}`)).toBe(false)
       expect(getRoomBySlug(SLUG)).toMatchObject({ slug: SLUG, created_at: createdAt })
+    })
+
+    it('redirects set_display_name when the client cookie is inactivity-locked', async () => {
+      const passwordHash = await seedRoom()
+      plantWavBytes('longguest01.wav', LONG_WAV_BYTES)
+      const { actions } = await loadPage()
+      const cookies = makeCookies({
+        [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET),
+        [`pr_client_${SLUG}`]: 'longguest01'
+      })
+      await expectRedirect(
+        () => actions.set_display_name({
+          params: { slug: SLUG },
+          request: formRequest({ name: 'Alex' }),
+          cookies
+        }),
+        303,
+        '/?guestlocked=1'
+      )
+      expect(cookies.jar.has(`pr_name_${SLUG}`)).toBe(false)
+      expect(getGuestLastAccess(SLUG, 'longguest01')).toBeNull()
+      expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
     })
 
     it('rejects unauthenticated requests', async () => {

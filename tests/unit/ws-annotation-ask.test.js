@@ -12,6 +12,9 @@ vi.mock('../../src/lib/server/db.js', () => ({
   getCustomPrompt: vi.fn(),
   recordResearchUsage: vi.fn(),
   setGuestLockAt: vi.fn(() => 0),
+  recordGuestAccess: vi.fn(),
+  getGuestLastAccess: vi.fn(() => null),
+  listGuestAccess: vi.fn(() => []),
   default: {}
 }))
 

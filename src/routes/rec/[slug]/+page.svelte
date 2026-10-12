@@ -1562,7 +1562,7 @@
 </svelte:head>
 
 {#if !data.authenticated}
-  <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName />
+  <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName clientId={clientId || ''} />
 {:else if nameGateShow}
   <DisplayNameGate roomName={data.roomName} formError={form?.error} bind:myName />
 {:else if joinStep === JOIN_STEP.unsupported}

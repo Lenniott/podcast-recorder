@@ -11,7 +11,7 @@
 import { listRooms, getResearchUsageTotals, getResearchUsageByRoom } from './db.js'
 import { roomStateStore } from './ws-rooms.js'
 import { listServerCopyFiles } from './server-copy-storage.js'
-import { guestJoinDecision } from './guest-join.js'
+import { roomGuestLocked } from './guest-join.js'
 
 const BYTES_PER_SAMPLE = 2 // 16-bit mono PCM, fixed — see audio-utils.js's buildWavHeader
 
@@ -75,7 +75,7 @@ export function getUsageDashboard(env = process.env) {
         slug: room.slug,
         name: room.name,
         createdAt: room.created_at,
-        guestLocked: guestJoinDecision(room, { isHost: false }).reason === 'time-lock',
+        guestLocked: roomGuestLocked(room, { env }),
         calls: usage?.calls ?? 0,
         tokens: usage?.tokens ?? 0,
         cost: usage?.cost ?? 0,
