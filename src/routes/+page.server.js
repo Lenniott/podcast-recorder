@@ -12,6 +12,7 @@ import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-pr
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
 import { unlockRoom } from '$lib/server/guest-join.js'
 import { deleteDashboardRoom } from '$lib/server/dashboard-room-delete.js'
+import { unlockRooms, deleteRooms } from '$lib/server/dashboard-room-batch.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
@@ -151,6 +152,25 @@ export const actions = {
     const data = await request.formData()
     const result = deleteDashboardRoom({
       slug: data.get('slug'),
+      siteAuthed: isSiteAuthed(cookies)
+    })
+    if (!result.ok) return fail(result.status)
+    throw redirect(303, '/')
+  },
+
+  // Bulk variants of the row actions. Unknown slugs are skipped inside
+  // unlockRooms / deleteRooms and do not abort the rest of the posted set.
+  unlock_rooms: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { unlockError: 'Not authorised.' })
+    const data = await request.formData()
+    unlockRooms(data.getAll('slug'))
+    throw redirect(303, '/')
+  },
+
+  delete_rooms: async ({ request, cookies }) => {
+    const data = await request.formData()
+    const result = deleteRooms({
+      slugs: data.getAll('slug'),
       siteAuthed: isSiteAuthed(cookies)
     })
     if (!result.ok) return fail(result.status)
