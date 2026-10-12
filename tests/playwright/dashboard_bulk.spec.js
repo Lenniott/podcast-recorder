@@ -18,9 +18,9 @@ function rowFor(page, name) {
 test('select-all covers the search results, and bulk unlock opens those rooms', async ({ page }) => {
   test.setTimeout(120_000)
   const stamp = Date.now()
-  const nameA = `Dash Pair A ${stamp}`
-  const nameB = `Dash Pair B ${stamp}`
-  const nameC = `Dash Solo C ${stamp}`
+  const nameA = `Dash Pair ${stamp} A`
+  const nameB = `Dash Pair ${stamp} B`
+  const nameC = `Dash Solo ${stamp} C`
 
   await stubYouTubeApi(page)
   const slugA = slugFrom(await createRoom(page, { name: nameA, password: 'bulk-pass' }))
@@ -72,9 +72,9 @@ test('select-all covers the search results, and bulk unlock opens those rooms', 
 test('bulk delete confirms once, and cancel removes nothing', async ({ page }) => {
   test.setTimeout(120_000)
   const stamp = Date.now()
-  const nameA = `Dash Bulk A ${stamp}`
-  const nameB = `Dash Bulk B ${stamp}`
-  const nameC = `Dash Kept C ${stamp}`
+  const nameA = `Dash Bulk ${stamp} A`
+  const nameB = `Dash Bulk ${stamp} B`
+  const nameC = `Dash Kept ${stamp} C`
 
   await stubYouTubeApi(page)
   await createRoom(page, { name: nameA, password: 'bulk-pass' })
