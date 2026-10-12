@@ -6,6 +6,7 @@
   export let roomName = ''
   export let formError = ''
   export let myName = ''
+  export let clientId = ''
 </script>
 
 <main class="gate-wrap">
@@ -72,6 +73,7 @@
           data-form-type="other"
         />
       </div>
+      <input type="hidden" name="clientId" value={clientId || ''} />
       <button type="submit" class="btn-primary btn-block">Join Room</button>
     </form>
   </div>

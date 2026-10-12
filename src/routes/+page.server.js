@@ -10,6 +10,9 @@ import {
 } from '$lib/server/db.js'
 import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
+import { unlockRoom } from '$lib/server/guest-join.js'
+import { deleteDashboardRoom } from '$lib/server/dashboard-room-delete.js'
+import { unlockRooms, deleteRooms } from '$lib/server/dashboard-room-batch.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
@@ -63,6 +66,7 @@ export async function load({ cookies, url }) {
     siteProtected: !!env.SITE_PASSWORD,
     notFound: url.searchParams.has('notfound'),
     expired: url.searchParams.has('expired'),
+    guestLocked: url.searchParams.has('guestlocked'),
     // Usage Dashboard (see CONTEXT.md) — same page, gated by the same
     // siteAuthed check as the create form, not a separate admin secret.
     // Only computed once past that gate: it's a handful of DB/filesystem
@@ -133,6 +137,43 @@ export const actions = {
     const { id } = await readCustomPromptForm(request)
     if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
     deleteCustomPrompt(id)
+    throw redirect(303, '/')
+  },
+
+  unlock_room: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { unlockError: 'Not authorised.' })
+    const data = await request.formData()
+    const slug = String(data.get('slug') || '')
+    unlockRoom(slug)
+    throw redirect(303, '/')
+  },
+
+  delete_room: async ({ request, cookies }) => {
+    const data = await request.formData()
+    const result = deleteDashboardRoom({
+      slug: data.get('slug'),
+      siteAuthed: isSiteAuthed(cookies)
+    })
+    if (!result.ok) return fail(result.status)
+    throw redirect(303, '/')
+  },
+
+  // Bulk variants of the row actions. Unknown slugs are skipped inside
+  // unlockRooms / deleteRooms and do not abort the rest of the posted set.
+  unlock_rooms: async ({ request, cookies }) => {
+    if (!isSiteAuthed(cookies)) return fail(403, { unlockError: 'Not authorised.' })
+    const data = await request.formData()
+    unlockRooms(data.getAll('slug'))
+    throw redirect(303, '/')
+  },
+
+  delete_rooms: async ({ request, cookies }) => {
+    const data = await request.formData()
+    const result = deleteRooms({
+      slugs: data.getAll('slug'),
+      siteAuthed: isSiteAuthed(cookies)
+    })
+    if (!result.ok) return fail(result.status)
     throw redirect(303, '/')
   },
 

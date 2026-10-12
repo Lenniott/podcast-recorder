@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../../src/lib/server/db.js', () => ({
-  cleanupExpiredRooms: vi.fn(() => 0)
+  cleanupExpiredRooms: vi.fn(() => 0),
+  recordGuestAccess: vi.fn(),
+  getGuestLastAccess: vi.fn(() => null),
+  listGuestAccess: vi.fn(() => []),
+  setGuestLockAt: vi.fn(() => 0)
 }))
 
 import { cleanupExpiredRooms } from '../../src/lib/server/db.js'

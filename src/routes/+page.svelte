@@ -67,6 +67,11 @@
             </button>
           </div>
         </div>
+        {#if data.guestLocked}
+          <div class="notice-banner notice-warn">
+            That room is locked for guests. The host can still enter.
+          </div>
+        {/if}
         {#if data.expired}
           <div class="notice-banner notice-warn">
             That room has expired and is no longer available.

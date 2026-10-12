@@ -1,6 +1,6 @@
 import { createHmac } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import db, { getRoomBySlug, _resetDb } from '../../src/lib/server/db.js'
+import db, { createRoom, getRoomBySlug, _resetDb } from '../../src/lib/server/db.js'
 import * as roomsDb from '../../src/lib/server/db.js'
 
 const SECRET = 'test-secret-do-not-use-in-prod'
@@ -26,6 +26,12 @@ function makeCookies(seed = {}) {
 function formRequest(entries) {
   const data = new FormData()
   for (const [key, value] of Object.entries(entries)) data.set(key, value)
+  return { formData: async () => data }
+}
+
+function formRequestSlugs(slugs) {
+  const data = new FormData()
+  for (const slug of slugs) data.append('slug', slug)
   return { formData: async () => data }
 }
 
@@ -66,6 +72,7 @@ describe('+page.server', () => {
         siteProtected: false,
         notFound: false,
         expired: false,
+        guestLocked: false,
         customPrompts: [],
         usageDashboard: { totals: { calls: 0, tokens: 0, cost: 0 }, rooms: [] }
       })
@@ -94,7 +101,16 @@ describe('+page.server', () => {
         url: new URL('http://test/?expired=1')
       })
       expect(notFound.notFound).toBe(true)
+      expect(notFound.guestLocked).toBe(false)
       expect(expired.expired).toBe(true)
+      expect(expired.guestLocked).toBe(false)
+      const guestLocked = await load({
+        cookies,
+        url: new URL('http://test/?guestlocked=1')
+      })
+      expect(guestLocked.guestLocked).toBe(true)
+      expect(guestLocked.notFound).toBe(false)
+      expect(guestLocked.expired).toBe(false)
     })
   })
 
@@ -490,5 +506,306 @@ describe('+page.server', () => {
         ])
       }
     )
+  })
+
+  describe('actions.unlock_room', () => {
+    const SLUG = 'unlockslug1'
+    const CREATED_AT = 1_600_000_000_000
+    const LOCKED_AT = 1_700_000_000_000
+
+    function seedLockedRoom() {
+      createRoom({
+        slug: SLUG,
+        name: 'Unlock Me',
+        passwordHash: 'hash-value',
+        passwordPlain: 'pw'
+      })
+      db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?')
+        .run(CREATED_AT, LOCKED_AT, SLUG)
+    }
+
+    it('moves the guest-lock clock when the site cookie is valid', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seedLockedRoom()
+      const { actions, load } = await loadPage()
+      const before = Date.now()
+      await expectRedirect(
+        () => actions.unlock_room({
+          request: formRequest({ slug: SLUG }),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      const after = Date.now()
+      const room = getRoomBySlug(SLUG)
+      expect(room.created_at).toBe(CREATED_AT)
+      expect(room.name).toBe('Unlock Me')
+      expect(room.password_hash).toBe('hash-value')
+      expect(room.password_plain).toBe('pw')
+      expect(room.guest_lock_at).toBeGreaterThanOrEqual(before)
+      expect(room.guest_lock_at).toBeLessThanOrEqual(after)
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      expect(data.siteAuthed).toBe(true)
+    })
+
+    it('does not move the clock when the site is locked and there is no site cookie', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seedLockedRoom()
+      const { actions } = await loadPage()
+      const result = await actions.unlock_room({
+        request: formRequest({ slug: SLUG }),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 403,
+        data: { unlockError: 'Not authorised.' }
+      })
+      expect(getRoomBySlug(SLUG)).toMatchObject({
+        created_at: CREATED_AT,
+        guest_lock_at: LOCKED_AT
+      })
+    })
+
+    it('does not crash on an unknown slug, and the page still loads afterwards', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      const { actions, load } = await loadPage()
+      await expectRedirect(
+        () => actions.unlock_room({
+          request: formRequest({ slug: 'no-such-room' }),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      expect(data.siteAuthed).toBe(true)
+      expect(getRoomBySlug('no-such-room')).toBeNull()
+    })
+
+    it('does not crash when the slug field is missing', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seedLockedRoom()
+      const { actions, load } = await loadPage()
+      await expectRedirect(
+        () => actions.unlock_room({
+          request: formRequest({}),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      expect(getRoomBySlug(SLUG)).toMatchObject({
+        created_at: CREATED_AT,
+        guest_lock_at: LOCKED_AT
+      })
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      expect(data.siteAuthed).toBe(true)
+    })
+  })
+
+  describe('actions.delete_room', () => {
+    const SLUG = 'deleteslug1'
+
+    function seedRoom() {
+      createRoom({ slug: SLUG, name: 'Delete Me', passwordHash: 'hash-value', passwordPlain: 'pw' })
+    }
+
+    it('removes the room when the site cookie is valid', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seedRoom()
+      const { actions, load } = await loadPage()
+      await expectRedirect(
+        () => actions.delete_room({
+          request: formRequest({ slug: SLUG }),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      expect(getRoomBySlug(SLUG)).toBeNull()
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      expect(data.usageDashboard.rooms.map((room) => room.slug)).not.toContain(SLUG)
+    })
+
+    it('leaves the room in place when the site is locked and there is no site cookie', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seedRoom()
+      const { actions } = await loadPage()
+      const result = await actions.delete_room({
+        request: formRequest({ slug: SLUG }),
+        cookies: makeCookies()
+      })
+      expect(result.status).toBe(403)
+      expect(getRoomBySlug(SLUG)).toMatchObject({ name: 'Delete Me' })
+    })
+
+    it('does not crash on an unknown slug', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      const { actions, load } = await loadPage()
+      const result = await actions.delete_room({
+        request: formRequest({ slug: 'no-such-room' }),
+        cookies: makeCookies({ pr_site_auth: siteToken() })
+      })
+      expect(result.status).toBe(404)
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      expect(data.siteAuthed).toBe(true)
+    })
+  })
+
+  describe('actions.unlock_rooms', () => {
+    const A = 'bulkunlocka'
+    const B = 'bulkunlockb'
+    const CREATED_AT = 1_600_000_000_000
+    const LOCKED_AT = 1_700_000_000_000
+
+    function seed(slug) {
+      createRoom({ slug, name: slug, passwordHash: 'hash-value', passwordPlain: 'pw' })
+      db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?')
+        .run(CREATED_AT, LOCKED_AT, slug)
+    }
+
+    it('moves the guest-lock clock for every posted slug when the site cookie is valid', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      seed(B)
+      const { actions } = await loadPage()
+      const before = Date.now()
+      await expectRedirect(
+        () => actions.unlock_rooms({
+          request: formRequestSlugs([A, B]),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      const after = Date.now()
+      for (const slug of [A, B]) {
+        const room = getRoomBySlug(slug)
+        expect(room.created_at).toBe(CREATED_AT)
+        expect(room.guest_lock_at).toBeGreaterThanOrEqual(before)
+        expect(room.guest_lock_at).toBeLessThanOrEqual(after)
+      }
+    })
+
+    it('does not move the clock when the site is locked and there is no site cookie', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      seed(B)
+      const { actions } = await loadPage()
+      const result = await actions.unlock_rooms({
+        request: formRequestSlugs([A, B]),
+        cookies: makeCookies()
+      })
+      expect(result).toMatchObject({
+        status: 403,
+        data: { unlockError: 'Not authorised.' }
+      })
+      expect(getRoomBySlug(A)).toMatchObject({ created_at: CREATED_AT, guest_lock_at: LOCKED_AT })
+      expect(getRoomBySlug(B)).toMatchObject({ created_at: CREATED_AT, guest_lock_at: LOCKED_AT })
+    })
+
+    it('skips an unknown slug without aborting a known slug', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      const { actions } = await loadPage()
+      const before = Date.now()
+      await expectRedirect(
+        () => actions.unlock_rooms({
+          request: formRequestSlugs(['no-such-room', A]),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      const after = Date.now()
+      const room = getRoomBySlug(A)
+      expect(room.created_at).toBe(CREATED_AT)
+      expect(room.guest_lock_at).toBeGreaterThanOrEqual(before)
+      expect(room.guest_lock_at).toBeLessThanOrEqual(after)
+      expect(getRoomBySlug('no-such-room')).toBeNull()
+    })
+  })
+
+  describe('actions.delete_rooms', () => {
+    const A = 'bulkdeletea'
+    const B = 'bulkdeleteb'
+    const KEEP = 'bulkdeletek'
+
+    function seed(slug) {
+      createRoom({ slug, name: slug, passwordHash: 'hash-value', passwordPlain: 'pw' })
+    }
+
+    it('removes every posted slug when the site cookie is valid', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      seed(B)
+      seed(KEEP)
+      const { actions, load } = await loadPage()
+      await expectRedirect(
+        () => actions.delete_rooms({
+          request: formRequestSlugs([A, B]),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      expect(getRoomBySlug(A)).toBeNull()
+      expect(getRoomBySlug(B)).toBeNull()
+      expect(getRoomBySlug(KEEP)).toMatchObject({ name: KEEP })
+      const data = await load({
+        cookies: makeCookies({ pr_site_auth: siteToken() }),
+        url: new URL('http://test/')
+      })
+      const slugs = data.usageDashboard.rooms.map((room) => room.slug)
+      expect(slugs).not.toContain(A)
+      expect(slugs).not.toContain(B)
+      expect(slugs).toContain(KEEP)
+    })
+
+    it('leaves every posted slug in place when the site is locked and there is no site cookie', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      seed(B)
+      const { actions } = await loadPage()
+      const result = await actions.delete_rooms({
+        request: formRequestSlugs([A, B]),
+        cookies: makeCookies()
+      })
+      expect(result.status).toBe(403)
+      expect(getRoomBySlug(A)).toMatchObject({ name: A })
+      expect(getRoomBySlug(B)).toMatchObject({ name: B })
+    })
+
+    it('skips an unknown slug without aborting a known slug', async () => {
+      process.env.SITE_PASSWORD = SITE_PASSWORD
+      seed(A)
+      const { actions } = await loadPage()
+      await expectRedirect(
+        () => actions.delete_rooms({
+          request: formRequestSlugs(['no-such-room', A]),
+          cookies: makeCookies({ pr_site_auth: siteToken() })
+        }),
+        303,
+        '/'
+      )
+      expect(getRoomBySlug(A)).toBeNull()
+      expect(getRoomBySlug('no-such-room')).toBeNull()
+    })
   })
 })

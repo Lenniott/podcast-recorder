@@ -11,6 +11,10 @@ vi.mock('../../src/lib/server/db.js', () => ({
   // template by id server-side — the template text never rides the wire.
   getCustomPrompt: vi.fn(),
   recordResearchUsage: vi.fn(),
+  setGuestLockAt: vi.fn(() => 0),
+  recordGuestAccess: vi.fn(),
+  getGuestLastAccess: vi.fn(() => null),
+  listGuestAccess: vi.fn(() => []),
   default: {}
 }))
 

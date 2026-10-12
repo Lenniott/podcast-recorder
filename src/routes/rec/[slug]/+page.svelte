@@ -1089,7 +1089,7 @@
 </svelte:head>
 
 {#if !data.authenticated}
-  <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName />
+  <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName clientId={clientId || ''} />
 {:else if !browserSupported}
   <UnsupportedBrowserGate slug={data.slug} />
 {:else if nameGateShow}

@@ -480,7 +480,8 @@
  *   { type: 'rejected',        message }
  */
 
-import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
+import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt, recordGuestAccess } from './db.js'
+import { guestJoinDecision } from './guest-join.js'
 import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
@@ -874,6 +875,15 @@ export function setupWss(wss) {
 
     const connectionHostClaim = getHostClaim(slug, cookies, roomRow, process.env.SECRET)
 
+    // Time lock is knowable before the join message names a clientId.
+    // Inactivity lock is checked on `join` below. A valid session cookie
+    // is not a way around either; the host claim is.
+    if (!guestJoinDecision(roomRow, { isHost: connectionHostClaim }).allowed) {
+      send(ws, { type: 'error', message: 'This room is locked for guests' })
+      ws.close(4403, 'Room locked')
+      return
+    }
+
     if (!rooms.has(slug)) rooms.set(slug, new Map())
     const room = rooms.get(slug)
 
@@ -911,6 +921,18 @@ export function setupWss(wss) {
         const incomingName = String(msg.name || 'Guest').slice(0, 50).trim() || 'Guest'
 
         if (!clientId && incomingId) {
+          // Inactivity lock is per clientId and only knowable once `join`
+          // names it. Refuse before this socket is added to the room map.
+          // A host claim is allowed and does not record guest access.
+          if (!connectionHostClaim) {
+            const decision = guestJoinDecision(roomRow, { isHost: false, clientId: incomingId })
+            if (!decision.allowed) {
+              send(ws, { type: 'error', message: 'This room is locked for guests' })
+              ws.close(4403, 'Room locked')
+              return
+            }
+          }
+
           // First join — register this peer
 
           // Evict stale connection with same clientId (HMR reconnect)
@@ -941,6 +963,7 @@ export function setupWss(wss) {
         sendPresence(slug)
 
         if (firstJoin && clientId) {
+          if (!connectionHostClaim) recordGuestAccess(slug, clientId, Date.now())
           replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
           send(ws, { type: 'transcript_activity', active: anyoneTranscribing(slug) })

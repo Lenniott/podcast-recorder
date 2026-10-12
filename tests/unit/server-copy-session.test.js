@@ -21,7 +21,7 @@ async function seedRoom({ createdAt } = {}) {
   const passwordHash = await hashPassword(ROOM_PASS)
   createRoom({ slug: SLUG, name: 'Test Episode', passwordHash })
   if (createdAt != null) {
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(createdAt, SLUG)
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(createdAt, createdAt, SLUG)
   }
   return passwordHash
 }
@@ -53,11 +53,16 @@ describe('authorizeServerCopyRequest', () => {
     expect(result.status).toBe(410)
   })
 
-  it('rejects an expired room the same way as a missing one — ties upload to room lifetime', async () => {
-    await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 }) // older than 12h max age
-    const result = authorizeServerCopyRequest({ slug: SLUG, cookies: makeCookies() })
-    expect(result.ok).toBe(false)
-    expect(result.status).toBe(410)
+  it('authorizes an old room that still exists — age does not make the room unavailable', async () => {
+    const passwordHash = await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+    const result = authorizeServerCopyRequest({
+      slug: SLUG,
+      cookies: makeCookies({ [`pr_auth_${SLUG}`]: makeSessionToken(SLUG, passwordHash, SECRET) }),
+      clientId: CLIENT_ID,
+      token: makeServerCopyToken(SLUG, CLIENT_ID, SECRET)
+    })
+    expect(result.ok).toBe(true)
+    expect(result.room.slug).toBe(SLUG)
   })
 
   it('rejects a request with no/invalid session cookie for the room', async () => {
@@ -140,11 +145,14 @@ describe('authorizeServerCopyHostRequest', () => {
     expect(result.status).toBe(410)
   })
 
-  it('rejects an expired room the same way as a missing one', async () => {
-    await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
-    const result = authorizeServerCopyHostRequest({ slug: SLUG, cookies: makeCookies() })
-    expect(result.ok).toBe(false)
-    expect(result.status).toBe(410)
+  it('authorizes a host download for an old room that still exists', async () => {
+    const passwordHash = await seedRoom({ createdAt: Date.now() - 13 * 60 * 60 * 1000 })
+    const result = authorizeServerCopyHostRequest({
+      slug: SLUG,
+      cookies: makeCookies({ [`pr_host_${SLUG}`]: makeHostClaimToken(SLUG, passwordHash, SECRET) })
+    })
+    expect(result.ok).toBe(true)
+    expect(result.room.slug).toBe(SLUG)
   })
 
   it('rejects a request with no host-claim cookie', async () => {

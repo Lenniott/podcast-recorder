@@ -256,12 +256,16 @@ export async function createRoom(page, { name, password, hostDisplayName = 'Host
   return page.url()
 }
 
-export async function joinAsGuest(page, roomUrl, { name, password }) {
+export async function joinAsGuest(page, roomUrl, { name, password, expectLocked = false }) {
   await page.goto(roomUrl)
   // Host cookie from createRoom won't exist in a fresh context — expect password gate.
   await fillField(page.getByLabel('Your name'), name)
   await fillField(page.locator('#room-episode-code'), password)
   await page.getByRole('button', { name: /Join Room/i }).click()
+  if (expectLocked) {
+    await expect(page).toHaveURL(/\/\?guestlocked=1/)
+    return
+  }
   await roomTabsReady(page)
 }
 
