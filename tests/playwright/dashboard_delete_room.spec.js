@@ -15,9 +15,11 @@ test('host can delete a room from the dashboard after confirming', async ({ page
   await unlockIfNeeded(page)
 
   await page.getByRole('textbox', { name: 'Search rooms' }).fill(`Delete ${stamp}`)
-  await expect(page.getByRole('link', { name, exact: true })).toBeVisible()
+  const row = page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) })
+  await expect(row).toBeVisible()
+  await expect(page.getByRole('row')).toHaveCount(2)
 
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
 
   const dialog = page.getByRole('dialog')
   await expect(dialog).toBeVisible()
@@ -53,9 +55,11 @@ test('cancel on the delete modal leaves the room intact and enterable', async ({
   await unlockIfNeeded(page)
 
   await page.getByRole('textbox', { name: 'Search rooms' }).fill(`Keep ${stamp}`)
-  await expect(page.getByRole('link', { name, exact: true })).toBeVisible()
+  const row = page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) })
+  await expect(row).toBeVisible()
+  await expect(page.getByRole('row')).toHaveCount(2)
 
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeHidden()
