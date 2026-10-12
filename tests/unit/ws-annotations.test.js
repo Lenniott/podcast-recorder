@@ -12,6 +12,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
   // suite — see ws-annotation-ask.test.js — but both must exist to import.
   getCustomPrompt: vi.fn(() => null),
   recordResearchUsage: vi.fn(),
+  setGuestLockAt: vi.fn(() => 0),
   default: {}
 }))
 

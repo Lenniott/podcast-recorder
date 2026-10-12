@@ -7,6 +7,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
     password_hash: 'mock-hash',
     guest_ai_allowed: 0
   })),
+  setGuestLockAt: vi.fn(() => 0),
   default: {}
 }))
 
