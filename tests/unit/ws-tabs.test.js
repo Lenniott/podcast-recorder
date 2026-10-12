@@ -6,6 +6,7 @@ vi.mock('../../src/lib/server/db.js', () => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
+  setGuestLockAt: vi.fn(() => 0),
   default: {}
 }))
 
