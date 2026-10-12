@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { closeSync, ftruncateSync, mkdirSync, openSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join as joinPath } from 'path'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -10,6 +10,9 @@ vi.mock('../../src/lib/server/db.js', () => ({
     password_hash: 'mock-hash'
   })),
   setGuestLockAt: vi.fn(() => 0),
+  recordGuestAccess: vi.fn(),
+  getGuestLastAccess: vi.fn(() => null),
+  listGuestAccess: vi.fn(() => []),
   default: {}
 }))
 
@@ -20,7 +23,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
-import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
+import { getActiveRoomBySlug, recordGuestAccess } from '../../src/lib/server/db.js'
 import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
@@ -107,6 +110,77 @@ describe('setupWss — connection handling', () => {
       else process.env.SERVER_COPY_DIR = previousDir
       if (previousHours == null) delete process.env.GUEST_LOCK_HOURS
       else process.env.GUEST_LOCK_HOURS = previousHours
+    }
+  })
+
+  it('closes a guest join for a long copy with no last access, and still lets another guest and the host join', () => {
+    const root = joinPath(tmpdir(), `ws-guest-idle-${process.pid}-${Date.now()}`)
+    const previousDir = process.env.SERVER_COPY_DIR
+    const previousHours = process.env.GUEST_LOCK_HOURS
+    const previousMinutes = process.env.GUEST_LOCK_RECORDING_MINUTES
+    const previousIdle = process.env.GUEST_LOCK_INACTIVITY_HOURS
+    process.env.SERVER_COPY_DIR = root
+    process.env.GUEST_LOCK_HOURS = '12'
+    process.env.GUEST_LOCK_RECORDING_MINUTES = '10'
+    process.env.GUEST_LOCK_INACTIVITY_HOURS = '2'
+    recordGuestAccess.mockClear()
+    try {
+      const dir = getServerCopyRoomDir('room1')
+      mkdirSync(dir, { recursive: true })
+      const longBytes = 44 + 48000 * 2 * 601
+      for (const name of ['longguest01.wav', 'hostclient1.wav']) {
+        const fd = openSync(joinPath(dir, name), 'w')
+        try {
+          writeFileSync(fd, Buffer.alloc(44))
+          ftruncateSync(fd, longBytes)
+        } finally {
+          closeSync(fd)
+        }
+      }
+      writeFileSync(joinPath(dir, 'shortguest1.wav'), Buffer.alloc(300))
+      const fresh = Date.now()
+      getActiveRoomBySlug.mockReturnValue({
+        slug: 'room1',
+        password_hash: 'mock-hash',
+        created_at: fresh,
+        guest_lock_at: fresh
+      })
+
+      const locked = mockWs()
+      wss.connect(locked, 'room1')
+      expect(locked.closed).toBe(false)
+      join(locked, 'Idle', 'longguest01')
+      expect(locked.closed).toBe(true)
+      expect(locked.closeCode).toBe(4403)
+      expect(locked.sent).toContainEqual({ type: 'error', message: 'This room is locked for guests' })
+      expect(locked.sent.some((message) => message.type === 'presence')).toBe(false)
+
+      const other = mockWs()
+      wss.connect(other, 'room1')
+      join(other, 'Short', 'shortguest1')
+      expect(other.closed).toBe(false)
+      const otherPresence = other.sent.filter((message) => message.type === 'presence').at(-1)
+      expect(otherPresence.peers.map((peer) => peer.clientId)).toEqual(['shortguest1'])
+
+      const host = mockWs()
+      wss.connect(host, 'room1', { asHost: true })
+      join(host, 'Host', 'hostclient1')
+      expect(host.closed).toBe(false)
+      const hostPresence = host.sent.filter((message) => message.type === 'presence').at(-1)
+      expect(hostPresence.peers.map((peer) => peer.clientId).sort()).toEqual(['hostclient1', 'shortguest1'])
+      expect(recordGuestAccess).toHaveBeenCalledWith('room1', 'shortguest1', expect.any(Number))
+      expect(recordGuestAccess.mock.calls.map((call) => call[1])).not.toContain('longguest01')
+      expect(recordGuestAccess.mock.calls.map((call) => call[1])).not.toContain('hostclient1')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      if (previousDir == null) delete process.env.SERVER_COPY_DIR
+      else process.env.SERVER_COPY_DIR = previousDir
+      if (previousHours == null) delete process.env.GUEST_LOCK_HOURS
+      else process.env.GUEST_LOCK_HOURS = previousHours
+      if (previousMinutes == null) delete process.env.GUEST_LOCK_RECORDING_MINUTES
+      else process.env.GUEST_LOCK_RECORDING_MINUTES = previousMinutes
+      if (previousIdle == null) delete process.env.GUEST_LOCK_INACTIVITY_HOURS
+      else process.env.GUEST_LOCK_INACTIVITY_HOURS = previousIdle
     }
   })
 

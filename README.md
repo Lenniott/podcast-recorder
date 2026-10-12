@@ -72,8 +72,11 @@ cp .env.example .env
 # delete. ROOM_MAX_AGE_HOURS (default 12) does not delete a room. Each room
 # stores guest_lock_at separately from its created date. GUEST_LOCK_HOURS
 # (default 12) refuses a guest join once the room has server-known audio
-# and that clock is older than the limit. It does not delete the room and
-# does not lock the host out.
+# and that clock is older than the limit. GUEST_LOCK_RECORDING_MINUTES
+# (default 10) and GUEST_LOCK_INACTIVITY_HOURS (default 2) refuse a guest
+# whose own server copy is longer than that many minutes and who has not
+# accessed that room within the inactivity window. No recorded last access
+# counts as stale. Neither rule deletes the room or locks the host out.
 
 chmod +x update.sh
 docker compose up -d --build

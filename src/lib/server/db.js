@@ -136,6 +136,18 @@ function getDb() {
     )
   `)
 
+  // Last time a guest identity (the same clientId server copies use)
+  // accessed this room: an authenticated room-page load or a successful
+  // WebSocket join. Missing row means no access has been recorded.
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS guest_room_access (
+      slug           TEXT NOT NULL,
+      client_id      TEXT NOT NULL,
+      last_access_at INTEGER NOT NULL,
+      PRIMARY KEY (slug, client_id)
+    )
+  `)
+
   return _db
 }
 
@@ -179,6 +191,33 @@ export function listRooms() {
  */
 export function setGuestLockAt(slug, at) {
   return getDb().prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?').run(at, slug).changes
+}
+
+/** Upserts last_access_at. Empty slug or clientId is ignored. */
+export function recordGuestAccess(slug, clientId, at) {
+  if (!slug || !clientId) return
+  getDb().prepare(`
+    INSERT INTO guest_room_access (slug, client_id, last_access_at) VALUES (?, ?, ?)
+    ON CONFLICT(slug, client_id) DO UPDATE SET last_access_at = excluded.last_access_at
+  `).run(slug, clientId, at)
+}
+
+/** @returns {number | null} */
+export function getGuestLastAccess(slug, clientId) {
+  if (!slug || !clientId) return null
+  const row = getDb().prepare(
+    'SELECT last_access_at FROM guest_room_access WHERE slug = ? AND client_id = ?'
+  ).get(slug, clientId)
+  return row ? row.last_access_at : null
+}
+
+/** @returns {{ clientId: string, lastAccessAt: number }[]} */
+export function listGuestAccess(slug) {
+  if (!slug) return []
+  return getDb().prepare(`
+    SELECT client_id AS clientId, last_access_at AS lastAccessAt
+    FROM guest_room_access WHERE slug = ?
+  `).all(slug)
 }
 
 export function roomExists(slug) {

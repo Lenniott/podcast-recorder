@@ -22,7 +22,11 @@ vi.mock('../../src/lib/server/research-eval-log.js', () => ({
 // triggers on every call — mocked here so these tests never touch a real
 // SQLite file, the same way the Eval Log is mocked above.
 vi.mock('../../src/lib/server/db.js', () => ({
-  recordResearchUsage: vi.fn()
+  recordResearchUsage: vi.fn(),
+  recordGuestAccess: vi.fn(),
+  getGuestLastAccess: vi.fn(() => null),
+  listGuestAccess: vi.fn(() => []),
+  setGuestLockAt: vi.fn(() => 0)
 }))
 
 beforeEach(() => {

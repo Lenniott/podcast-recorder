@@ -196,22 +196,34 @@ _Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
 usage page
 
 **Guest lock**:
-A guest cannot join a room that already has server-known audio once the
-guest-lock clock is older than `GUEST_LOCK_HOURS` (default 12). The clock
-is a finite `guest_lock_at`, or `created_at` when that column is missing.
-Before any server-copy file exists, guests stay allowed even if the clock
-is older than the limit. The host (`pr_host_<slug>`, via `getHostClaim`)
-is always allowed. Guest lock does not delete the room, and it is not a
-host lock. `ROOM_MAX_AGE_HOURS` is a separate comparison and is not this
-join gate. Refusal goes through `guestJoinDecision` for both the room
-page and the room WebSocket.
+A guest cannot join a room that already has server-known audio once either
+rule applies. Time lock: the guest-lock clock is older than
+`GUEST_LOCK_HOURS` (default 12). The clock is a finite `guest_lock_at`, or
+`created_at` when that column is missing. Inactivity lock: that guest's
+own server copies, keyed by `clientId`, are longer than
+`GUEST_LOCK_RECORDING_MINUTES` (default 10) and their last access to that
+room is older than `GUEST_LOCK_INACTIVITY_HOURS` (default 2). Access is an
+authenticated load of that room's page or a successful WebSocket join.
+A missing last-access row is stale, so a long enough server copy locks
+them. A recording at or under the minute threshold does not arm the
+inactivity lock, and an inactivity age equal to the window does not lock.
+Other guests are decided from their own copies and access. Before any
+server-copy file exists, guests stay allowed even if the clock is older
+than the limit. The host (`pr_host_<slug>`, via `getHostClaim`) is always
+allowed. Guest lock does not delete the room, and it is not a host lock.
+`ROOM_MAX_AGE_HOURS` is a separate comparison and is not this join gate.
+Refusal goes through `guestJoinDecision` for both the room page and the
+room WebSocket.
 _Avoid_: host lock, expiry, delete-on-age
 
 **Unlock**:
-The Usage Dashboard action that sets a room's `guest_lock_at` to now.
-`created_at`, slug, name, and password stay as they are. It works on a
-locked room and on a room that is still open to guests. An unknown slug
-does not throw. Gated by the same site password as creating a room.
+The Usage Dashboard action that sets a room's `guest_lock_at` to now and
+records last access as now for every `clientId` with a server copy in that
+room and every `clientId` already stored for that room. That clears both
+the time lock and the inactivity lock. `created_at`, slug, name, and
+password stay as they are. It works on a locked room and on a room that
+is still open to guests. An unknown slug does not throw. Gated by the
+same site password as creating a room.
 _Avoid_: host lock, delete
 
 **Research Eval Log**:
