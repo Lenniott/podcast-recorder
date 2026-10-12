@@ -190,8 +190,12 @@ each row's original created date. Each row also shows whether guests are
 locked, an **Unlock** control, and a **Delete** control. Delete is the
 only way a room disappears: the room, its server audio, research entries,
 tab content, transcript, and annotations are removed. Local recordings
-on each computer are not. A guest-locked room stays listed. Not a
-separate page or route.
+on each computer are not. The host can select several rows. Select-all
+selects the rows the current search is showing, not rooms the search is
+hiding. **Unlock selected** unlocks that set. **Delete selected** confirms
+once, then fully removes every selected room the same way the one-row
+delete does. An unknown slug is skipped and does not abort the rest.
+A guest-locked room stays listed. Not a separate page or route.
 _Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
 usage page
 

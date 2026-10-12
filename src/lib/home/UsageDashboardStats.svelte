@@ -7,15 +7,34 @@
     roomEnterPath,
     formatRoomCreatedAt,
   } from "$lib/home/room-table-filter.js";
+  import {
+    clearSelection,
+    selectVisible,
+    selectionCoversVisible,
+    toggleSlug,
+  } from "$lib/home/room-selection.js";
   import GuestLockCell from "$lib/home/GuestLockCell.svelte";
   import DeleteRoomButton from "$lib/home/DeleteRoomButton.svelte";
+  import DashboardBulkBar from "$lib/home/DashboardBulkBar.svelte";
 
   export let usageDashboard;
 
   // Client-side filter of the list already loaded with the page. Clearing
-  // the box restores every room; it does not refetch.
+  // the box restores every room; it does not refetch. Changing the search
+  // drops the selection so a later select-all cannot include rows the
+  // search just hid.
   let roomQuery = "";
+  let selected = [];
   $: visibleRooms = filterRooms(usageDashboard.rooms, roomQuery);
+  $: allVisibleSelected = selectionCoversVisible(selected, visibleRooms);
+
+  function onSearchInput() {
+    selected = clearSelection();
+  }
+
+  function toggleVisibleSelection() {
+    selected = allVisibleSelected ? clearSelection() : selectVisible(visibleRooms);
+  }
 
   function formatCost(cost) {
     return `$${Number(cost || 0).toFixed(4)}`;
@@ -51,8 +70,12 @@
 
 <label class="room-search">
   Search rooms
-  <input type="text" bind:value={roomQuery} />
+  <input type="text" bind:value={roomQuery} on:input={onSearchInput} />
 </label>
+
+{#if usageDashboard.rooms.length > 0}
+  <DashboardBulkBar slugs={selected} />
+{/if}
 
 {#if usageDashboard.rooms.length === 0}
   <p class="sub">No rooms yet.</p>
@@ -63,6 +86,15 @@
     <table class="dashboard-table">
       <thead>
         <tr>
+          <th class="select-col">
+            <input
+              class="row-select"
+              type="checkbox"
+              aria-label="Select all visible rooms"
+              checked={allVisibleSelected}
+              on:click|preventDefault={toggleVisibleSelection}
+            />
+          </th>
           <th>Room</th>
           <th>Created</th>
           <th>Guests</th>
@@ -79,6 +111,15 @@
       <tbody>
         {#each visibleRooms as room (room.slug)}
           <tr>
+            <td class="select-col">
+              <input
+                class="row-select"
+                type="checkbox"
+                aria-label="Select {room.name}"
+                checked={selected.includes(room.slug)}
+                on:click|preventDefault={() => (selected = toggleSlug(selected, room.slug))}
+              />
+            </td>
             <td><a href={roomEnterPath(room.slug)}>{room.name}</a></td>
             <td>{formatRoomCreatedAt(room.createdAt)}</td>
             <td><GuestLockCell slug={room.slug} guestLocked={room.guestLocked} /></td>
@@ -162,5 +203,19 @@
     text-transform: uppercase;
     font-size: 10px;
     letter-spacing: 0.04em;
+  }
+
+  .select-col {
+    width: 1%;
+    padding-right: 0;
+  }
+
+  .row-select {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0;
+    accent-color: var(--accent, #2563eb);
+    cursor: pointer;
   }
 </style>
