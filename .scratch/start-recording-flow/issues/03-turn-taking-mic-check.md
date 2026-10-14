@@ -64,24 +64,24 @@ whichever turn failed), not decide the file naming.
 
 **Blocked by:** 02 — Synced recording session core.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] On synced start, host's check runs first using the existing
+- [x] On synced start, host's check runs first using the existing
       single-person modal/flow unmodified in its own mechanics.
-- [ ] Guest sees an explicit "it's the host's turn, please stay quiet"
+- [x] Guest sees an explicit "it's the host's turn, please stay quiet"
       state during the host's check — not their own check UI, not a
       blank screen.
-- [ ] Guest's check runs after host's `confirm()`, with host shown the
+- [x] Guest's check runs after host's `confirm()`, with host shown the
       symmetric "stay quiet" state.
-- [ ] A reject on either turn returns to a well-defined retry point
+- [x] A reject on either turn returns to a well-defined retry point
       without corrupting the other peer's state.
-- [ ] Nothing about the existing single-person check mechanics (listen-
+- [x] Nothing about the existing single-person check mechanics (listen-
       back sourced from confirmed-written audio, never live) changes.
-- [ ] Both-turns-passed emits one clear, subscribable signal.
-- [ ] TDD on the seams above.
-- [ ] Coverage: host-turn pass/reject × guest-turn pass/reject.
-- [ ] E2E: full two-peer turn-taking sequence, in order, with the quiet-
+- [x] Both-turns-passed emits one clear, subscribable signal.
+- [x] TDD on the seams above.
+- [x] Coverage: host-turn pass/reject × guest-turn pass/reject.
+- [x] E2E: full two-peer turn-taking sequence, in order, with the quiet-
       state visible on the non-active peer's screen.
-- [ ] Docs: `CONTEXT.md` **Check Turn** entry; note in AGENTS.md that the
+- [x] Docs: `CONTEXT.md` **Check Turn** entry; note in AGENTS.md that the
       "stay quiet" indicator must stay sourced from sequence state, not
       live mic level.

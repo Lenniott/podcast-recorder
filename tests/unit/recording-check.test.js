@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { CHECK_SENTENCES, createRecordingCheck } from '../../src/lib/recording/recording-check.js'
+import { CHECK_TURN } from '../../src/lib/recording/recording-check-share.js'
+import { CHECK_SENTENCES, createRecordingCheck, createCheckTurnSequence } from '../../src/lib/recording/recording-check.js'
 
 describe('createRecordingCheck', () => {
   afterEach(() => {
@@ -109,5 +110,113 @@ describe('createRecordingCheck', () => {
     check.start()
     check.handleWritten(new Int16Array([9, 8]))
     expect(check.consumeAutoShare()).toBe(true)
+  })
+})
+
+describe('createCheckTurnSequence', () => {
+  it('synced start is the host turn; guest check UI stays inert until host confirm()', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    expect(seq.bothTurnsPassed).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+
+    seq.confirm({ isHost: true })
+    expect(seq.turn).toBe(CHECK_TURN.guest)
+    expect(seq.bothTurnsPassed).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(true)
+  })
+
+  it('guest confirm() after host confirm() is the one both-turns-passed state', () => {
+    const seq = createCheckTurnSequence()
+    const passed = []
+    seq.onBothTurnsPassed(() => passed.push(seq.turn))
+    seq.start({ synced: true })
+    seq.confirm({ isHost: true })
+    expect(passed).toEqual([])
+    seq.confirm({ isHost: false })
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.bothTurnsPassed).toBe(true)
+    expect(passed).toEqual([CHECK_TURN.passed])
+    seq.confirm({ isHost: false })
+    expect(passed).toEqual([CHECK_TURN.passed])
+  })
+
+  it('host reject() stays on the host turn and does not pass', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    seq.reject({ isHost: true })
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    expect(seq.bothTurnsPassed).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+  })
+
+  it('guest reject() returns to the host turn without passing or flipping the host into a guest check', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    seq.confirm({ isHost: true })
+    expect(seq.turn).toBe(CHECK_TURN.guest)
+    seq.reject({ isHost: false })
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    expect(seq.bothTurnsPassed).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+  })
+
+  it('reject() on the other peer turn does not advance or rewrite whose turn it is', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    seq.reject({ isHost: false })
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    seq.confirm({ isHost: true })
+    seq.reject({ isHost: true })
+    expect(seq.turn).toBe(CHECK_TURN.guest)
+    expect(seq.bothTurnsPassed).toBe(false)
+  })
+
+  it('stayQuietRole follows the current turn and does not read mic level', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    expect(seq.stayQuietRole({ isHost: false, micLevel: 0.9 })).toBe(CHECK_TURN.host)
+    expect(seq.stayQuietRole({ isHost: true, micLevel: 0 })).toBe(null)
+    seq.confirm({ isHost: true })
+    expect(seq.stayQuietRole({ isHost: true, micLevel: 1 })).toBe(CHECK_TURN.guest)
+    expect(seq.stayQuietRole({ isHost: false, micLevel: 0 })).toBe(null)
+  })
+
+  it('solo start opens this peer check and passes on confirm without a guest turn', () => {
+    const seq = createCheckTurnSequence()
+    const passed = []
+    seq.onBothTurnsPassed(() => passed.push(true))
+    seq.start({ synced: false })
+    expect(seq.turn).toBe(CHECK_TURN.idle)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(true)
+    expect(seq.stayQuietRole({ isHost: false })).toBe(null)
+    seq.confirm({ isHost: false })
+    expect(seq.bothTurnsPassed).toBe(true)
+    expect(passed).toEqual([true])
+  })
+
+  it('solo reject() does not pass and keeps own check available', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: false })
+    seq.reject({ isHost: true })
+    expect(seq.bothTurnsPassed).toBe(false)
+    expect(seq.shouldOpenOwnCheck({ isHost: true })).toBe(true)
+  })
+
+  it('applyRemote mirrors a relayed turn so the other peer can open or stay quiet', () => {
+    const seq = createCheckTurnSequence()
+    seq.applyRemote(CHECK_TURN.host)
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+    seq.applyRemote(CHECK_TURN.guest)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(true)
+    seq.applyRemote(CHECK_TURN.passed)
+    expect(seq.bothTurnsPassed).toBe(true)
   })
 })

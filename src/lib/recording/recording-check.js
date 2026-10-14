@@ -1,5 +1,12 @@
 import { buildWavBlob } from './audio-utils.js'
-import { SHARE_AFTER_SAMPLES, MAX_SHARE_SAMPLES } from './recording-check-share.js'
+import {
+  CHECK_TURN,
+  SHARE_AFTER_SAMPLES,
+  MAX_SHARE_SAMPLES,
+  isCheckTurn
+} from './recording-check-share.js'
+
+export { CHECK_TURN }
 
 /**
  * Record-start listen-back check. Callers must feed confirmed-written chunks,
@@ -88,5 +95,113 @@ export function createRecordingCheck({
     close: closeAndClear,
     get open() { return open },
     get sentence() { return sentence }
+  }
+}
+
+/**
+ * Host-then-guest Check Turn sequence for a Synced Recording Session.
+ * Solo start skips this pairing: this peer's existing single-person check
+ * still opens, and confirm() is the both-turns-passed signal (there is no
+ * guest turn to wait on). Stay-quiet is derived only from `turn`.
+ */
+export function createCheckTurnSequence() {
+  let turn = CHECK_TURN.idle
+  let synced = false
+  let emittedPassed = false
+  const passedListeners = new Set()
+
+  function emitPassed() {
+    if (emittedPassed) return
+    emittedPassed = true
+    turn = CHECK_TURN.passed
+    for (const fn of passedListeners) fn()
+  }
+
+  function start({ synced: nextSynced = false } = {}) {
+    synced = !!nextSynced
+    emittedPassed = false
+    turn = synced ? CHECK_TURN.host : CHECK_TURN.idle
+  }
+
+  function shouldOpenOwnCheck({ isHost } = {}) {
+    if (!synced) return turn !== CHECK_TURN.passed
+    if (turn === CHECK_TURN.host) return !!isHost
+    if (turn === CHECK_TURN.guest) return !isHost
+    return false
+  }
+
+  function stayQuietRole({ isHost } = {}) {
+    if (!synced) return null
+    if (turn === CHECK_TURN.host && !isHost) return CHECK_TURN.host
+    if (turn === CHECK_TURN.guest && isHost) return CHECK_TURN.guest
+    return null
+  }
+
+  function confirm({ isHost } = {}) {
+    if (!synced) {
+      emitPassed()
+      return
+    }
+    if (isHost && turn === CHECK_TURN.host) {
+      turn = CHECK_TURN.guest
+      return
+    }
+    if (!isHost && turn === CHECK_TURN.guest) emitPassed()
+  }
+
+  function reject({ isHost } = {}) {
+    if (!synced) {
+      turn = CHECK_TURN.idle
+      emittedPassed = false
+      return
+    }
+    if (isHost && turn === CHECK_TURN.host) {
+      turn = CHECK_TURN.host
+      return
+    }
+    if (!isHost && turn === CHECK_TURN.guest) {
+      turn = CHECK_TURN.host
+    }
+  }
+
+  function applyRemote(nextTurn) {
+    if (!isCheckTurn(nextTurn)) return
+    if (nextTurn === CHECK_TURN.idle) {
+      synced = false
+      emittedPassed = false
+      turn = CHECK_TURN.idle
+      return
+    }
+    synced = true
+    if (nextTurn === CHECK_TURN.passed) {
+      emitPassed()
+      return
+    }
+    turn = nextTurn
+  }
+
+  function close() {
+    turn = CHECK_TURN.idle
+    synced = false
+    emittedPassed = false
+  }
+
+  function onBothTurnsPassed(fn) {
+    passedListeners.add(fn)
+    return () => passedListeners.delete(fn)
+  }
+
+  return {
+    start,
+    confirm,
+    reject,
+    applyRemote,
+    close,
+    shouldOpenOwnCheck,
+    stayQuietRole,
+    onBothTurnsPassed,
+    get turn() { return turn },
+    get bothTurnsPassed() { return turn === CHECK_TURN.passed },
+    get synced() { return synced }
   }
 }

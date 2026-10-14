@@ -1,6 +1,7 @@
 <script>
   import { Check, Mic, Play, X } from "$lib/icons";
   import Model from "$lib/Model.svelte";
+  import { stayQuietCopy } from "$lib/recording/recording-check-share.js";
 
   // Sits over the room the instant recording actually starts. Recording is
   // already running for real — nothing here is a throwaway test take. It
@@ -14,6 +15,9 @@
   export let onListen = () => null;
   export let onConfirm = () => {};
   export let onReject = () => {};
+  // Whose Check Turn the other person is on — stay-quiet overlay instead of
+  // this peer's own modal. Derived from sequence turn, never mic level.
+  export let quietRole = "";
 
   let audioEl;
   let previewUrl = null;
@@ -104,7 +108,38 @@
   {/if}
 </Model>
 
+{#if !open && quietRole}
+  <div class="check-quiet" data-testid="check-quiet" role="status">
+    <div class="check-card">
+      <div class="check-badge">● Recording</div>
+      <h2>Stay quiet for a moment</h2>
+      <p class="check-hint">{stayQuietCopy(quietRole)}</p>
+    </div>
+  </div>
+{/if}
+
 <style>
+  .check-quiet {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+  }
+
+  .check-card {
+    position: relative;
+    background: var(--bg-elevated, #18181b);
+    border: 1px solid var(--border, #2a2a2e);
+    border-radius: 14px;
+    max-width: 440px;
+    width: 100%;
+    padding: 28px;
+  }
+
   .check-close {
     position: absolute;
     top: 10px;

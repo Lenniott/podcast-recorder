@@ -217,3 +217,17 @@ it('a fatal issue stops capture even if the page issue observer throws', async (
   expect(stopCapture).toHaveBeenCalledTimes(1)
   expect(ctx.file.close).toHaveBeenCalledTimes(1)
 })
+
+it('a retake seals the local file without stopping capture', async () => {
+  const stopCapture = vi.fn(async () => {})
+  const ctx = setup({ stopCapture })
+  ctx.session.writeChunk(chunk(1))
+  const pending = ctx.session.stop({ capture: false })
+  const local = await ctx.session.whenLocalFinished
+  expect(local).toMatchObject({ saved: true, dataByteCount: 4 })
+  expect(stopCapture).not.toHaveBeenCalled()
+  expect(ctx.file.close).toHaveBeenCalledOnce()
+  expect(ctx.session.samplesWritten).toBe(2)
+  await pending
+  expect(stopCapture).not.toHaveBeenCalled()
+})

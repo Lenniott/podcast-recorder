@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, mockCustomPromptOutcomes } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, mockCustomPromptOutcomes, roomTabsReady } from './helpers.js'
 
 const askAnswer = (text) => JSON.stringify({ provenInTranscript: 0, ubiquitousKnowledge: 0, outputType: 'ask', mainTakeaway: text })
 const paragraph = (text) => [{ type: 'paragraph', text }]
@@ -116,6 +116,7 @@ test('research history survives a room re-join', async ({ browser }) => {
     'Persisted question?': { answer: askAnswer('Persisted answer.'), blocks: paragraph('Persisted answer.') }
   }, { delayMs: 0 })
   await rejoined.goto(roomUrl)
+  await roomTabsReady(rejoined)
   await expect(rejoined.locator('.research-entry[data-status="answered"]')).toBeVisible({ timeout: 15_000 })
   await expect(rejoined.locator('.research-question')).toHaveText('Persisted question?')
   await expect(rejoined.locator('[data-testid="block-list"]')).toHaveText('Persisted answer.')

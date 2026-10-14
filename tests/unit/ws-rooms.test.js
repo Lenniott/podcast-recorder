@@ -177,6 +177,51 @@ describe('setupWss — connection handling', () => {
     nowSpy.mockRestore()
   })
 
+  it('take_marker is a clap-shaped broadcast with a 3000ms lead', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'take_marker' }))
+    const hostEv = ws1.sent.find(m => m.type === 'take_marker')
+    const guestEv = ws2.sent.find(m => m.type === 'take_marker')
+    expect(hostEv.from).toBe('Host')
+    expect(hostEv.triggerAtMs).toBe(4000)
+    expect(guestEv.triggerAtMs).toBe(4000)
+    nowSpy.mockRestore()
+  })
+
+  it('an end-edge take_marker is broadcast as the tail with a 2000ms lead; no edge stays the 3000ms start', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+
+    ws1.emit('message', JSON.stringify({ type: 'take_marker', edge: 'end' }))
+    const hostTail = ws1.sent.find(m => m.type === 'take_marker')
+    const guestTail = ws2.sent.find(m => m.type === 'take_marker')
+    expect(hostTail.edge).toBe('end')
+    expect(hostTail.triggerAtMs).toBe(3000)
+    expect(guestTail.edge).toBe('end')
+    expect(guestTail.triggerAtMs).toBe(3000)
+
+    ws1.sent.length = 0
+    ws2.sent.length = 0
+    ws1.emit('message', JSON.stringify({ type: 'take_marker' }))
+    const guestStart = ws2.sent.find(m => m.type === 'take_marker')
+    expect(guestStart.edge).toBeUndefined()
+    expect(guestStart.triggerAtMs).toBe(4000)
+
+    ws2.sent.length = 0
+    ws1.emit('message', JSON.stringify({ type: 'take_marker', edge: 'start' }))
+    const labeledStart = ws2.sent.find(m => m.type === 'take_marker')
+    expect(labeledStart.edge).toBeUndefined()
+    expect(labeledStart.triggerAtMs).toBe(4000)
+    nowSpy.mockRestore()
+  })
+
   it('recording_state updates peer and broadcasts to others (not sender)', () => {
     const ws1 = mockWs()
     const ws2 = mockWs()
@@ -352,6 +397,28 @@ describe('setupWss — connection handling', () => {
     ws2.emit('message', JSON.stringify({ type: 'recording_check', open: true }))
     const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterResync.peers.find(p => p.name === 'Host').checking).toBe(true)
+  })
+
+  it('recording_check.turn is stored on the room presence as checkTurn', () => {
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: true, turn: 'host' }))
+
+    for (const ws of [ws1, ws2]) {
+      const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
+      expect(presence.checkTurn).toBe('host')
+    }
+
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: false, turn: 'guest' }))
+    expect(ws2.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('guest')
+
+    ws2.emit('message', JSON.stringify({ type: 'recording_check', open: false, turn: 'passed' }))
+    expect(ws1.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('passed')
+
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: true, turn: 'mic' }))
+    expect(ws2.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('passed')
   })
 
   it('recording_check_preview is relayed to the other peer with the sender clientId and is not stored', () => {
@@ -553,5 +620,90 @@ describe('setupWss — transcript_activity (interim-speech "something\'s coming"
       type: 'transcript_activity',
       active: true
     })
+  })
+})
+
+describe('setupWss — recording_session (synced recording session)', () => {
+  let wss, host, guest
+
+  function session(ws, phase) {
+    ws.emit('message', JSON.stringify({ type: 'recording_session', phase }))
+  }
+
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    host = mockWs()
+    guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    host.sent.length = 0
+    guest.sent.length = 0
+  })
+
+  it('relays host start to the other peer as recording_session recording', () => {
+    session(host, 'recording')
+    expect(guest.sent.filter((m) => m.type === 'recording_session')).toEqual([
+      { type: 'recording_session', phase: 'recording' }
+    ])
+    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  })
+
+  it('relays host stop to the other peer as recording_session idle', () => {
+    session(host, 'recording')
+    host.sent.length = 0
+    guest.sent.length = 0
+    session(host, 'idle')
+    expect(guest.sent.filter((m) => m.type === 'recording_session')).toEqual([
+      { type: 'recording_session', phase: 'idle' }
+    ])
+  })
+
+  it('refuses a guest start — error to the guest, no session message to the host', () => {
+    session(guest, 'recording')
+    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
+    expect(guest.sent.find((m) => m.type === 'error').message).toBe(
+      'Only the host can control the recording session.'
+    )
+    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
+    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  })
+
+  it('a guest stop after a real host start does not desync the session', () => {
+    session(host, 'recording')
+    host.sent.length = 0
+    guest.sent.length = 0
+    session(guest, 'idle')
+    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
+    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
+    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1')
+    join(rejoining, 'Guest', 'c2')
+    expect(rejoining.sent.filter((m) => m.type === 'recording_session')).toEqual([
+      { type: 'recording_session', phase: 'recording' }
+    ])
+  })
+
+  it('replays the current session phase to a peer that rejoins', () => {
+    session(host, 'recording')
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1')
+    join(rejoining, 'Guest', 'c2')
+    expect(rejoining.sent.filter((m) => m.type === 'recording_session')).toEqual([
+      { type: 'recording_session', phase: 'recording' }
+    ])
+  })
+
+  it('ignores an unknown session phase from the host — no relay, no stored phase', () => {
+    session(host, 'paused')
+    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1')
+    join(rejoining, 'Guest', 'c2')
+    expect(rejoining.sent.some((m) => m.type === 'recording_session')).toBe(false)
   })
 })

@@ -42,16 +42,16 @@ duplicated).
 **Blocked by:** None — fully independent, can ship in parallel with
 everything else in this line.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Normal case (upload complete or not yet started/recording) shows
+- [x] Normal case (upload complete or not yet started/recording) shows
       reassurance copy: no manual send-it-yourself expected.
-- [ ] Incomplete-upload case still shows the existing warning, unchanged
+- [x] Incomplete-upload case still shows the existing warning, unchanged
       in substance.
-- [ ] Both `exit-guard.js` and the `+page.svelte` leave-confirmation are
+- [x] Both `exit-guard.js` and the `+page.svelte` leave-confirmation are
       updated consistently; any other duplicate of this wording found by
       grep is updated too.
-- [ ] TDD on the seams above.
-- [ ] Coverage: complete / incomplete / no-recording-yet states.
-- [ ] Docs: `CONTEXT.md`'s **Listen-back check** / server-copy glossary
+- [x] TDD on the seams above.
+- [x] Coverage: complete / incomplete / no-recording-yet states.
+- [x] Docs: `CONTEXT.md`'s **Listen-back check** / server-copy glossary
       entries cross-reference this framing so it isn't re-litigated later.
