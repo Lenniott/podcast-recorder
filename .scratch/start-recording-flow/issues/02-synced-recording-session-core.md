@@ -28,7 +28,7 @@ Start button.
 `registerResync` pattern already used for other cross-peer state (see the
 existing Recording-pill-after-reconnect lesson in AGENTS.md: any state
 true locally but not yet server-known must re-announce on reconnect,
-registered via `room.registerResync(fn)` — do not hand-roll a one-off
+registered via `room.registerResync` — do not hand-roll a one-off
 fix for this new state). `src/lib/server/ws-rooms.js` for how existing
 message types (e.g. `clap`, presence) are routed/broadcast — model the
 new start/stop message the same way. `src/routes/rec/[slug]/+page.svelte`
@@ -71,26 +71,26 @@ build them here — build the plumbing they'll attach to.
 **Blocked by:** None — this is the foundational ticket; 03, 04, and 06
 depend on it.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Host's Start triggers recording start on both host and guest
+- [x] Host's Start triggers recording start on both host and guest
       browsers via one room-level message.
-- [ ] Host's Stop triggers recording stop on both browsers the same way.
-- [ ] A guest cannot trigger a synced start/stop for the room (matches
+- [x] Host's Stop triggers recording stop on both browsers the same way.
+- [x] A guest cannot trigger a synced start/stop for the room (matches
       "host controls recording" decision) — attempting to does not
       desync the host's view of session state.
-- [ ] Session-phase state re-announces itself on reconnect via
+- [x] Session-phase state re-announces itself on reconnect via
       `room.registerResync`, verified by a reconnect test, not just
       inspection.
-- [ ] With the room WebSocket disconnected, each peer's own local Start/
+- [x] With the room WebSocket disconnected, each peer's own local Start/
       Stop still fully works — recorded audio is produced, nothing hangs
       or silently no-ops.
-- [ ] No existing single-peer recording behaviour regresses (existing
+- [x] No existing single-peer recording behaviour regresses (existing
       `myPeerIsRecording`, `recordingState`, stats bar all still correct).
-- [ ] TDD on the seams above.
-- [ ] Coverage: connected/disconnected × host-triggered/guest-attempted ×
+- [x] TDD on the seams above.
+- [x] Coverage: connected/disconnected × host-triggered/guest-attempted ×
       reconnect-mid-session.
-- [ ] E2E: two-peer synced start/stop; solo fallback with WS down.
-- [ ] Docs: `CONTEXT.md` **Synced Recording Session** entry; `AGENTS.md`
+- [x] E2E: two-peer synced start/stop; solo fallback with WS down.
+- [x] Docs: `CONTEXT.md` **Synced Recording Session** entry; `AGENTS.md`
       "Keeping host and guest in sync" section updated to name this new
       state as one that must use `registerResync`.

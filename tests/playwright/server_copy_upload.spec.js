@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFileSync, statSync } from 'fs'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow, stopAsHost } from './helpers.js'
 
 /**
  * Server-copy upload/download, end to end (ticket 13). The unit tests
@@ -393,10 +393,6 @@ test('host and guest completed server copies contain every clap marker from the 
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(host)
-
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(guest)
 
   await expect(peerRow(host, 'Host')).toHaveAttribute('data-recording', 'true', { timeout: 15_000 })
@@ -414,7 +410,7 @@ test('host and guest completed server copies contain every clap marker from the 
   // protects the final worklet chunk: stopRecording() must keep accepting
   // chunks during its short "stopping" grace window before finalize.
   await Promise.all([
-    host.getByRole('button', { name: 'Stop Recording' }).click(),
+    stopAsHost(host),
     guest.getByRole('button', { name: 'Stop Recording' }).click()
   ])
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
@@ -460,7 +456,7 @@ test('host files modal keeps older takes downloadable after a second recording',
     await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
     await passRecordingCheck(host)
     await host.waitForTimeout(durationMs)
-    await host.getByRole('button', { name: 'Stop Recording' }).click()
+    await stopAsHost(host)
     await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
     await expect(peerRow(host, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
       'data-copy-state',

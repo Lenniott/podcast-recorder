@@ -18,14 +18,44 @@
   import PasswordGate from '$lib/PasswordGate.svelte'
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
   import DisplayNameGate from '$lib/DisplayNameGate.svelte'
+  import JoinExplainer from '$lib/recording/JoinExplainer.svelte'
+  import JoinMicStep from '$lib/recording/JoinMicStep.svelte'
   import RecordingRoom from '$lib/recording/RecordingRoom.svelte'
+  import {
+    JOIN_STEP,
+    afterLocalCopyChoice,
+    afterMicContinue,
+    createLocalCopyPicker,
+    joinStepAfterName,
+    openRecordingFile,
+    showsExplainer,
+    showsMic
+  } from '$lib/recording/join-step.js'
+  import {
+    OTHER_SIDE_UNCERTAIN,
+    RECORDING_SESSION_PHASE,
+    RECORDING_SESSION_TYPE,
+    STOP_BOTH_CONFIRM,
+    createRecordingSession,
+    usesSyncedRecordingSession
+  } from '$lib/recording/recording-session.js'
   import ServerCopyWaitModal from '$lib/server-copy/ServerCopyWaitModal.svelte'
   import { createRoomConnection } from '$lib/room/room-connection.js'
   import { createClockSync } from '$lib/recording/clock-sync.js'
-  import { createRecordingCheck } from '$lib/recording/recording-check.js'
+  import {
+    countdownSeconds,
+    createTakeMarker,
+    localTriggerDelayMs,
+    TAKE_MARKER_EDGE_END,
+    TAKE_MARKER_TYPE
+  } from '$lib/recording/take-marker.js'
+  import { createRecordingCheck, createCheckTurnSequence } from '$lib/recording/recording-check.js'
   import {
     encodeInt16PcmBase64,
-    decodeInt16PcmBase64
+    decodeInt16PcmBase64,
+    recordingCheckMessage,
+    isCheckTurn,
+    CHECK_TURN
   } from '$lib/recording/recording-check-share.js'
   import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
   import { createAudioEngine } from '$lib/recording/audio-engine.js'
@@ -141,14 +171,82 @@
   // ─── Record-start listen-back check ──────────────────────────────────
   let checkModalOpen = false
   let checkSentence = ''
+  let checkTurn = CHECK_TURN.idle
+  let bothTurnsPassed = false
+  let stayQuietRole = null
   const recordingCheck = createRecordingCheck()
+  const checkSequence = createCheckTurnSequence()
+  checkSequence.onBothTurnsPassed(() => {
+    bothTurnsPassed = true
+    checkTurn = checkSequence.turn
+    stayQuietRole = recordingState === 'recording'
+      ? checkSequence.stayQuietRole({ isHost: data.isHostClaim })
+      : null
+    takeMarker.requestStart({ synced: checkSequence.synced })
+    if (takeMarker.scheduledTriggerAtMs != null) flashClap(getJoinName())
+    startTakeCountdownTick()
+  })
   // Host-side object URLs of the other peer's listen-back clip, keyed by
   // that peer's clientId. Rebuilt from relayed PCM; never a server-copy file.
   let checkPreviewByClientId = {}
 
-  // ─── Clap state ─────────────────────────────────────────────────────
+  // ─── Clap / Take Marker state ───────────────────────────────────────
   let lastClapFrom = null
   let clapTimeout = null
+  let takeMarker = null
+  let takeReady = false
+  let takeStartSample = 0
+  let takeCountdownSec = 0
+  let takeCountdownTimer = null
+
+  function flashClap(from) {
+    lastClapFrom = from
+    clearTimeout(clapTimeout)
+    clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
+  }
+
+  /** The marker instant the countdown is counting toward: the tail once one is scheduled, else a pending start. */
+  function countdownTarget() {
+    if (takeMarker?.scheduledTailTriggerAtMs != null) {
+      return { triggerAtMs: takeMarker.scheduledTailTriggerAtMs, offset: takeMarker.scheduledTailOffset }
+    }
+    if (takeMarker?.scheduledTriggerAtMs != null && !takeMarker.takeReady) {
+      return { triggerAtMs: takeMarker.scheduledTriggerAtMs, offset: takeMarker.scheduledOffset }
+    }
+    return null
+  }
+
+  function syncTakeMarkerUi() {
+    takeReady = !!takeMarker?.takeReady
+    takeStartSample = takeMarker?.startSample ?? 0
+    const target = countdownTarget()
+    takeCountdownSec = target ? countdownSeconds(target.triggerAtMs, target.offset) : 0
+  }
+
+  function startTakeCountdownTick() {
+    clearInterval(takeCountdownTimer)
+    syncTakeMarkerUi()
+    if (!countdownTarget()) {
+      takeCountdownTimer = null
+      return
+    }
+    takeCountdownTimer = setInterval(() => {
+      syncTakeMarkerUi()
+      if (!countdownTarget() || takeCountdownSec === 0) {
+        clearInterval(takeCountdownTimer)
+        takeCountdownTimer = null
+      }
+    }, 100)
+  }
+
+  function resetTakeMarker() {
+    clearInterval(takeCountdownTimer)
+    takeCountdownTimer = null
+    takeMarker?.reset()
+    takeReady = false
+    takeStartSample = 0
+    takeCountdownSec = 0
+  }
 
   // ─── Clock sync ──────────────────────────────────────────────────────
   // Offset between this client's Date.now() and the server's Date.now().
@@ -167,7 +265,12 @@
 
   // Browser capability check — File System Access API is Blink only
   // Check for the actual API rather than sniffing the UA string
-  const browserSupported = browser ? ('showSaveFilePicker' in window) : true
+  const browserSupported = browser ? ('showDirectoryPicker' in window) : true
+  const localCopyPicker = createLocalCopyPicker({
+    showDirectoryPicker: (options) => window.showDirectoryPicker(options)
+  })
+  let joinStep = joinStepAfterName({ browserSupported })
+  let choosingLocalCopy = false
   // TEMP DEBUG FLAG: append ?debugReconnectMarker=1 while diagnosing mic-switch sync.
   const debugReconnectMarker = browser
     ? new URLSearchParams(window.location.search).get('debugReconnectMarker') === '1'
@@ -281,10 +384,14 @@
       "Your recording is already saved on this device — you'll need to send that file to the host another way."
     )
   }
-  // Single source of truth for both severity tiers of the exit guard — see
-  // $lib/recording/exit-guard.js for why active-recording always wins when both are
-  // true, so the two warnings can never collide or double-fire.
-  $: exitGuard = deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload })
+  // Single source of truth for exit-guard copy — see $lib/recording/exit-guard.js.
+  // Confirm only when blocking; the module still supplies reassurance copy for
+  // the complete/idle case so this page never forks those strings.
+  $: exitGuard = deriveExitGuard({
+    hasActiveLocalRecording,
+    hasIncompleteServerCopyUpload,
+    serverCopyUploadState
+  })
   $: hasBlockingExitWork = exitGuard.blocking
   $: gainDb    = gainValue > 0 ? 20 * Math.log10(gainValue) : -Infinity
   $: meterPct  = dbToMeterPct(meterFillDb)
@@ -311,6 +418,22 @@
   function getJoinName() {
     const n = (myName || '').trim()
     return n || 'Guest'
+  }
+
+  async function chooseLocalCopyLocation() {
+    choosingLocalCopy = true
+    try {
+      const directory = await localCopyPicker.choose()
+      joinStep = afterLocalCopyChoice({ browserSupported, handle: directory })
+    } catch (e) {
+      alert(`Could not open folder: ${e.message}`)
+    } finally {
+      choosingLocalCopy = false
+    }
+  }
+
+  function continueFromMic() {
+    joinStep = afterMicContinue()
   }
 
   function persistParticipantName() {
@@ -466,6 +589,7 @@
       const ev = pendingClaps.shift()
       injectClap(ev.from, ev.triggerAtMs)
     }
+    takeMarker?.onEngineReady()
     waveformRenderer.start()
   }
 
@@ -555,15 +679,39 @@
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
   }
 
-  function startRecordingCheck() {
-    recordingCheck.start()
-    checkModalOpen = recordingCheck.open
-    checkSentence = recordingCheck.sentence
-    sendRecordingCheck(true)
+  function usesSequencedCheck() {
+    const otherPresent = peers.some((p) => p.clientId && p.clientId !== clientId)
+    if (data.isHostClaim) {
+      return usesSyncedRecordingSession({ wsStatus, isHost: true }) && otherPresent
+    }
+    return recordingSession?.phase() === RECORDING_SESSION_PHASE.recording
   }
 
-  function sendRecordingCheck(open) {
-    room.send({ type: 'recording_check', open: !!open })
+  function syncCheckTurnUi() {
+    const isHost = !!data.isHostClaim
+    const wantOpen = recordingState === 'recording' && checkSequence.shouldOpenOwnCheck({ isHost })
+    if (wantOpen && !recordingCheck.open) recordingCheck.start()
+    if (!wantOpen && recordingCheck.open) recordingCheck.close()
+    checkModalOpen = recordingCheck.open
+    checkSentence = recordingCheck.sentence
+    checkTurn = checkSequence.turn
+    bothTurnsPassed = checkSequence.bothTurnsPassed
+    stayQuietRole = recordingState === 'recording'
+      ? checkSequence.stayQuietRole({ isHost })
+      : null
+  }
+
+  function startRecordingCheck() {
+    checkSequence.start({ synced: usesSequencedCheck() })
+    syncCheckTurnUi()
+    sendRecordingCheck(recordingCheck.open)
+  }
+
+  function sendRecordingCheck(open, { includeTurn = true } = {}) {
+    room.send(recordingCheckMessage({
+      open: !!open,
+      turn: includeTurn ? checkSequence.turn : undefined
+    }))
   }
 
   function sendRecordingCheckPreview() {
@@ -615,17 +763,45 @@
 
   function confirmRecordingCheck() {
     recordingCheck.confirm()
-    checkModalOpen = recordingCheck.open
-    checkSentence = recordingCheck.sentence
-    sendRecordingCheck(false)
+    checkSequence.confirm({ isHost: !!data.isHostClaim })
+    syncCheckTurnUi()
+    sendRecordingCheck(recordingCheck.open)
   }
 
   async function rejectRecordingCheck() {
     recordingCheck.reject()
-    checkModalOpen = recordingCheck.open
-    checkSentence = recordingCheck.sentence
-    sendRecordingCheck(false)
-    await stopRecording()
+    checkSequence.reject({ isHost: !!data.isHostClaim })
+    checkModalOpen = false
+    if (!(await restartOnNextAttempt())) {
+      syncCheckTurnUi()
+      sendRecordingCheck(recordingCheck.open)
+    }
+  }
+
+  // Serialises a retake roll with stopRecording so Stop never finalizes a
+  // writer the roll is already closing.
+  let attemptRoll = Promise.resolve(true)
+
+  /**
+   * A rejected Check Turn: the current attempt's WAV is finalized and left
+   * on disk, the next attempt opens in the same folder, and the check
+   * sequence starts again on that file. Recording state stays 'recording'
+   * throughout, so peers never see a stop/start flicker.
+   */
+  async function restartOnNextAttempt() {
+    if (recordingState !== 'recording' || !captureWriter) return false
+    attemptRoll = (async () => {
+      await finalizeLocalCopy()
+      return openNextAttempt()
+    })()
+    if (!(await attemptRoll)) {
+      await stopRecording()
+      return true
+    }
+    if (recordingState !== 'recording') return true
+    wsNotifyState('recording')
+    startRecordingCheck()
+    return true
   }
 
   async function startRecording() {
@@ -639,32 +815,43 @@
       }
     }
     await audioEngine.ensureRunning()
-    if (!('showSaveFilePicker' in window)) {
-      alert('Your browser does not support the File System Access API.\nPlease use Chrome or Edge.')
-      return
-    }
 
-    // Prompt user to pick save location
-    let fileHandle
+    if (!(await openNextAttempt())) return
+
+    recordingState = 'recording'
+    recordingTimer = setInterval(() => recordingSeconds++, 1000)
+    wsNotifyState('recording')
+    startRecordingCheck()
+    // Last: purely additive, and transcriptCapture never throws (see its
+    // own doc comment) — placed after every write-path-critical step above
+    // has already completed.
+    transcriptCapture.start()
+  }
+
+  /**
+   * Opens the next Local Copy attempt in the join folder and points the
+   * capture writer, server copy, and Take Marker at it. Shared by
+   * startRecording and a retake roll so both write through one path.
+   */
+  async function openNextAttempt() {
+    let attempt
+    let writable
     try {
-      const safeParticipant = (myName || 'guest').replace(/[^a-z0-9]/gi, '-').toLowerCase()
-      const safeName = data.roomName.replace(/[^a-z0-9]/gi, '-').toLowerCase()
-      fileHandle = await window.showSaveFilePicker({
-        suggestedName: `${safeParticipant}-${safeName}-${new Date().toISOString().slice(0,10)}.wav`,
-        types: [{ description: 'WAV Audio File', accept: { 'audio/wav': ['.wav'] } }]
+      attempt = await localCopyPicker.openNext({
+        participantName: getJoinName(),
+        roomName: data.roomName
       })
+      writable = await openRecordingFile(attempt.fileHandle)
     } catch (e) {
-      if (e.name === 'AbortError') return // user cancelled
-      alert(`Could not open file: ${e.message}`)
-      return
+      alert(e.message || `Could not open file: ${e.message}`)
+      return false
     }
-
-    fileWritable = await fileHandle.createWritable()
-    activeFileHandle = fileHandle
+    fileWritable = writable
+    activeFileHandle = attempt.fileHandle
     recordingSampleRate = audioEngine.sampleRate
 
     // Write placeholder WAV header (will patch at end with real size)
-    await fileWritable.write(buildWavHeader(0, recordingSampleRate))
+    await writable.write(buildWavHeader(0, recordingSampleRate))
     bytesWritten = 44
     audioEngine.clearPendingGap() // any gap before "recording" started isn't ours to backfill
 
@@ -678,33 +865,58 @@
     serverCopyUploadPercent = 0
     serverCopyFailureAnnounced = false
     sendServerCopyProgress(deriveServerCopyDisplay(null), { force: true })
-    serverCopyUpload = createServerCopyUpload({
+    // A rejected attempt's upload keeps finishing in the background; only
+    // the current attempt's upload may drive this take's status.
+    const upload = createServerCopyUpload({
       slug: data.slug,
       clientId,
       takeId: serverCopyTakeId,
       sampleRate: recordingSampleRate,
-      onProgress: handleServerCopyProgress,
+      onProgress: (status) => {
+        if (upload === serverCopyUpload) handleServerCopyProgress(status)
+      },
       token: serverCopyToken
     })
+    serverCopyUpload = upload
     startServerCopyUploadWhenReady()
 
     captureWriter = createCaptureWriter({
       sampleRate: recordingSampleRate,
-      write: (buf) => fileWritable.write(buf),
+      write: (buf) => writable.write(buf),
       onWritten: handleWritten
     })
+    resetTakeMarker()
 
-    recordingState = 'recording'
     recordingSeconds = 0
     recordingStartedAtMs = Date.now()
+    return true
+  }
 
-    recordingTimer = setInterval(() => recordingSeconds++, 1000)
-    wsNotifyState('recording')
-    startRecordingCheck()
-    // Last: purely additive, and transcriptCapture never throws (see its
-    // own doc comment) — placed after every write-path-critical step above
-    // has already completed.
-    transcriptCapture.start()
+  /**
+   * Drains the capture writer, patches the WAV header with the real data
+   * size, and closes the file. The bytes stay on disk as written.
+   */
+  async function finalizeLocalCopy() {
+    const writer = captureWriter
+    const writable = fileWritable
+    if (!writer || !writable) return
+    const { dataByteCount } = await writer.stop()
+    captureWriter = null
+
+    // The explicit "final length is now known" signal — see
+    // $lib/server-copy/server-copy-upload.js's finish() doc. Must come after local
+    // write confirmation (writer.stop() above), never before. Not
+    // awaited: a slow/failing/rejected server copy must never delay or
+    // gate the local WAV finalize below (that's ticket 07's blocking-modal
+    // job, not this one, and only in the UI layer, never here).
+    serverCopyUpload?.finish()
+
+    await writable.seek(0)
+    await writable.write(buildWavHeader(dataByteCount, recordingSampleRate))
+    await writable.close()
+
+    activeFileHandle = null
+    fileWritable = null
   }
 
   async function stopRecording() {
@@ -721,11 +933,12 @@
     // Stopping via the regular Stop button while the listen-back check is
     // still up (not via its own "something's wrong" path) should still
     // close it cleanly rather than leave it showing over an idle room.
-    if (checkModalOpen) {
+    if (checkModalOpen || checkSequence.turn !== CHECK_TURN.idle) {
+      const hostClearsTurn = !!data.isHostClaim && checkSequence.synced
       recordingCheck.close()
-      checkModalOpen = recordingCheck.open
-      checkSentence = recordingCheck.sentence
-      sendRecordingCheck(false)
+      checkSequence.close()
+      syncCheckTurnUi()
+      sendRecordingCheck(false, { includeTurn: hostClearsTurn })
     }
 
     // Record through one final short grace window so a nearly-full worklet
@@ -734,34 +947,41 @@
     // 'stopping'; otherwise this wait would merely discard the chunk it was
     // supposed to protect.
     await new Promise(r => setTimeout(r, 300))
-    const { dataByteCount } = await captureWriter.stop()
-    captureWriter = null
-
-    // The explicit "final length is now known" signal — see
-    // $lib/server-copy/server-copy-upload.js's finish() doc. Must come after local
-    // write confirmation (captureWriter.stop() above), never before. Not
-    // awaited: a slow/failing/rejected server copy must never delay or
-    // gate the local WAV finalize below (that's ticket 07's blocking-modal
-    // job, not this one, and only in the UI layer, never here).
-    serverCopyUpload?.finish()
-
-    // Patch the WAV header with the real data size
-    await fileWritable.seek(0)
-    await fileWritable.write(buildWavHeader(dataByteCount, recordingSampleRate))
-    await fileWritable.close()
-
-    activeFileHandle = null
-    fileWritable = null
+    await attemptRoll
+    await finalizeLocalCopy()
+    // The join folder stays chosen for the rest of this room visit — Start
+    // Recording must not prompt for a save location again.
+    resetTakeMarker()
     recordingState = 'idle'
   }
 
-  async function toggleRecording() {
-    if (recordingState === 'idle') {
-      await startRecording()
-    } else if (recordingState === 'recording') {
-      await stopRecording()
-    }
+  let recordingSession = null
+  let stopConfirmOpen = false
+  let otherSideUncertain = false
+
+  function syncStopUi() {
+    stopConfirmOpen = !!recordingSession?.awaitingConfirm
+    otherSideUncertain = !!recordingSession?.otherSideUncertain
   }
+
+  async function toggleRecording() {
+    await recordingSession.onToggle()
+    syncStopUi()
+  }
+
+  function confirmSyncedStop() {
+    recordingSession.confirmStop()
+    syncStopUi()
+    startTakeCountdownTick()
+  }
+
+  function cancelSyncedStop() {
+    recordingSession.cancelStop()
+    syncStopUi()
+  }
+
+  // A take that ended some other way (e.g. a failed retake roll) has nothing left to confirm.
+  $: if (stopConfirmOpen && recordingState !== 'recording') cancelSyncedStop()
 
   // ───────────────────────────────────────────────────────────────────
   // CLAP
@@ -781,13 +1001,9 @@
   }
 
   function injectClap(from, triggerAtMs = null) {
-    const delayMs = Number.isFinite(triggerAtMs)
-      ? Math.max(0, triggerAtMs - (Date.now() + clockOffset))
-      : 0
+    const delayMs = localTriggerDelayMs(triggerAtMs, clockOffset)
     audioEngine.scheduleClapTone(delayMs)
-    lastClapFrom = from
-    clearTimeout(clapTimeout)
-    clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
+    flashClap(from)
   }
 
   function injectReconnectMarker() {
@@ -830,6 +1046,19 @@
       if (msg.type === 'presence') {
         peers = msg.peers
         pruneCheckPreviews(msg.peers)
+        if (isCheckTurn(msg.checkTurn) && msg.checkTurn !== checkSequence.turn) {
+          const wasOpen = recordingCheck.open
+          const rejectedOnGuestTurn = checkSequence.turn === CHECK_TURN.guest
+            && msg.checkTurn === CHECK_TURN.host
+            && recordingState === 'recording'
+          checkSequence.applyRemote(msg.checkTurn)
+          if (rejectedOnGuestTurn) {
+            void restartOnNextAttempt()
+          } else {
+            syncCheckTurnUi()
+            if (recordingCheck.open && !wasOpen) sendRecordingCheck(true)
+          }
+        }
       }
       // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
       // Guard on clientId anyway: never let a stale/mismatched token from
@@ -845,11 +1074,20 @@
       if (msg.type === 'clap') {
         // Flash even when the audio graph isn't up yet (no mic). Queue the
         // tone for when the worklet starts; injectClap does both.
-        lastClapFrom = msg.from
-        clearTimeout(clapTimeout)
-        clapTimeout = setTimeout(() => lastClapFrom = null, 3000)
-        if (!audioEngineReady) pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
-        else injectClap(msg.from, msg.triggerAtMs)
+        if (!audioEngineReady) {
+          flashClap(msg.from)
+          pendingClaps.push({ from: msg.from, triggerAtMs: msg.triggerAtMs })
+        } else injectClap(msg.from, msg.triggerAtMs)
+      }
+      // A late tail echo after this file already closed (the host's 2500ms
+      // fallback) has nothing left to stop.
+      if (
+        msg.type === TAKE_MARKER_TYPE
+        && (msg.edge !== TAKE_MARKER_EDGE_END || recordingState === 'recording')
+      ) {
+        flashClap(msg.from)
+        takeMarker.receive({ triggerAtMs: msg.triggerAtMs, offset: clockOffset, edge: msg.edge })
+        startTakeCountdownTick()
       }
       if (msg.type === 'tabs_state') {
         roomTabs?.applyTabsState?.(msg)
@@ -915,6 +1153,7 @@
       // its collapse toggle when the panel is shut), not a tab-strip pill.
       if (msg.type === 'transcript_activity') researchPanel?.applyTranscriptActivity?.(msg)
       if (msg.type === 'recording_check_preview') applyCheckPreview(msg)
+      if (msg.type === RECORDING_SESSION_TYPE) void recordingSession.onMessage(msg)
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {
@@ -925,8 +1164,46 @@
   room.registerResync(() => {
     roomTabs?.resyncDuck?.()
   })
+  recordingSession = createRecordingSession({
+    send: (payload) => room.send(payload),
+    startLocal: startRecording,
+    stopLocal: stopRecording,
+    getRecordingState: () => recordingState,
+    isHost: () => !!data.isHostClaim,
+    getWsStatus: () => wsStatus,
+    requestTail: () => takeMarker.requestTail({ synced: true })
+  })
+  takeMarker = createTakeMarker({
+    send: (msg) => room.send(msg),
+    isHost: () => !!data.isHostClaim,
+    getWsStatus: () => wsStatus,
+    getEngineReady: () => audioEngineReady,
+    scheduleTone: (delayMs) => audioEngine.scheduleClapTone(delayMs),
+    getSamplesWritten: () => captureWriter?.samplesWritten ?? 0,
+    onTakeReady: ({ startSample }) => {
+      takeReady = true
+      takeStartSample = startSample
+      takeCountdownSec = 0
+      clearInterval(takeCountdownTimer)
+      takeCountdownTimer = null
+    },
+    onTail: (info) => {
+      takeCountdownSec = 0
+      clearInterval(takeCountdownTimer)
+      takeCountdownTimer = null
+      const stopped = recordingSession.onTail(info)
+      syncStopUi()
+      stopped
+        .catch((err) => console.error('Synced stop failed', err))
+        .finally(syncStopUi)
+    }
+  })
+
   room.registerResync(() => {
     if (recordingState === 'recording') wsNotifyState('recording')
+  })
+  room.registerResync(() => {
+    recordingSession.resync()
   })
   room.registerResync(() => {
     // The server forgets peer state across a dropped connection (a fresh
@@ -940,9 +1217,9 @@
     sendMicInfo(true)
   })
   room.registerResync(() => {
-    if (!checkModalOpen) return
-    sendRecordingCheck(true)
-    sendRecordingCheckPreview()
+    if (checkSequence.turn === CHECK_TURN.idle && !recordingCheck.open) return
+    sendRecordingCheck(!!recordingCheck.open)
+    if (recordingCheck.open) sendRecordingCheckPreview()
   })
   room.registerResync(() => {
     // A Comment submitted into a dropped socket is real, local, unsaved
@@ -1090,10 +1367,26 @@
 
 {#if !data.authenticated}
   <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName />
-{:else if !browserSupported}
-  <UnsupportedBrowserGate slug={data.slug} />
 {:else if nameGateShow}
   <DisplayNameGate roomName={data.roomName} formError={form?.error} bind:myName />
+{:else if joinStep === JOIN_STEP.unsupported}
+  <UnsupportedBrowserGate slug={data.slug} />
+{:else if showsExplainer(joinStep)}
+  <JoinExplainer choosing={choosingLocalCopy} onChooseSaveLocation={chooseLocalCopyLocation} />
+{:else if showsMic(joinStep)}
+  <JoinMicStep
+    {devices}
+    bind:selectedDeviceId
+    {micPermission}
+    {audioInitError}
+    {micFallback}
+    {micFallbackName}
+    bind:gainValue
+    {gainDb}
+    onChangeMic={changeMic}
+    onGainInput={updateGain}
+    onContinue={continueFromMic}
+  />
 {:else}
   <RecordingRoom
     bind:sidebarCollapsed
@@ -1131,12 +1424,14 @@
     {peakHoldDb}
     {isClipping}
     {lastClapFrom}
+    {takeCountdownSec}
     {recordingState}
     {canRecord}
     {myPeerIsRecording}
     {recordingSeconds}
     {bytesWritten}
     {checkPreviewByClientId}
+    {stayQuietRole}
     onToggleRecording={toggleRecording}
     onClap={sendClap}
     {formatTime}
@@ -1148,10 +1443,94 @@
 <RecordingCheckModal
   open={checkModalOpen}
   sentence={checkSentence}
+  quietRole={stayQuietRole || ''}
   {micLabel}
   onListen={buildCheckPreview}
   onConfirm={confirmRecordingCheck}
   onReject={rejectRecordingCheck}
 />
+<div
+  hidden
+  data-testid="check-turn"
+  data-check-turn={checkTurn}
+  data-both-turns-passed={bothTurnsPassed ? 'true' : 'false'}
+></div>
+<div
+  hidden
+  data-testid="take-marker"
+  data-take-ready={takeReady ? 'true' : 'false'}
+  data-take-start-sample={takeStartSample}
+></div>
+{#if stopConfirmOpen}
+  <div class="stop-confirm-overlay">
+    <div
+      class="stop-confirm-card"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="stop-confirm-title"
+      data-testid="stop-confirm"
+    >
+      <h2 id="stop-confirm-title">{STOP_BOTH_CONFIRM}</h2>
+      <div class="stop-confirm-actions">
+        <button type="button" class="btn-ghost" on:click={cancelSyncedStop}>Keep recording</button>
+        <button type="button" class="btn-primary" on:click={confirmSyncedStop}>Stop for both</button>
+      </div>
+    </div>
+  </div>
+{/if}
+{#if otherSideUncertain && recordingState === 'idle'}
+  <div class="other-side-uncertain" role="status" data-testid="other-side-uncertain">
+    {OTHER_SIDE_UNCERTAIN}
+  </div>
+{/if}
 <ServerCopyWaitModal open={showUploadWaitModal} percent={serverCopyUploadPercent} />
 {/if}
+
+<style>
+  .stop-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+  }
+
+  .stop-confirm-card {
+    background: var(--bg-elevated, #18181b);
+    border: 1px solid var(--border, #2a2a2e);
+    border-radius: 14px;
+    max-width: 420px;
+    width: 100%;
+    padding: 28px;
+    text-align: center;
+  }
+
+  .stop-confirm-card h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 20px;
+  }
+
+  .stop-confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+  }
+
+  .other-side-uncertain {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 900;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border, #2a2a2e);
+    background: var(--bg-elevated, #18181b);
+    color: var(--warn-text);
+    font-size: 13px;
+  }
+</style>

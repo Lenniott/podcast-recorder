@@ -54,21 +54,21 @@ to prove the handle survives from join through at least one
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Explainer screen shown at join, before mic selection, stating the
+- [x] Explainer screen shown at join, before mic selection, stating the
       local-copy/insurance framing from the README (not "this is your
       only backup," not silent about the server copy).
-- [ ] Save-location picker fires from this screen's own click, once.
-- [ ] Chosen handle is available to (and reused by) the recording-start
+- [x] Save-location picker fires from this screen's own click, once.
+- [x] Chosen handle is available to (and reused by) the recording-start
       path for the rest of the room visit; `startRecording()` no longer
       calls `showSaveFilePicker`.
-- [ ] Mic selection happens after the above, using existing device-list
+- [x] Mic selection happens after the above, using existing device-list
       UI, unchanged in behaviour.
-- [ ] Unsupported-browser path (`browserSupported` false) still surfaces
+- [x] Unsupported-browser path (`browserSupported` false) still surfaces
       the existing warning, just relocated sensibly in the new sequence.
-- [ ] TDD on the seams above; coverage on the moved picker call site.
-- [ ] E2E: full join → explainer → save → mic → room, single dialog only.
-- [ ] Docs: `CONTEXT.md` gets the **Local Copy** framing; `AGENTS.md`
+- [x] TDD on the seams above; coverage on the moved picker call site.
+- [x] E2E: full join → explainer → save → mic → room, single dialog only.
+- [x] Docs: `CONTEXT.md` gets the **Local Copy** framing; `AGENTS.md`
       updated wherever it currently implies the picker lives inside
       `startRecording()`.

@@ -42,7 +42,7 @@ export async function closeLiveSockets(page) {
 export async function stubYouTubeApi(page) {
   await page.addInitScript(() => {
     // Always stub — Chromium now ships File System Access, and a real picker
-    // would abort startRecording() (AbortError) so the record button never flips.
+    // would block the join step, so Start Recording never becomes reachable.
     // `seek` matters: stopRecording() calls fileWritable.seek(0) to patch the
     // WAV header with the real data size once recording stops. Real
     // FileSystemWritableFileStream has it; earlier versions of this stub
@@ -50,13 +50,38 @@ export async function stubYouTubeApi(page) {
     // Stop Recording via the UI button until server_copy_upload.spec.js —
     // without it, seek() throws, stopRecording()'s promise rejects, and
     // recordingState gets stuck at 'stopping' ("Finishing…") forever.
-    window.showSaveFilePicker = async () => ({
-      createWritable: async () => ({
-        write: async () => {},
-        seek: async () => {},
-        close: async () => {}
-      })
-    })
+    // The Local Copy is a folder: every recording attempt asks it for a new
+    // file. __prLocalCopyRequests records every getFileHandle name (including
+    // existence probes); __prLocalCopyFiles is the files actually created,
+    // in order.
+    window.__prDirectoryPickerCalls = 0
+    window.__prLocalCopyRequests = []
+    window.__prLocalCopyFiles = []
+    const files = new Map()
+    const directory = {
+      async getFileHandle(name, options) {
+        window.__prLocalCopyRequests.push(name)
+        if (!files.has(name)) {
+          if (!options?.create) {
+            throw new DOMException(`${name} not found`, 'NotFoundError')
+          }
+          window.__prLocalCopyFiles.push(name)
+          files.set(name, {
+            name,
+            createWritable: async () => ({
+              write: async () => {},
+              seek: async () => {},
+              close: async () => {}
+            })
+          })
+        }
+        return files.get(name)
+      }
+    }
+    window.showDirectoryPicker = async () => {
+      window.__prDirectoryPickerCalls += 1
+      return directory
+    }
 
     class FakePlayer {
       constructor(_el, opts) {
@@ -215,10 +240,14 @@ export async function openCreateRoom(page) {
  * preview — so this retries Listen until a real chunk exists rather than
  * assuming one already has, wrapped in `expect(...).toPass()` rather than
  * a fixed sleep.
+ *
+ * On a synced two-peer start the checks are sequenced: the guest overlay
+ * is not shown until the host confirms. Call this on the host first.
  */
 export async function passRecordingCheck(page) {
   const overlay = page.locator('.check-overlay')
   await expect(overlay).toBeVisible()
+  await expect(page.getByTestId('check-quiet')).toHaveCount(0)
   const listenBtn = page.getByRole('button', { name: /Listen back/ })
   const confirmBtn = page.getByRole('button', { name: /Yes, continue/ })
   await expect(async () => {
@@ -227,6 +256,24 @@ export async function passRecordingCheck(page) {
   }).toPass({ timeout: 10_000 })
   await confirmBtn.click()
   await expect(overlay).toBeHidden()
+}
+
+/**
+ * A connected host's Stop asks "stop for both?" first, then the file closes
+ * on the tail Take Marker about two seconds later — even with no guest in
+ * the room. Callers still wait for Start Recording themselves.
+ */
+export async function stopAsHost(page) {
+  await page.getByRole('button', { name: 'Stop Recording' }).click()
+  await page.getByRole('button', { name: 'Stop for both' }).click()
+}
+
+export async function expectCheckQuiet(page, whoseTurn) {
+  const copy = whoseTurn === 'guest'
+    ? "It's the guest's turn, please stay quiet."
+    : "It's the host's turn, please stay quiet."
+  await expect(page.getByTestId('check-quiet')).toHaveText(copy)
+  await expect(page.locator('.check-overlay')).toHaveCount(0)
 }
 
 export async function createRoom(page, { name, password, hostDisplayName = 'Host', guestAiAllowed = false }) {
@@ -459,7 +506,29 @@ export function presenceRow(page, name) {
  * responding (the two are separate processes) — the room's own 3s
  * auto-reconnect needs a couple of cycles to land in that window.
  */
+/**
+ * After display name, join shows Local Copy explainer + save picker, then
+ * the mic step, then the room. createRoom/joinAsGuest used to assume the
+ * room was next; this walks those gates when they're present so every
+ * existing spec still lands on Start Recording. The save click hits the
+ * stubYouTubeApi showDirectoryPicker stub (required user gesture).
+ */
+export async function completeJoinIfNeeded(page) {
+  const saveBtn = page.getByRole('button', { name: 'Choose save location' })
+  const micContinue = page.getByRole('button', { name: 'Continue to room' })
+  const roomTabs = page.locator('.room-tabs')
+  await expect(saveBtn.or(micContinue).or(roomTabs)).toBeVisible({ timeout: 30_000 })
+  if (await saveBtn.isVisible()) {
+    await saveBtn.click()
+    await expect(micContinue).toBeVisible({ timeout: 15_000 })
+  }
+  if (await micContinue.isVisible()) {
+    await micContinue.click()
+  }
+}
+
 export async function roomTabsReady(page) {
+  await completeJoinIfNeeded(page)
   // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
   // tab_state WS message is applied) rather than the Notes surface's
   // rendered visibility — it can be attached-but-not-yet-laid-out

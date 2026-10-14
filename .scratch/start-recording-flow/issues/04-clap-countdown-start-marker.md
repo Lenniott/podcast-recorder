@@ -52,21 +52,21 @@ this ticket introduces/extends — don't fork a second implementation.
 
 **Blocked by:** 03 — Turn-taking mic check on synced start.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Clap + countdown fires automatically and synced, once, when ticket
+- [x] Clap + countdown fires automatically and synced, once, when ticket
       03 signals both turns passed — no manual button press required for
       this specific moment (the existing manual Clap button is untouched
       for its other, general-purpose use).
-- [ ] The tone lands at the same physical instant on host and guest,
+- [x] The tone lands at the same physical instant on host and guest,
       using the existing clock-offset/`triggerAtMs` mechanism, not a new
       timing approach.
-- [ ] Audio written before the marker is never presented as part of "the
+- [x] Audio written before the marker is never presented as part of "the
       take," without deleting or rewriting anything already on disk.
-- [ ] Handles the not-yet-ready-audio-engine case the same way the
+- [x] Handles the not-yet-ready-audio-engine case the same way the
       existing `pendingClaps` queue does for the manual clap.
-- [ ] TDD on the seams above.
-- [ ] Coverage: engine-ready / not-yet-ready × trigger-received-once.
-- [ ] E2E: full sequence from ticket 03 through the synced marker.
-- [ ] Docs: `CONTEXT.md` **Take Marker** entry, explicitly noting it is
+- [x] TDD on the seams above.
+- [x] Coverage: engine-ready / not-yet-ready × trigger-received-once.
+- [x] E2E: full sequence from ticket 03 through the synced marker.
+- [x] Docs: `CONTEXT.md` **Take Marker** entry, explicitly noting it is
       the same mechanism the manual Clap and Watch Together already use.

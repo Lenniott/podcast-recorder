@@ -1,5 +1,6 @@
 <script>
   import { Clap } from "$lib/icons";
+  import TakeCountdown from "./TakeCountdown.svelte";
   import {
     METER_MIN,
     METER_TICKS,
@@ -13,6 +14,7 @@
   export let peakHoldDb = METER_MIN;
   export let isClipping = false;
   export let lastClapFrom = null;
+  export let takeCountdownSec = 0;
   export let compact = false;
   export let live = false;
 
@@ -26,6 +28,7 @@
 
 <div class="waveform-wrap" class:compact data-testid={live ? "live-waveform" : undefined}>
   <canvas bind:this={paintNode}></canvas>
+  <TakeCountdown remaining={takeCountdownSec} />
 
   <div class="db-meter-wrap">
     <div class="db-meter-track">

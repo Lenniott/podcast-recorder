@@ -20,6 +20,27 @@
  *   { type: 'join', name, clientId }     — announce on connect
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
+ *   { type: 'take_marker' }              — same as clap (timestamp, from,
+ *                                          triggerAtMs) with a longer lead so
+ *                                          both peers can show a countdown.
+ *                                          Take start after both Check Turns
+ *                                          pass (3000ms lead).
+ *   { type: 'take_marker', edge: 'end' } — the tail: 2000ms lead, echoed with
+ *                                          edge: 'end'. Any other edge is
+ *                                          treated as a start.
+ *   { type: 'recording_session', phase }
+ *                                        — host-only Synced Recording Session.
+ *                                          phase is 'recording' | 'idle'. The
+ *                                          server relays to every *other* peer
+ *                                          in the room and remembers the phase
+ *                                          so a reconnecting peer is replayed
+ *                                          the current session (same class of
+ *                                          join replay as yt_duck). A non-host
+ *                                          origin is refused with `error` and
+ *                                          must not change stored phase — a
+ *                                          guest Start is local-only. This is
+ *                                          not recording_state (that's one
+ *                                          peer's own write flag).
  *   { type: 'recording_state', state, startedAt? }
  *                                        — 'recording' | 'stopped'. startedAt is the
  *                                          recorder's Date.now() when this take began
@@ -37,10 +58,18 @@
  *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
  *                                          and included in presence. Re-announce on
  *                                          registerResync after reconnect (server forgets it).
- *   { type: 'recording_check', open }    — listen-back modal is up for this peer.
- *                                          Stored as presence `checking` (ephemeral,
- *                                          same as mic_info: forgotten on reconnect
- *                                          until registerResync). Not the audio itself.
+ *   { type: 'recording_check', open, turn? }
+ *                                        — listen-back modal is up for this peer
+ *                                          (`open` → presence `checking`). Optional
+ *                                          `turn` is the room Check Turn
+ *                                          (`idle` | `host` | `guest` | `passed`),
+ *                                          stored on the room (like recording_session)
+ *                                          and included on presence as `checkTurn`
+ *                                          so the other peer can stay quiet vs open
+ *                                          their own modal. Ephemeral: forgotten
+ *                                          when the last peer leaves; a live turn
+ *                                          must be re-announced on registerResync.
+ *                                          Not the audio itself.
  *   { type: 'recording_check_preview', sampleRate, pcm }
  *                                        — one-shot Int16 PCM (base64) from confirmed
  *                                          writes during the listen-back check. Relayed
@@ -291,7 +320,10 @@
  *                                          spend a second lookup.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}] }
+ *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}],
+ *                              checkTurn? }
+ *                                        — `checkTurn` is the room Check Turn from
+ *                                          the latest valid recording_check.turn.
  *   { type: 'recording_check_preview', clientId, sampleRate, pcm }
  *                                        — relay of the sender's listen-back clip;
  *                                          `clientId` is the recorder, not the listener.
@@ -308,7 +340,22 @@
  *                                          and the room's session cookie is identical for
  *                                          every participant.
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
- *   { type: 'clap',            timestamp, from }
+ *   { type: 'clap',            timestamp, from, triggerAtMs }
+ *   { type: 'take_marker',     timestamp, from, triggerAtMs, edge? }
+ *                                        — same clock-offset scheduling as clap;
+ *                                          longer lead for a visible countdown.
+ *                                          edge is 'end' only for the tail.
+ *   { type: 'recording_session', phase }
+ *                                        — relay/replay of the host's Synced
+ *                                          Recording Session. Sent to peers
+ *                                          other than the host who just
+ *                                          authored it, and replayed on join
+ *                                          while a phase is stored for the
+ *                                          slug. Clients drive their existing
+ *                                          local start/stop path from this;
+ *                                          they must not flip UI to recording
+ *                                          unless that path actually began
+ *                                          writing.
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'transcript_activity', active }
@@ -485,7 +532,19 @@ import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
-import { decodeInt16PcmBase64 } from '../recording/recording-check-share.js'
+import { decodeInt16PcmBase64, isCheckTurn } from '../recording/recording-check-share.js'
+import {
+  RECORDING_SESSION_HOST_ONLY,
+  RECORDING_SESSION_TYPE,
+  isRecordingSessionPhase,
+  recordingSessionMessage
+} from '../recording/recording-session.js'
+import {
+  TAKE_MARKER_EDGE_END,
+  TAKE_MARKER_LEAD_MS,
+  TAKE_MARKER_TAIL_LEAD_MS,
+  TAKE_MARKER_TYPE
+} from '../recording/take-marker.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -498,6 +557,14 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 //         joinedAt, talking, transcribing, serverCopyState, serverCopyPercent,
 //         serverCopyTakeId, micLabel, checking }
 const rooms = new Map()
+
+// slug -> 'idle' | 'recording'. Room-level Synced Recording Session, set
+// only by a host-originated recording_session message. Forgotten when the
+// room's last peer leaves (the Map entry goes with the live room).
+const recordingSessions = new Map()
+
+// slug -> Check Turn. Set by recording_check.turn; forgotten with the room.
+const checkTurns = new Map()
 
 // A room's tabs/text/video, Transcript (ticket 01), per-tab Research
 // Assistant entries (ticket 04), and per-tab Annotations (ADR-0008) — all
@@ -548,6 +615,7 @@ function sendPresence(slug) {
     checking: !!p.checking
   }))
   const msg = { type: 'presence', peers }
+  if (checkTurns.has(slug)) msg.checkTurn = checkTurns.get(slug)
   for (const peer of room.values()) send(peer.ws, msg)
 }
 
@@ -825,6 +893,8 @@ function replayAnnotationsTo(ws, content) {
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
+  recordingSessions.clear()
+  checkTurns.clear()
   roomStateStore._resetForTests()
 }
 
@@ -944,6 +1014,9 @@ export function setupWss(wss) {
           replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
           send(ws, { type: 'transcript_activity', active: anyoneTranscribing(slug) })
+          if (recordingSessions.has(slug)) {
+            send(ws, recordingSessionMessage(recordingSessions.get(slug)))
+          }
           // Exclusive to this connection — never broadcast (see the
           // 'server_copy_token' protocol doc above and ticket 11). This is
           // the one channel that can prove "this connection owns
@@ -961,15 +1034,30 @@ export function setupWss(wss) {
         send(ws, { type: 'pong', seq: msg.seq, clientSentAt: msg.sentAt, serverReceivedAt: Date.now() })
       }
 
-      if (msg.type === 'clap' && clientId) {
+      if ((msg.type === 'clap' || msg.type === TAKE_MARKER_TYPE) && clientId) {
         // Broadcast a shared future trigger time to reduce per-client WS jitter.
+        const isTail = msg.type === TAKE_MARKER_TYPE && msg.edge === TAKE_MARKER_EDGE_END
+        const leadMs = isTail
+          ? TAKE_MARKER_TAIL_LEAD_MS
+          : msg.type === TAKE_MARKER_TYPE ? TAKE_MARKER_LEAD_MS : CLAP_LEAD_MS
         const event = {
-          type: 'clap',
+          type: msg.type,
           timestamp: new Date().toISOString(),
-          triggerAtMs: Date.now() + CLAP_LEAD_MS,
+          triggerAtMs: Date.now() + leadMs,
           from: peer.name
         }
+        if (isTail) event.edge = TAKE_MARKER_EDGE_END
         for (const p of room.values()) send(p.ws, event)
+      }
+
+      if (msg.type === RECORDING_SESSION_TYPE && clientId) {
+        if (peer.role !== 'host') {
+          send(ws, { type: 'error', message: RECORDING_SESSION_HOST_ONLY })
+          return
+        }
+        if (!isRecordingSessionPhase(msg.phase)) return
+        recordingSessions.set(slug, msg.phase)
+        broadcast(slug, recordingSessionMessage(msg.phase), clientId)
       }
 
       if (msg.type === 'recording_state' && clientId) {
@@ -1009,6 +1097,7 @@ export function setupWss(wss) {
 
       if (msg.type === 'recording_check' && clientId) {
         peer.checking = !!msg.open
+        if (isCheckTurn(msg.turn)) checkTurns.set(slug, msg.turn)
         sendPresence(slug)
       }
 
@@ -1363,6 +1452,8 @@ export function setupWss(wss) {
       room.delete(clientId)
       if (room.size === 0) {
         rooms.delete(slug)
+        recordingSessions.delete(slug)
+        checkTurns.delete(slug)
         roomStateStore.onParticipantLeft(slug)
       } else {
         recomputeRoles(room)

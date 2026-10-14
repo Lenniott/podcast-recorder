@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, stopAsHost } from './helpers.js'
 
 /**
  * Ticket 03 (research-assistant): voice capture wired to the Record
@@ -83,7 +83,7 @@ test('Start Recording starts speech recognition; a finalized utterance appears i
   await expect(page.locator('.transcript-line').first()).toContainText('Host')
   await expect(page.locator('.transcript-line').first()).toContainText('Hello from the test.')
 
-  await page.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopAsHost(page)
   await expect.poll(() => page.evaluate(() => window.__srStopCount || 0)).toBeGreaterThan(0)
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 
@@ -115,7 +115,7 @@ test('an interim (non-final) result is never added to the Transcript facet', asy
   await expect(page.getByText('No transcript yet')).toBeVisible()
   await expect(page.locator('.transcript-line')).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopAsHost(page)
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 
   await page.close()
@@ -141,7 +141,7 @@ test('a browser without SpeechRecognition still records normally, with no error 
   await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(page)
 
-  await page.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopAsHost(page)
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 
   expect(pageErrors).toEqual([])
@@ -195,7 +195,7 @@ test('an interim result shows a room-shared "transcript incoming" pulse to every
   await expect(host.locator('.transcript-activity-pulse')).toHaveCount(0)
   await expect(guest.locator('.transcript-activity-pulse')).toHaveCount(0)
 
-  await host.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopAsHost(host)
   await expect.poll(() => host.evaluate(() => window.__srStopCount || 0)).toBeGreaterThan(0)
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
 

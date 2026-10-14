@@ -1,10 +1,12 @@
 # Start recording flow
 
-Work the **frontier**: the lowest-numbered ticket whose blockers are done.
-If you are told "work on the start-recording-flow tickets," start at
-`issues/01` and continue only after that ticket's checklist is fully
-checked. Do not batch several tickets' implementations and then sprinkle
-tests on at the end.
+Work the **frontier**: the lowest-numbered ticket whose status is not
+`done`. There is none: 01–07 are all done, and this line is finished.
+
+One ticket at a time. The ticket names the module to deepen and the
+interface to test through. Follow its tracer bullets in order: one
+failing test, then the code that makes that test pass. Do not scaffold
+the whole feature and backfill tests.
 
 ## What this line is
 
@@ -60,17 +62,18 @@ not spread across ad hoc components.
   `hasIncompleteServerCopyUpload` in `+page.svelte`) is what the host
   actually uses, via the existing `ServerCopyFilesModal`. The guest never
   needs to send their local file anywhere unless that upload failed.
-- **The save-location picker (`showSaveFilePicker`) moves to room join**
-  and fires once. It cannot be pre-armed or fired without a direct user
-  gesture (browser constraint) — the join step's own click is that
-  gesture. The resulting `FileSystemFileHandle` is reused for every
-  take/retake in that room visit; `startRecording()` in `+page.svelte`
-  stops calling `showSaveFilePicker` itself.
+- **The save location is chosen once, at room join, from that screen's
+  own click** (the browser gesture the picker requires). Ticket 01
+  shipped this as `showSaveFilePicker`, which returns a
+  `FileSystemFileHandle` for one file. Ticket 05 changes the chosen
+  handle to a directory (`showDirectoryPicker`): one folder for the
+  visit, and each attempt opens a new file in it. A file handle has one
+  name; `createWritable()` on it writes that same file. `startRecording()`
+  in `+page.svelte` never opens either picker.
 - **Recording starts writing immediately but doesn't count as the take
-  until the synced clap fires.** A failed check discards nothing real —
-  nothing meaningful was written yet — and a retake gets a **new
-  filename** against the same handle (`take2.wav`, etc.), never an
-  overwrite.
+  until the synced clap fires.** A rejected check leaves that attempt's
+  file on disk and the next attempt is the next file in the join folder
+  (`…-take-1.wav`, `…-take-2.wav`). The previous file stays as it was.
 - **Start is host-triggered; each person clears their own check by
   self-confirming** (existing "Yes, continue" pattern) — there is no
   separate blocking "host wants to start, guest must click OK" gate on

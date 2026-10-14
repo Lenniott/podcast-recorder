@@ -34,6 +34,7 @@
   export let peakHoldDb;
   export let isClipping = false;
   export let lastClapFrom = null;
+  export let takeCountdownSec = 0;
 
   export let recordingState = "idle";
   export let canRecord = false;
@@ -99,6 +100,7 @@
         {peakHoldDb}
         {isClipping}
         {lastClapFrom}
+        {takeCountdownSec}
         compact={collapsed}
         live
       />

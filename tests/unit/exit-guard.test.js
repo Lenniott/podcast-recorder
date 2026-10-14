@@ -1,10 +1,29 @@
 import { describe, it, expect } from 'vitest'
 import { deriveExitGuard, isIncompleteServerCopyUpload } from '../../src/lib/recording/exit-guard.js'
 
+/**
+ * Same composition +page.svelte uses before window.confirm(exitGuard.message):
+ * isIncompleteServerCopyUpload(serverCopyUploadState) → deriveExitGuard.
+ * Tests go through that path so the copy is the confirmation-path message,
+ * not an unused string constant.
+ */
+function leaveGuard({ recording = false, uploadState }) {
+  return deriveExitGuard({
+    hasActiveLocalRecording: recording,
+    hasIncompleteServerCopyUpload: isIncompleteServerCopyUpload(uploadState),
+    serverCopyUploadState: uploadState
+  })
+}
+
 describe('deriveExitGuard', () => {
-  it('does not block leaving when neither recording nor upload is in progress', () => {
+  it('does not block leaving when neither recording nor upload is in progress, and the leave message is reassurance', () => {
     const guard = deriveExitGuard({ hasActiveLocalRecording: false, hasIncompleteServerCopyUpload: false })
-    expect(guard).toEqual({ blocking: false, severity: null, message: '' })
+    expect(guard.blocking).toBe(false)
+    expect(guard.severity).toBe('reassurance')
+    expect(guard.message).toMatch(/backed up automatically/i)
+    expect(guard.message).toMatch(/don'?t need to/i)
+    expect(guard.message).not.toMatch(/another way/i)
+    expect(guard.message).not.toMatch(/if you leave now/i)
   })
 
   it('blocks with "recording" severity while the local recording is active, regardless of upload state', () => {
@@ -40,6 +59,37 @@ describe('deriveExitGuard', () => {
     expect(recordingGuard.message).toMatch(/could stop it/i)
     // ...the upload warning must not imply that risk — the WAV is already safe.
     expect(uploadGuard.message).not.toMatch(/could stop it/i)
+  })
+
+  it('uses reassurance copy when there is no recording yet (idle upload, not recording)', () => {
+    const guard = leaveGuard({ recording: false, uploadState: 'idle' })
+    expect(guard.blocking).toBe(false)
+    expect(guard.message).toMatch(/backed up automatically/i)
+    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
+  })
+
+  it('uses reassurance copy after a completed server-copy upload', () => {
+    const guard = leaveGuard({ recording: false, uploadState: 'complete' })
+    expect(guard.blocking).toBe(false)
+    expect(guard.message).toMatch(/backed up automatically/i)
+    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
+  })
+
+  it('keeps the send-it-yourself warning for incomplete uploads on the confirmation path', () => {
+    for (const uploadState of ['uploading', 'catching_up']) {
+      const guard = leaveGuard({ recording: false, uploadState })
+      expect(guard.blocking).toBe(true)
+      expect(guard.severity).toBe('upload')
+      expect(guard.message).toMatch(/saved on this device/i)
+      expect(guard.message).toMatch(/send the local file to the host another way/i)
+    }
+  })
+
+  it('does not rewrite a permanent upload failure as leave-path reassurance', () => {
+    const guard = leaveGuard({ recording: false, uploadState: 'failed' })
+    expect(guard.blocking).toBe(false)
+    expect(guard.message).not.toMatch(/backed up automatically/i)
+    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
   })
 })
 
