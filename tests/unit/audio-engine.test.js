@@ -74,7 +74,7 @@ function createEngine(overrides = {}) {
   const engine = createAudioEngine({
     onLevel: (rms, peak) => calls.level.push({ rms, peak }),
     onChunk: (buffer) => calls.chunks.push(buffer),
-    onDeviceGapResolved: (gapSec) => calls.gaps.push(gapSec),
+    onIssue: (issue) => calls.gaps.push(issue),
     onMicConnected: calls.micConnected,
     loadDevices: calls.loadDevices,
     getDevices: () => devices,
@@ -115,12 +115,13 @@ describe('createAudioEngine', () => {
       }
     })
     expect(calls.micConnected).toHaveBeenCalledOnce()
-    expect(calls.gaps).toEqual([0])
+    expect(calls.gaps).toEqual([])
     expect(engine.sampleRate).toBe(44100)
     expect(engine.getAnalyserNode().fftSize).toBe(2048)
 
     const buffer = new Float32Array([0.1, -0.1])
     workletNode.port.onmessage({ data: { type: 'level', rms: 0.2, peak: 0.5 } })
+    engine.startCapture()
     workletNode.port.onmessage({ data: { type: 'data', buffer } })
     expect(calls.level).toEqual([{ rms: 0.2, peak: 0.5 }])
     expect(calls.chunks).toEqual([buffer])
@@ -218,21 +219,7 @@ describe('createAudioEngine', () => {
     expect(calls.setMicFallbackName).toHaveBeenCalledWith('Built-in')
 
     await engine.connectMicWithFallback()
-    expect(calls.setMicPermissionDenied).toHaveBeenCalledOnce()
-  })
-
-  it('clearPendingGap prevents a pre-recording gap from being reported on reconnect', async () => {
-    const { ctx } = installAudioGlobals()
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => createStream()) } })
-    const { engine, calls } = createEngine()
-
-    await engine.init()
-    calls.gaps.length = 0
-    ctx.currentTime = 20
-    engine.clearPendingGap()
-    await engine.changeMic('mic-1')
-
-    expect(calls.gaps).toEqual([0])
+    expect(calls.gaps).toEqual([expect.objectContaining({ code: 'mic-disconnected' })])
   })
 
   it('close stops tracks and closes the context', async () => {
@@ -247,4 +234,58 @@ describe('createAudioEngine', () => {
     expect(stream.track.stop).toHaveBeenCalled()
     expect(ctx.close).toHaveBeenCalled()
   })
+})
+
+describe('capture start/stop protocol', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+  it('waits for worklet acknowledgement and delivers the final chunk first', async () => {
+    const { workletNode } = installAudioGlobals()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => createStream()) } })
+    const { engine, calls } = createEngine()
+    await engine.init()
+    engine.startCapture()
+    const stopped = engine.stopCapture()
+    expect(engine.stopCapture()).toBe(stopped)
+    const request = workletNode.port.postMessage.mock.calls.at(-1)[0]
+    const buffer = new Float32Array([0.5])
+    workletNode.port.onmessage({ data: { type: 'data', buffer } })
+    expect(calls.chunks).toEqual([buffer])
+    workletNode.port.onmessage({ data: { type: 'stopped', id: request.id } })
+    await stopped
+    workletNode.port.onmessage({ data: { type: 'data', buffer } })
+    expect(calls.chunks).toHaveLength(1)
+  })
+
+  it('reports suspension and rejects Stop when the processor never acknowledges', async () => {
+    vi.useFakeTimers()
+    const { ctx } = installAudioGlobals()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => createStream()) } })
+    const { engine, calls } = createEngine()
+    await engine.init()
+    engine.startCapture()
+    ctx.state = 'suspended'
+    ctx.onstatechange()
+    expect(calls.gaps).toEqual([expect.objectContaining({ code: 'audio-suspended' })])
+    const stopped = expect(engine.stopCapture()).rejects.toThrow('final chunk may be missing')
+    await vi.advanceTimersByTimeAsync(3000)
+    await stopped
+  })
+})
+
+it('quiet audio never reconnects; an ended track does', async () => {
+  const { workletNode } = installAudioGlobals()
+  const stream = createStream()
+  const getUserMedia = vi.fn(async () => stream)
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const { engine } = createEngine()
+    await engine.init()
+    engine.startCapture()
+    workletNode.port.onmessage({ data: { type: 'level', rms: 0, peak: 0 } })
+    workletNode.port.onmessage({ data: { type: 'data', buffer: new Float32Array(8192) } })
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    stream.track.onended()
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    expect(getUserMedia).toHaveBeenCalledTimes(2)
+  } finally { vi.unstubAllGlobals() }
 })

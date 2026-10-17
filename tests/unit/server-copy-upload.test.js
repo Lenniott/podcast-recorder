@@ -65,7 +65,7 @@ describe('createServerCopyUpload — gated by session acceptance', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
 
     const startPromise = upload.start()
-    upload.handleWritten(i16(4), 0) // recording already producing confirmed chunks
+    upload.handleChunk(i16(4), 0) // recording already producing confirmed chunks
     await delay(20)
 
     expect(fetchImpl).toHaveBeenCalledTimes(1) // only the session request so far
@@ -87,7 +87,7 @@ describe('createServerCopyUpload — gated by session acceptance', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
 
     const accepted = await upload.start()
-    upload.handleWritten(i16(4), 0)
+    upload.handleChunk(i16(4), 0)
     await delay(20)
 
     expect(accepted).toBe(false)
@@ -96,22 +96,14 @@ describe('createServerCopyUpload — gated by session acceptance', () => {
   })
 })
 
-describe('createServerCopyUpload — only uploads chunks the local writer has confirmed', () => {
-  it('queues and sends real capture-writer chunks in write order, via handleWritten as onWritten', async () => {
+describe('createServerCopyUpload — uploads captured chunks in order', () => {
+  it('queues and sends captured chunks in arrival order', async () => {
     const { fetchImpl, calls } = makeFakeFetch()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    const written = []
-    const writer = createCaptureWriter({
-      sampleRate: 48000,
-      write: async (buf) => { written.push(new Int16Array(buf)) },
-      onWritten: upload.handleWritten
-    })
-
-    writer.writeChunk(i16(100, 1))
-    writer.writeChunk(i16(100, 2))
-    await writer.stop()
+    upload.handleChunk(i16(100, 1))
+    upload.handleChunk(i16(100, 2))
     await delay(20)
 
     const chunkCalls = calls.filter((c) => c.url.includes('/server-copy/chunks'))
@@ -123,14 +115,14 @@ describe('createServerCopyUpload — only uploads chunks the local writer has co
 })
 
 describe('createServerCopyUpload — progress tracking', () => {
-  it('reports acknowledged-server-bytes / confirmed-local-bytes, not wall-clock time', async () => {
+  it('reports acknowledged-server-bytes / captured-bytes, not wall-clock time', async () => {
     const { fetchImpl } = makeFakeFetch()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
     expect(upload.getStatus().progress).toBe(0) // nothing confirmed yet
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await delay(20)
     expect(upload.getStatus()).toMatchObject({ confirmedBytes: 200, ackedBytes: 200, progress: 1 })
   })
@@ -146,7 +138,7 @@ describe('createServerCopyUpload — progress tracking', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // 200 confirmed bytes, in flight
+    upload.handleChunk(i16(100), 0) // 200 confirmed bytes, in flight
     await delay(20)
 
     expect(upload.getStatus()).toMatchObject({ confirmedBytes: 200, ackedBytes: 0 })
@@ -161,9 +153,9 @@ describe('createServerCopyUpload — progress tracking', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(50), 0)
+    upload.handleChunk(i16(50), 0)
     await delay(10)
-    upload.handleWritten(i16(50), 50)
+    upload.handleChunk(i16(50), 50)
     await delay(10)
 
     expect(upload.getStatus().progress).toBe(1)
@@ -176,7 +168,7 @@ describe('createServerCopyUpload — finalize signal', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, sampleRate: 44100, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // 200 confirmed bytes
+    upload.handleChunk(i16(100), 0) // 200 confirmed bytes
     const finalized = await upload.finish()
 
     expect(finalized).toBe(true)
@@ -202,7 +194,7 @@ describe('createServerCopyUpload — finalize signal', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // chunk still in flight
+    upload.handleChunk(i16(100), 0) // chunk still in flight
     let finished = false
     const finishPromise = upload.finish().then(() => { finished = true })
     await delay(20)
@@ -237,7 +229,7 @@ describe('createServerCopyUpload — finalize signal', () => {
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     const finishPromise = upload.finish() // waits on whenIdle() through every retry
     await flushRetries()
     const finalized = await finishPromise
@@ -250,7 +242,7 @@ describe('createServerCopyUpload — finalize signal', () => {
     const { fetchImpl, calls } = makeFakeFetch()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
-    upload.handleWritten(i16(10), 0)
+    upload.handleChunk(i16(10), 0)
     await upload.finish()
 
     const finalizeCallsBefore = calls.filter((c) => c.url.includes('/server-copy/finalize')).length
@@ -275,11 +267,12 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     const written = []
     const writer = createCaptureWriter({
       sampleRate: 48000,
-      write: async (buf) => { written.push(new Int16Array(buf)) },
-      onWritten: upload.handleWritten
+      write: async (buf) => { written.push(new Int16Array(buf)) }
     })
 
+    upload.handleChunk(i16(100))
     writer.writeChunk(i16(100))
+    upload.handleChunk(i16(100))
     writer.writeChunk(i16(100))
     const start = Date.now()
     const result = await writer.stop()
@@ -303,12 +296,14 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     const written = []
     const writer = createCaptureWriter({
       sampleRate: 48000,
-      write: async (buf) => { written.push(new Int16Array(buf)) },
-      onWritten: upload.handleWritten
+      write: async (buf) => { written.push(new Int16Array(buf)) }
     })
 
+    upload.handleChunk(i16(100, 1))
     writer.writeChunk(i16(100, 1))
+    upload.handleChunk(i16(100, 2))
     writer.writeChunk(i16(100, 2))
+    upload.handleChunk(i16(100, 3))
     writer.writeChunk(i16(100, 3))
     const result = await writer.stop()
 
@@ -330,28 +325,28 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await flushRetries()
     const callsAfterFirstChunkGivesUp = calls
-    upload.handleWritten(i16(100), 100) // arrives after the failure
+    upload.handleChunk(i16(100), 100) // arrives after the failure
 
-    expect(() => upload.handleWritten(i16(100), 200)).not.toThrow()
+    expect(() => upload.handleChunk(i16(100), 200)).not.toThrow()
     await flushRetries()
 
     // A bounded run of retries for the one chunk that was in flight when
     // this session failed — but nothing at all for chunks queued after
-    // failed became true (handleWritten is a no-op once failed).
+    // failed became true (handleChunk is a no-op once failed).
     expect(callsAfterFirstChunkGivesUp).toBeGreaterThan(1)
     expect(calls).toBe(callsAfterFirstChunkGivesUp)
     expect(upload.getStatus().failed).toBe(true)
   })
 
-  it('a rejected session-start still allows later handleWritten calls to be safely ignored', async () => {
+  it('a rejected session-start still allows later handleChunk calls to be safely ignored', async () => {
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ accepted: false }) }))
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    expect(() => upload.handleWritten(i16(10), 0)).not.toThrow()
+    expect(() => upload.handleChunk(i16(10), 0)).not.toThrow()
     await delay(10)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
@@ -368,7 +363,7 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await flushRetries() // retries exhaust; this session gives up for good
     expect(upload.getStatus().failed).toBe(true)
 
@@ -379,7 +374,7 @@ describe('createServerCopyUpload — a slow or failing upload never affects loca
     // (e.g. the local writer producing more audio while the upload session
     // has already given up) is never sent.
     const chunkCallsBefore = fetchImpl.mock.calls.filter((c) => String(c[0]).includes('/server-copy/chunks')).length
-    upload.handleWritten(i16(100), 100)
+    upload.handleChunk(i16(100), 100)
     await flushRetries()
     const chunkCallsAfter = fetchImpl.mock.calls.filter((c) => String(c[0]).includes('/server-copy/chunks')).length
     expect(chunkCallsAfter).toBe(chunkCallsBefore)
@@ -402,7 +397,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // 200 bytes
+    upload.handleChunk(i16(100), 0) // 200 bytes
     await flushRetries()
 
     expect(chunkAttempts).toBe(3)
@@ -424,7 +419,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await flushRetries()
 
     expect(chunkAttempts).toBe(3)
@@ -468,7 +463,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     })
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
 
     const finishPromise = upload.finish()
     await flushRetries()
@@ -493,7 +488,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await flushRetries()
 
     // Bounded: a small, fixed number of attempts, not an unbounded retry loop.
@@ -523,7 +518,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await flushRetries()
 
     // Stopped well short of the 5-attempt cap — proof it was the 20s
@@ -545,7 +540,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await delay(20) // no fake timers needed — a non-retryable failure never waits on backoff
 
     expect(chunkAttempts).toBe(1)
@@ -593,7 +588,7 @@ describe('createServerCopyUpload — lost-ack reconciliation on chunk retry', ()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // 200 bytes
+    upload.handleChunk(i16(100), 0) // 200 bytes
     await flushRetries()
 
     expect(attempts).toBe(2)
@@ -619,7 +614,7 @@ describe('createServerCopyUpload — lost-ack reconciliation on chunk retry', ()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0) // 200 bytes
+    upload.handleChunk(i16(100), 0) // 200 bytes
     await flushRetries()
 
     expect(upload.getStatus()).toMatchObject({ failed: false, ackedBytes: 250 })
@@ -637,7 +632,7 @@ describe('createServerCopyUpload — lost-ack reconciliation on chunk retry', ()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
     await upload.start()
 
-    upload.handleWritten(i16(100), 0)
+    upload.handleChunk(i16(100), 0)
     await delay(20) // first attempt gets the 409 directly — no backoff involved
 
     expect(upload.getStatus().failed).toBe(true)
@@ -654,7 +649,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
     expect(JSON.parse(sessionCall.init.body)).toMatchObject({ clientId: CLIENT_ID, token: TOKEN })
 
-    upload.handleWritten(i16(10), 0)
+    upload.handleChunk(i16(10), 0)
     await upload.finish()
 
     const chunkCall = calls.find((c) => c.url.includes('/server-copy/chunks'))
@@ -668,7 +663,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     // Mirrors the real server's behavior once ticket 11 is wired up: no
     // token means authorizeServerCopyRequest rejects with 401, which is
     // just an ordinary not-yet-accepted session to this module — never a
-    // throw, never a hang, and it never blocks handleWritten from being
+    // throw, never a hang, and it never blocks handleChunk from being
     // called safely afterward (matches the existing "rejected session"
     // fallback behavior covered elsewhere in this file).
     const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ accepted: false, reason: 'clientid-mismatch' }) }))
@@ -677,7 +672,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     const accepted = await upload.start()
 
     expect(accepted).toBe(false)
-    expect(() => upload.handleWritten(i16(10), 0)).not.toThrow()
+    expect(() => upload.handleChunk(i16(10), 0)).not.toThrow()
     expect(upload.getStatus().failed).toBe(true)
   })
 
@@ -685,7 +680,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     const { fetchImpl, calls } = makeFakeFetch()
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl }) // no token
     await upload.start()
-    upload.handleWritten(i16(10), 0)
+    upload.handleChunk(i16(10), 0)
     await delay(20)
 
     const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
@@ -700,7 +695,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     const TOKEN = 'late-owning-token'
     const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, sampleRate: 44100, fetchImpl })
 
-    upload.handleWritten(i16(10), 0)
+    upload.handleChunk(i16(10), 0)
     await delay(20)
     expect(fetchImpl).not.toHaveBeenCalled()
 
@@ -732,7 +727,7 @@ describe('createServerCopyUpload — clientId-owning token (ticket 11)', () => {
     })
 
     await upload.start()
-    upload.handleWritten(i16(10), 0)
+    upload.handleChunk(i16(10), 0)
     await upload.finish()
 
     const sessionCall = calls.find((c) => c.url.includes('/server-copy/session'))
@@ -760,7 +755,7 @@ describe('createServerCopyUpload — no resumability across instances (rejoin do
     const startPromise = first.start() // retries the session-accept 5xx before giving up
     await flushRetries()
     await startPromise
-    first.handleWritten(i16(10), 0)
+    first.handleChunk(i16(10), 0)
     expect(first.getStatus().failed).toBe(true)
 
     const { fetchImpl: freshFetch } = makeFakeFetch()
@@ -776,5 +771,38 @@ describe('createServerCopyUpload — no resumability across instances (rejoin do
     const accepted = await second.start()
     expect(accepted).toBe(true)
     expect(second.getStatus().failed).toBe(false)
+  })
+})
+
+describe('upload timeouts and completion boundary', () => {
+  it('times out hung requests, exhausts retries, and reports one permanent failure', async () => {
+    vi.useFakeTimers()
+    const issues = []
+    const signals = []
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, requestTimeoutMs: 100,
+      fetchImpl: (_, options) => { signals.push(options.signal); return new Promise(() => {}) },
+      onIssue: issue => issues.push(issue) })
+    const started = upload.start()
+    upload.handleChunk(i16(10))
+    const finished = upload.finish()
+    await flushRetries()
+    expect(await started).toBe(false)
+    expect(await finished).toBe(false)
+    expect(signals.length).toBeGreaterThan(1)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(issues).toEqual([expect.objectContaining({ code: 'save-failed', destination: 'server' })])
+  })
+
+  it('does not accept more audio after finish starts', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl })
+    await upload.start()
+    upload.handleChunk(i16(10))
+    const finished = upload.finish()
+    upload.handleChunk(i16(10))
+    expect(await finished).toBe(true)
+    expect(calls.filter(c => c.url.includes('/chunks'))).toHaveLength(1)
+    const finalize = calls.find(c => c.url.includes('/finalize'))
+    expect(JSON.parse(finalize.init.body).totalBytes).toBe(20)
   })
 })

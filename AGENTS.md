@@ -14,22 +14,30 @@ that isn't true?
 
 ## Recording, locally
 
-Each browser captures and writes its own WAV file independently — audio never
-touches the server. The write path (`src/lib/recording/capture-writer.js`) has one hard
-invariant: **silence is only ever written from an explicit, measured gap**
-(`notifyDeviceGap`), never inferred from how long a disk write took. That
-inference is exactly the bug that corrupted a real 50-minute episode — search the
-commit history for `fix(recording): stop write latency from being recorded as
-silence` for the full diagnosis if you need it. Don't reintroduce an
-"expected-vs-actual timing" comparison as a stand-in for "did the mic drop out."
+Each browser captures its own audio. `recording-session.js` feeds the same
+ordered chunks independently to the local WAV writer and server upload. A
+permanent save failure stops capture and lets the surviving destination finish.
+A failed local chunk is never confirmed or skipped so later chunks can be saved.
+The browser file stream cannot be repaired by retrying writes on an errored stream.
 
-Anything that shows recording health to the user (waveform, level meter, status
-pill, **host play of a guest's mic-check clip**) must be sourced from what was
-actually confirmed written (`capture-writer.js`'s `onWritten` hook), never from
-the live mic signal. The mic can look perfectly healthy while the file quietly
-diverges from it — that gap is what let the original bug go unnoticed for an
-hour. The table Play control is that same listen-back buffer, relayed over the
-room WebSocket; it is not a live talk path.
+The worklet advances samples on every audio callback, using zeros when input is
+missing. Silence belongs in those captured chunks; disk latency must never create
+extra samples. The old latency-based gap calculation corrupted a real 50-minute
+episode (commit: `fix(recording): stop write latency from being recorded as silence`).
+Stop flushes the partial chunk and acknowledges completion before destinations
+finalize. Each take starts with an empty worklet buffer.
+
+Waveforms and host play of a guest's mic-check clip use confirmed local writes
+(`onWritten`). The live level meter intentionally remains live for gain adjustment.
+The table Play control is the confirmed listen-back buffer relayed over the room
+WebSocket, not a live talk path. Server upload receives captured chunks directly;
+putting it behind `onWritten` would make a stalled disk stall both copies.
+
+Recording issues go through `onIssue({ code, severity, destination, message, error })`.
+For now the page logs them to the inspector console; no recording alerts or new
+warning UI. Only permanent save failures automatically stop recording. The callback
+is the future UI integration point. Simultaneous destination failure can lose audio;
+there is deliberately no browser-storage recovery layer in this design.
 
 ## Keeping host and guest in sync
 

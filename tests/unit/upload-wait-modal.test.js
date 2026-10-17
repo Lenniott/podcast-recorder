@@ -52,7 +52,7 @@ describe('post-stop upload-wait modal — open/closed derivation', () => {
     })
     await upload.start()
 
-    upload.handleWritten(i16(100))
+    upload.handleChunk(i16(100))
     await delay(10)
 
     expect(modalOpen).toBe(false)
@@ -86,7 +86,7 @@ describe('post-stop upload-wait modal — open/closed derivation', () => {
     })
     await upload.start()
 
-    upload.handleWritten(i16(100)) // chunk in flight
+    upload.handleChunk(i16(100)) // chunk in flight
     await delay(10)
     expect(modalOpen).toBe(false) // still recording — sidebar shows progress, no blocking modal yet
 
@@ -155,7 +155,7 @@ describe('post-stop server-copy failure notice — fires exactly where the wait 
     })
     await upload.start()
 
-    upload.handleWritten(i16(100))
+    upload.handleChunk(i16(100))
     await vi.advanceTimersByTimeAsync(120_000) // drain every retry backoff; the chunk never recovers
     expect(announced).toBe(false) // still recording — never interrupts an active take
 
