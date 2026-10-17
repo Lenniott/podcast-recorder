@@ -1,5 +1,6 @@
 <script>
   import { Check, Mic, Play, X } from "$lib/icons";
+  import Model from "$lib/Model.svelte";
 
   // Sits over the room the instant recording actually starts. Recording is
   // already running for real — nothing here is a throwaway test take. It
@@ -44,6 +45,15 @@
     onReject();
   }
 
+  // Hidden until listen-back succeeds. Model draws the buttons; this
+  // dialog only supplies the labels and what they do.
+  $: checkActions = hasListened
+    ? [
+        { label: "Yes, continue", onClick: handleConfirm, primary: true, icon: Check },
+        { label: "Something’s wrong", onClick: handleReject, icon: X },
+      ]
+    : [];
+
   // handleConfirm/handleReject both call this before closing, so local
   // state (the object URL, the audio element) never leaks into the next
   // take's check.
@@ -55,85 +65,46 @@
   }
 </script>
 
-{#if open}
-  <div
-    class="check-overlay"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="check-title"
+<Model
+  {open}
+  labelledBy="check-title"
+  actionPrompt={hasListened ? "Sound good?" : ""}
+  actions={checkActions}
+>
+  <button
+    type="button"
+    class="btn-ghost btn-icon check-close"
+    aria-label="Skip microphone check"
+    title="Skip check, recording keeps going"
+    on:click={handleConfirm}
   >
-    <div class="check-card">
-      <button
-        type="button"
-        class="btn-ghost btn-icon check-close"
-        aria-label="Skip microphone check"
-        title="Skip check, recording keeps going"
-        on:click={handleConfirm}
-      >
-        <X />
-      </button>
-      <div class="check-badge">● Recording</div>
-      <h2 id="check-title">Test your microphone?</h2>
-      <p class="check-mic" title={micLabel || undefined}>
-        <Mic />
-        <span>{micLabel || "Unknown microphone"}</span>
-      </p>
-      <p class="check-hint">Read this sentence out loud:</p>
+    <X />
+  </button>
+  <div class="check-badge">● Recording</div>
+  <h2 id="check-title">Test your microphone?</h2>
+  <p class="check-mic" title={micLabel || undefined}>
+    <Mic />
+    <span>{micLabel || "Unknown microphone"}</span>
+  </p>
+  <p class="check-hint">Read this sentence out loud:</p>
 
-      <div class="check-sentence">"{sentence}"</div>
+  <div class="check-sentence">"{sentence}"</div>
 
-      <div class="check-actions">
-        <button type="button" class="btn-secondary" on:click={handleListen}>
-          <Play /> Listen back
-        </button>
-        {#if hasListened}
-          <audio bind:this={audioEl} src={previewUrl} controls></audio>
-        {/if}
-      </div>
-
-      {#if listenError}
-        <p class="check-error">{listenError}</p>
-      {/if}
-
-      {#if hasListened}
-        <div class="check-verdict">
-          <p class="check-verdict-q">Sound good?</p>
-          <div class="check-verdict-actions">
-            <button type="button" class="btn-primary" on:click={handleConfirm}>
-              <Check /> Yes, continue
-            </button>
-            <button type="button" class="btn-ghost" on:click={handleReject}>
-              <X /> Something’s wrong
-            </button>
-          </div>
-        </div>
-      {/if}
-    </div>
+  <div class="check-actions">
+    <button type="button" class="btn-secondary" on:click={handleListen}>
+      <Play /> Listen back
+    </button>
+    {#if hasListened}
+      <audio bind:this={audioEl} src={previewUrl} controls></audio>
+    {/if}
   </div>
-{/if}
+
+  {#if listenError}
+    <p class="check-error">{listenError}</p>
+  {/if}
+</Model>
 
 <style>
-  .check-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 20px;
-  }
-
-  .check-card {
-    position: relative;
-    background: var(--bg-elevated, #18181b);
-    border: 1px solid var(--border, #2a2a2e);
-    border-radius: 14px;
-    max-width: 440px;
-    width: 100%;
-    padding: 28px;
-  }
-
   .check-close {
     position: absolute;
     top: 10px;
@@ -206,28 +177,5 @@
     color: var(--warn-text);
     font-size: 12px;
     margin: 10px 0 0;
-  }
-
-  .check-verdict {
-    margin-top: 20px;
-    padding-top: 18px;
-    border-top: 1px solid var(--border, #2a2a2e);
-  }
-
-  .check-verdict-q {
-    font-size: 13px;
-    font-weight: 600;
-    margin: 0 0 10px;
-  }
-
-  .check-verdict-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .check-verdict-actions button {
-    width: 100%;
-    padding: 10px 16px;
   }
 </style>
