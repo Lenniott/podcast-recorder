@@ -9,6 +9,8 @@
  * visually distinctive sync marker in their waveforms.
  *
  * Messages IN  (from main thread):
+ *   { type: 'start' }         — clear buffer and begin a take
+ *   { type: 'stop', id }      — flush the tail and acknowledge with stopped
  *   { type: 'clap' }          — inject sync tone now
  *   { type: 'debug_marker' }  — temporary reconnect marker tone
  *
@@ -34,6 +36,7 @@ class RecorderProcessor extends AudioWorkletProcessor {
   constructor () {
     super()
     this._buffer       = []
+    this._recording = false
     this._levelSumSq   = 0   // Σ s² over the current level window
     this._levelPeak    = 0   // max |s| over the current level window
     this._levelCount   = 0   // samples accumulated in the current level window
@@ -44,6 +47,15 @@ class RecorderProcessor extends AudioWorkletProcessor {
     this._clapAmp      = CLAP_AMP
 
     this.port.onmessage = (e) => {
+      if (e.data.type === 'start') {
+        this._buffer = []
+        this._recording = true
+      }
+      if (e.data.type === 'stop') {
+        this._recording = false
+        if (this._buffer.length) this.postChunk(this._buffer.length)
+        this.port.postMessage({ type: 'stopped', id: e.data.id })
+      }
       if (e.data.type === 'clap') {
         this._clapTotal = Math.round(sampleRate * (CLAP_MS / 1000))
         this._clapRemaining = this._clapTotal
@@ -61,14 +73,17 @@ class RecorderProcessor extends AudioWorkletProcessor {
     }
   }
 
-  process (inputs) {
-    const channelData = inputs?.[0]?.[0]
-    if (!channelData) return true
+  postChunk(length) {
+    const chunk = new Float32Array(this._buffer.splice(0, length))
+    this.port.postMessage({ type: 'data', buffer: chunk }, [chunk.buffer])
+  }
 
-    const len = channelData.length
+  process (inputs, outputs) {
+    const channelData = inputs?.[0]?.[0]
+    const len = outputs[0][0].length
 
     for (let i = 0; i < len; i++) {
-      let s = channelData[i]
+      let s = channelData?.[i] ?? 0
 
       // Inject sync tone if clap is active
       if (this._clapRemaining > 0) {
@@ -87,7 +102,7 @@ class RecorderProcessor extends AudioWorkletProcessor {
         this._clapRemaining--
       }
 
-      this._buffer.push(s)
+      if (this._recording) this._buffer.push(s)
       this._levelSumSq += s * s
       const abs = s < 0 ? -s : s
       if (abs > this._levelPeak) this._levelPeak = abs
@@ -108,10 +123,7 @@ class RecorderProcessor extends AudioWorkletProcessor {
     }
 
     // When buffer is full, post to main thread for writing
-    if (this._buffer.length >= BUFFER_SIZE) {
-      const chunk = new Float32Array(this._buffer.splice(0, BUFFER_SIZE))
-      this.port.postMessage({ type: 'data', buffer: chunk }, [chunk.buffer])
-    }
+    while (this._buffer.length >= BUFFER_SIZE) this.postChunk(BUFFER_SIZE)
 
     return true  // keep processor alive
   }

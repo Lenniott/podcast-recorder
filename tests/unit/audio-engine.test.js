@@ -107,7 +107,7 @@ describe('createAudioEngine', () => {
     expect(AudioWorkletNode).toHaveBeenCalledWith(ctx, 'recorder-processor')
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
-        deviceId: { ideal: 'mic-1' },
+        deviceId: { exact: 'mic-1' },
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
@@ -173,11 +173,12 @@ describe('createAudioEngine', () => {
 
     await engine.init()
     calls.setMicFallback.mockClear()
-    await engine.connectMicWithFallback()
+    calls.setSelectedDeviceId.mockClear()
+    await engine.switchToBestMic()
 
     expect(calls.loadDevices).toHaveBeenCalledOnce()
     expect(calls.setMicFallback).toHaveBeenCalledWith(false)
-    expect(calls.setSelectedDeviceId).not.toHaveBeenCalled()
+    expect(calls.setSelectedDeviceId).toHaveBeenCalledWith('mic-1')
   })
 
   it('fallback reconnect switches to another listed microphone when the selected one fails', async () => {
@@ -196,29 +197,20 @@ describe('createAudioEngine', () => {
     })
 
     await engine.init()
-    await engine.connectMicWithFallback()
+    await engine.switchToBestMic()
 
     expect(calls.setSelectedDeviceId).toHaveBeenCalledWith('mic-2')
     expect(calls.setMicFallback).toHaveBeenCalledWith(true)
     expect(calls.setMicFallbackName).toHaveBeenCalledWith('Backup Mic')
   })
 
-  it('last-resort fallback lets the browser choose and marks permission denied if that fails', async () => {
+  it('reports no available mic when every listed input fails', async () => {
     installAudioGlobals()
-    const getUserMedia = vi
-      .fn()
-      .mockResolvedValueOnce(createStream('Mic 1'))
-      .mockRejectedValueOnce(new Error('selected gone'))
-      .mockResolvedValueOnce(createStream('Built-in'))
-      .mockRejectedValueOnce(new Error('no mic'))
+    const getUserMedia = vi.fn().mockResolvedValueOnce(createStream('Mic 1')).mockRejectedValue(new Error('no input'))
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
-    const { engine, calls } = createEngine({ devices: [{ deviceId: 'mic-1', label: 'Mic 1' }] })
-
+    const { engine, calls } = createEngine()
     await engine.init()
-    await engine.connectMicWithFallback()
-    expect(calls.setMicFallbackName).toHaveBeenCalledWith('Built-in')
-
-    await engine.connectMicWithFallback()
+    expect(await engine.switchToBestMic()).toBe(false)
     expect(calls.gaps).toEqual([expect.objectContaining({ code: 'mic-disconnected' })])
   })
 
@@ -288,4 +280,41 @@ it('quiet audio never reconnects; an ended track does', async () => {
     for (let i = 0; i < 10; i++) await Promise.resolve()
     expect(getUserMedia).toHaveBeenCalledTimes(2)
   } finally { vi.unstubAllGlobals() }
+})
+
+it('keeps the working microphone connected when opening a replacement fails', async () => {
+  installAudioGlobals()
+  const stream = createStream('Working')
+  const getUserMedia = vi.fn().mockResolvedValueOnce(stream).mockRejectedValueOnce(new Error('broken input'))
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const { engine, calls } = createEngine()
+    await engine.init()
+    await engine.changeMic('broken')
+    expect(stream.track.stop).not.toHaveBeenCalled()
+    expect(engine.micConnected).toBe(true)
+    expect(calls.gaps).toEqual([expect.objectContaining({ code: 'mic-disconnected' })])
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('refreshing the device list probes new inputs without switching away from a working mic', async () => {
+  vi.useFakeTimers()
+  installAudioGlobals()
+  const current = createStream('Current')
+  const added = createStream('Added')
+  const getUserMedia = vi.fn().mockResolvedValueOnce(current).mockResolvedValue(added)
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const devices = [{ deviceId: 'mic-1', label: 'Current' }]
+    const { engine, calls } = createEngine({ devices })
+    await engine.init()
+    devices.push({ deviceId: 'mic-2', label: 'Added' })
+    const refreshed = engine.refreshMicrophones()
+    await vi.runAllTimersAsync()
+    await refreshed
+    expect(current.track.stop).not.toHaveBeenCalled()
+    expect(calls.micConnected).toHaveBeenCalledTimes(1)
+    expect(added.track.stop).toHaveBeenCalledTimes(1)
+    expect(engine.micConnected).toBe(true)
+  } finally { vi.unstubAllGlobals(); vi.useRealTimers() }
 })

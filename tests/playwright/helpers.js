@@ -202,7 +202,7 @@ export async function openCreateRoom(page) {
  * modal (RecordingCheckModal.svelte) that pops up the instant Start
  * Recording is clicked. None of the existing recording_status.spec.js
  * tests ever click Stop Recording via the UI button, so none of them had
- * to deal with this — but its `.check-overlay` sits at z-index 1000 and
+ * to deal with this — but its dialog sits at z-index 1000 and
  * intercepts pointer events for as long as it's open, so any spec that
  * *does* need to click Stop Recording for real must clear it first.
  *
@@ -217,7 +217,7 @@ export async function openCreateRoom(page) {
  * a fixed sleep.
  */
 export async function passRecordingCheck(page) {
-  const overlay = page.locator('.check-overlay')
+  const overlay = page.getByRole('dialog', { name: 'Test your microphone?' })
   await expect(overlay).toBeVisible()
   const listenBtn = page.getByRole('button', { name: /Listen back/ })
   const confirmBtn = page.getByRole('button', { name: /Yes, continue/ })
@@ -438,7 +438,7 @@ export async function mockCustomPromptOutcomes(page, outcomesByTitle, { delayMs 
 }
 
 export async function expandPresenceTable(page) {
-  const overlay = page.locator('.check-overlay')
+  const overlay = page.getByRole('dialog', { name: 'Test your microphone?' })
   if (await overlay.isVisible()) {
     await page.getByRole('button', { name: 'Skip microphone check' }).click()
     await expect(overlay).toBeHidden()

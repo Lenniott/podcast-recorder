@@ -1,19 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
 
-/**
- * Interrupted server-copy upload (ticket 13's second half). Aborts only
- * the chunk-upload requests — never the room WebSocket, never anything
- * else — so this proves the server copy's failure path is fully isolated
- * from local recording, exactly as $lib/server-copy/server-copy-upload.js's module doc
- * promises ("the local WAV remains the fallback").
- */
+// Exhausted upload retries stop capture while the local destination finishes.
 
 function guestPeerRow(page) {
   return presenceRow(page, 'Alex')
 }
 
-test('a blocked upload settles into failed on both browsers without touching local recording', async ({ browser }) => {
+test('exhausted upload retries stop capture and finish the local recording', async ({ browser }) => {
   // server-copy-upload.js retries a transient chunk failure with backoff
   // up to RETRY_MAX_ATTEMPTS (5) or RETRY_MAX_ELAPSED_MS (20s), whichever
   // comes first — worst case here is a real ~15s of backoff sleeps before
@@ -28,6 +22,19 @@ test('a blocked upload settles into failed on both browsers without touching loc
 
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
+  await guest.addInitScript(() => {
+    window.__localSaved = false
+    window.__recordingIssues = []
+    const log = console.error
+    console.error = (...args) => {
+      if (args[0] === '[recording]') window.__recordingIssues.push(args[1])
+      log(...args)
+    }
+    window.showSaveFilePicker = async () => ({ createWritable: async () => ({
+      write: async () => {}, seek: async () => {},
+      close: async () => { window.__localSaved = true }
+    }) })
+  })
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
   await expandPresenceTable(host)
   await expandPresenceTable(guest)
@@ -43,11 +50,7 @@ test('a blocked upload settles into failed on both browsers without touching loc
   await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(guest) // clears .check-overlay so Stop Recording is clickable later
 
-  // The pill must settle into `failed` on BOTH browsers while recording is
-  // still active (this is deliberately checked before Stop is clicked —
-  // "mid-recording" per the ticket) — proving the room's presence
-  // broadcast carries the failure to the host exactly like it carries
-  // progress in the happy path.
+  // Failure is broadcast to both participants.
   await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
     'data-copy-state',
     'failed',
@@ -59,12 +62,11 @@ test('a blocked upload settles into failed on both browsers without touching loc
     { timeout: 30_000 }
   )
 
-  // Local recording must be completely unaffected: Stop Recording still
-  // works cleanly (captureWriter.stop() and the WAV finalize never touch
-  // serverCopyUpload — see +page.svelte's stopRecording()).
-  await guest.getByRole('button', { name: 'Stop Recording' }).click()
-  // Generous timeout — see server_copy_upload.spec.js's identical note.
   await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  expect(await guest.evaluate(() => window.__localSaved)).toBe(true)
+  expect(await guest.evaluate(() => window.__recordingIssues)).toEqual(
+    expect.arrayContaining([expect.objectContaining({ code: 'save-failed', destination: 'server' })])
+  )
 
   // No download control for a failed copy, on either browser — checked
   // while both are still in the room, before the exit navigation below.

@@ -21,12 +21,21 @@ test('local save failure stops real capture and completes the independent server
       close: async () => { window.__localClosed = true }
     }) })
   })
+  let releaseFinalize
+  const finalizeGate = new Promise(resolve => { releaseFinalize = resolve })
+  await page.route('**/server-copy/finalize', async route => {
+    await finalizeGate
+    await route.continue()
+  })
   const alerts = []
   page.on('dialog', async dialog => { alerts.push(dialog.message()); await dialog.dismiss() })
   await createRoom(page, { name: `Recording failure ${Date.now()}`, password: 'failure-test' })
   await expandPresenceTable(page)
   await page.getByRole('button', { name: 'Start Recording' }).click()
   await expect.poll(() => page.evaluate(() => window.__recordingIssues.some(issue => issue.code === 'save-failed'))).toBe(true)
+  await expect(page.getByRole('button', { name: 'Finishing…' })).toBeVisible()
+  await expect(page.getByText(/Your recording is already saved on this device/)).toBeHidden()
+  releaseFinalize()
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20000 })
   await expect(presenceRow(page, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute('data-copy-state', 'complete', { timeout: 20000 })
   expect(await page.evaluate(() => window.__localWrites)).toBe(4)
