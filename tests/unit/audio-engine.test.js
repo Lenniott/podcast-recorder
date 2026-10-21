@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createAudioEngine } from '../../src/lib/recording/audio-engine.js'
 
 function createTrack(label = 'Input') {
-  return { label, onended: null, stop: vi.fn() }
+  return { label, onended: null, stop: vi.fn(), applyConstraints: vi.fn(async () => {}) }
 }
 
 function createStream(label = 'Input') {
@@ -106,13 +106,7 @@ describe('createAudioEngine', () => {
     expect(ctx.audioWorklet.addModule).toHaveBeenCalledWith('/worklet/recorder-processor.js')
     expect(AudioWorkletNode).toHaveBeenCalledWith(ctx, 'recorder-processor')
     expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        deviceId: { exact: 'mic-1' },
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1
-      }
+      audio: { deviceId: { exact: 'mic-1' } }
     })
     expect(calls.micConnected).toHaveBeenCalledOnce()
     expect(calls.gaps).toEqual([])

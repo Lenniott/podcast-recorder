@@ -1,5 +1,5 @@
 import { expect, it, vi, afterEach } from 'vitest'
-import { rankMicrophones, createMicrophoneManager, assessMicrophone, watchMicrophoneDisconnect, listMicrophones } from '../../src/lib/recording/microphones.js'
+import { rankMicrophones, createMicrophoneManager, assessMicrophone, watchMicrophoneDisconnect, listMicrophones, openMicrophone } from '../../src/lib/recording/microphones.js'
 
 it('ranks a mic with measured sound ahead of a listed but silent mic', () => {
   expect(rankMicrophones([
@@ -44,7 +44,7 @@ it('distinguishes an open but silent input from an input with sound and releases
   vi.useFakeTimers()
   const streams = []
   const mediaDevices = { getUserMedia: vi.fn(async constraints => {
-    const track = { readyState: 'live', stop: vi.fn(), getSettings: () => ({ sampleRate: 48000 }) }
+    const track = { readyState: 'live', stop: vi.fn(), applyConstraints: vi.fn(async () => {}), getSettings: () => ({ sampleRate: 48000 }) }
     const stream = { sample: constraints.audio.deviceId.exact === 'silent' ? 0 : 0.1,
       getTracks: () => [track], getAudioTracks: () => [track] }
     streams.push(stream)
@@ -79,6 +79,37 @@ it('disconnect detection notifies once and can be detached without switching any
   expect(disconnected).toHaveBeenCalledTimes(1)
   detach()
   expect(track.onended).toBe(null)
+})
+
+it('opens the chosen microphone instead of the system default when processing is turned off', async () => {
+  // macOS Chrome captures the default input (here, the webcam) when processing
+  // is disabled in the same getUserMedia call that names the device. Disabling
+  // it afterwards keeps the device that was actually opened.
+  const mediaDevices = {
+    getUserMedia: vi.fn(async constraints => {
+      const audio = constraints.audio
+      const processingInOpen = ['echoCancellation', 'noiseSuppression', 'autoGainControl']
+        .some(key => key in audio)
+      const settings = { deviceId: processingInOpen ? 'webcam' : audio.deviceId.exact }
+      const track = {
+        readyState: 'live',
+        stop: vi.fn(),
+        getSettings: () => ({ ...settings }),
+        applyConstraints: async next => Object.assign(settings, next)
+      }
+      return { getTracks: () => [track], getAudioTracks: () => [track] }
+    })
+  }
+
+  const stream = await openMicrophone('yeti', mediaDevices)
+
+  expect(stream.getAudioTracks()[0].getSettings()).toMatchObject({
+    deviceId: 'yeti',
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    channelCount: 1
+  })
 })
 
 it('lists audio inputs without attempting to open or qualify them', async () => {

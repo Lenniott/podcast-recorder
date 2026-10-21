@@ -84,7 +84,11 @@ export function createAudioEngine({
     micStream = nextStream
     micSource = nextSource
     const track = micStream.getAudioTracks()[0]
-    micDeviceId = track.getSettings?.().deviceId || deviceId
+    const settings = track.getSettings?.() ?? {}
+    micDeviceId = settings.deviceId || deviceId
+    if (settings.echoCancellation || settings.noiseSuppression || settings.autoGainControl) {
+      report('mic-processing', 'Browser left audio processing on for the selected microphone.')
+    }
     micConnected = true
     unwatchMic = watchMicrophoneDisconnect(track, micEnded)
     setSelectedDeviceId(micDeviceId)

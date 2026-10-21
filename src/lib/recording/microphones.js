@@ -22,14 +22,32 @@ export function watchMicrophoneDisconnect(track, onDisconnect) {
   }
 }
 
+const RAW_INPUT = {
+  echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1
+}
+
+function releaseStream(stream) {
+  stream.getTracks().forEach(track => track.stop())
+}
+
 export async function openMicrophone(deviceId, mediaDevices = navigator.mediaDevices, timeoutMs = 3000) {
   let expired = false
   let timer
+  // Name the device alone. macOS Chrome captures the system default input when
+  // processing is disabled in this same call, so raw-audio constraints are
+  // applied only after the requested device is open.
   const opening = mediaDevices.getUserMedia({ audio: {
-    deviceId: deviceId ? { exact: deviceId } : undefined,
-    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1
-  } }).then(stream => {
-    if (expired) { stream.getTracks().forEach(track => track.stop()); throw new Error('Microphone opened after timeout') }
+    deviceId: deviceId ? { exact: deviceId } : undefined
+  } }).then(async stream => {
+    if (expired) { releaseStream(stream); throw new Error('Microphone opened after timeout') }
+    const track = stream.getAudioTracks()[0]
+    if (track?.applyConstraints) {
+      try { await track.applyConstraints(RAW_INPUT) }
+      catch {
+        if (expired) { releaseStream(stream); throw new Error('Microphone opened after timeout') }
+      }
+    }
+    if (expired) { releaseStream(stream); throw new Error('Microphone opened after timeout') }
     return stream
   })
   try {
