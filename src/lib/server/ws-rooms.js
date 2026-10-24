@@ -518,8 +518,8 @@
  *   { type: 'rejected',        message }
  */
 
-import { getActiveRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt, recordGuestAccess } from './db.js'
-import { guestJoinDecision } from './guest-join.js'
+import { getRoomBySlug, saveRoomContent, loadRoomContent, getCustomPrompt } from './db.js'
+import { guestJoinDecision, noteAdmittedGuest } from './guest-join.js'
 import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js'
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
@@ -925,7 +925,7 @@ export function setupWss(wss) {
       return
     }
 
-    const roomRow = getActiveRoomBySlug(slug)
+    const roomRow = getRoomBySlug(slug)
     if (!roomRow) {
       send(ws, { type: 'error', message: 'Room not found' })
       ws.close(4004, 'Room not found')
@@ -1041,7 +1041,7 @@ export function setupWss(wss) {
         sendPresence(slug)
 
         if (firstJoin && clientId) {
-          if (!connectionHostClaim) recordGuestAccess(slug, clientId, Date.now())
+          if (!connectionHostClaim) noteAdmittedGuest(slug, clientId)
           replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
           send(ws, { type: 'transcript_activity', active: anyoneTranscribing(slug) })

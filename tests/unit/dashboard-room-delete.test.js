@@ -48,7 +48,7 @@ function plantServerCopy(slug) {
 }
 
 describe('deleteDashboardRoom', () => {
-  it('site-authed delete of a known slug removes the room, its server copy, and its content', () => {
+  it('removes the room, its server copy, and its content', () => {
     createRoom(ROOM)
     createRoom(OTHER)
     const copyDir = plantServerCopy(ROOM.slug)
@@ -56,7 +56,7 @@ describe('deleteDashboardRoom', () => {
     saveRoomContent(ROOM.slug, CONTENT)
     saveRoomContent(OTHER.slug, CONTENT)
 
-    const result = deleteDashboardRoom({ slug: ROOM.slug, siteAuthed: true })
+    const result = deleteDashboardRoom(ROOM.slug)
 
     expect(result).toEqual({ ok: true, status: 200 })
     expect(getRoomBySlug(ROOM.slug)).toBeNull()
@@ -67,27 +67,14 @@ describe('deleteDashboardRoom', () => {
     expect(loadRoomContent(OTHER.slug)).toEqual(CONTENT)
   })
 
-  it('unauthenticated delete leaves the room in place', () => {
-    createRoom(ROOM)
-    const copyDir = plantServerCopy(ROOM.slug)
-    saveRoomContent(ROOM.slug, CONTENT)
-
-    const result = deleteDashboardRoom({ slug: ROOM.slug, siteAuthed: false })
-
-    expect(result).toEqual({ ok: false, status: 403 })
-    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug, name: ROOM.name })
-    expect(existsSync(copyDir)).toBe(true)
-    expect(loadRoomContent(ROOM.slug)).toEqual(CONTENT)
-  })
-
   it('unknown or missing slug returns status 404 and does not throw', () => {
     createRoom(ROOM)
     const copyDir = plantServerCopy(ROOM.slug)
 
-    expect(deleteDashboardRoom({ slug: 'no-such-room', siteAuthed: true })).toEqual({ ok: false, status: 404 })
-    expect(deleteDashboardRoom({ slug: '../not-a-room', siteAuthed: true })).toEqual({ ok: false, status: 404 })
-    expect(deleteDashboardRoom({ slug: '', siteAuthed: true })).toEqual({ ok: false, status: 404 })
-    expect(deleteDashboardRoom({ slug: null, siteAuthed: true })).toEqual({ ok: false, status: 404 })
+    expect(deleteDashboardRoom('no-such-room')).toEqual({ ok: false, status: 404 })
+    expect(deleteDashboardRoom('../not-a-room')).toEqual({ ok: false, status: 404 })
+    expect(deleteDashboardRoom('')).toEqual({ ok: false, status: 404 })
+    expect(deleteDashboardRoom(null)).toEqual({ ok: false, status: 404 })
     expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug })
     expect(existsSync(copyDir)).toBe(true)
   })
@@ -97,7 +84,7 @@ describe('deleteDashboardRoom', () => {
     createRoom(OTHER)
     recordResearchUsage({ roomSlug: ROOM.slug, mode: 'ask', tokens: 7, cost: 1 })
 
-    const result = deleteDashboardRoom({ slug: ROOM.slug, siteAuthed: true })
+    const result = deleteDashboardRoom(ROOM.slug)
 
     expect(result).toEqual({ ok: true, status: 200 })
     const { rooms } = getUsageDashboard({})

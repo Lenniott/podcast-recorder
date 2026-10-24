@@ -86,7 +86,6 @@ beforeEach(() => {
   process.env.DB_PATH = ':memory:'
   process.env.SECRET = SECRET
   process.env.SERVER_COPY_DIR = serverCopyDir
-  process.env.ROOM_MAX_AGE_HOURS = '12'
   _resetDb()
 })
 

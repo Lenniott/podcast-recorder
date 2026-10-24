@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  getActiveRoomBySlug: vi.fn(() => ({
+  getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash',
     guest_ai_allowed: 0
@@ -29,7 +29,7 @@ vi.mock('../../src/lib/server/research-eval-log.js', () => ({
   appendResearchEvalLog: vi.fn()
 }))
 
-import { getActiveRoomBySlug, getCustomPrompt, recordResearchUsage } from '../../src/lib/server/db.js'
+import { getRoomBySlug, getCustomPrompt, recordResearchUsage } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms, _setResearchFetchForTests } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -116,7 +116,7 @@ describe('setupWss — panel button → Custom Prompt → research entry (no hig
       if (id === RECAP_BLOCKS.id) return { ...RECAP_BLOCKS }
       return null
     })
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
     process.env.OPENROUTER_API_KEY = 'test-api-key-never-sent-anywhere'
 
     fetchCalls = []
@@ -203,7 +203,7 @@ describe('setupWss — panel button → Custom Prompt → research entry (no hig
 
   it('with Guest Research Access on, a guest can trigger one — same gate as Ask/annotation_ask', async () => {
     _resetRooms()
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room2', password_hash: 'mock-hash', guest_ai_allowed: 1 })
+    getRoomBySlug.mockReturnValue({ slug: 'room2', password_hash: 'mock-hash', guest_ai_allowed: 1 })
     const wss2 = mockWss()
     setupWss(wss2)
     const g = mockWs()

@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  getActiveRoomBySlug: vi.fn(() => ({
+  getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
@@ -23,7 +23,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
-import { getActiveRoomBySlug, recordGuestAccess } from '../../src/lib/server/db.js'
+import { getRoomBySlug, recordGuestAccess } from '../../src/lib/server/db.js'
 import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { createRecordingSession as createRoomRecordingClient } from '../../src/lib/recording/synced-recording-session.js'
@@ -42,7 +42,7 @@ describe('setupWss — connection handling', () => {
     _resetRooms()          // clear stale state from previous test
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
   })
 
   it('closes connection when no slug provided', () => {
@@ -54,14 +54,14 @@ describe('setupWss — connection handling', () => {
     // Re-setup to test this path
     const wss2 = mockWss()
     setupWss(wss2)
-    getActiveRoomBySlug.mockReturnValue(null)
+    getRoomBySlug.mockReturnValue(null)
     const ws2 = mockWs()
     wss2.connect(ws2, 'nonexistent')
     expect(ws2.closed).toBe(true)
   })
 
   it('closes connection when room does not exist', () => {
-    getActiveRoomBySlug.mockReturnValue(null)
+    getRoomBySlug.mockReturnValue(null)
     const ws = mockWs()
     wss.connect(ws, 'badslug')
     expect(ws.closed).toBe(true)
@@ -85,7 +85,7 @@ describe('setupWss — connection handling', () => {
       mkdirSync(dir, { recursive: true })
       writeFileSync(joinPath(dir, 'client-a.wav'), Buffer.from([1, 2, 3, 4]))
       const old = Date.now() - 13 * 60 * 60 * 1000
-      getActiveRoomBySlug.mockReturnValue({
+      getRoomBySlug.mockReturnValue({
         slug: 'room1',
         password_hash: 'mock-hash',
         created_at: old,
@@ -140,7 +140,7 @@ describe('setupWss — connection handling', () => {
       }
       writeFileSync(joinPath(dir, 'shortguest1.wav'), Buffer.alloc(300))
       const fresh = Date.now()
-      getActiveRoomBySlug.mockReturnValue({
+      getRoomBySlug.mockReturnValue({
         slug: 'room1',
         password_hash: 'mock-hash',
         created_at: fresh,
@@ -645,7 +645,7 @@ describe('setupWss — yt_duck (hold-to-talk)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -704,7 +704,7 @@ describe('setupWss — transcript_activity (interim-speech "something\'s coming"
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')

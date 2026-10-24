@@ -2,9 +2,11 @@
  * Bulk unlock and bulk delete for the Usage Dashboard.
  *
  * Unknown slugs are skipped and do not abort the rest of the set. Unlock
- * goes through `unlockRoom` (guest-lock clock and inactivity only). Delete
+ * goes through `unlockRoom` (guest-lock clock and last access only). Delete
  * goes through `deleteDashboardRoom` (same room removal as one row,
  * including leaving research usage totals in place).
+ *
+ * Neither function checks the site password. The home-page actions do.
  */
 import { unlockRoom } from './guest-join.js'
 import { deleteDashboardRoom } from './dashboard-room-delete.js'
@@ -31,22 +33,17 @@ export function unlockRooms(slugs, now = Date.now()) {
 }
 
 /**
- * Delete each slug when the site password is satisfied. `siteAuthed`
- * anything other than `true` deletes nothing. Otherwise each slug is
- * handed to `deleteDashboardRoom`; unknown slugs and other 404s go to
- * `skipped`, and a bad slug does not stop the rest.
+ * Delete each slug. Unknown slugs and other 404s go to `skipped`. A bad
+ * slug does not stop the rest. Always `{ ok: true }` — a refusal to delete
+ * anything at all is the page action's 403, not a result from here.
  *
- * @returns {{ ok: true, status: 200, deleted: string[], skipped: string[] }
- *   | { ok: false, status: 403, deleted: [], skipped: string[] }}
+ * @returns {{ ok: true, status: 200, deleted: string[], skipped: string[] }}
  */
-export function deleteRooms({ slugs, siteAuthed } = {}) {
-  if (siteAuthed !== true) {
-    return { ok: false, status: 403, deleted: [], skipped: slugs }
-  }
+export function deleteRooms(slugs) {
   const deleted = []
   const skipped = []
   for (const slug of slugs) {
-    const result = deleteDashboardRoom({ slug, siteAuthed: true })
+    const result = deleteDashboardRoom(slug)
     if (result.ok) deleted.push(slug)
     else skipped.push(slug)
   }

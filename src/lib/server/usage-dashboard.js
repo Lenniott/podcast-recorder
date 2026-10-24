@@ -10,10 +10,8 @@
  */
 import { listRooms, getResearchUsageTotals, getResearchUsageByRoom } from './db.js'
 import { roomStateStore } from './ws-rooms.js'
-import { listServerCopyFiles } from './server-copy-storage.js'
-import { roomGuestLocked } from './guest-join.js'
-
-const BYTES_PER_SAMPLE = 2 // 16-bit mono PCM, fixed — see audio-utils.js's buildWavHeader
+import { listServerCopyFiles, serverCopySeconds } from './server-copy-storage.js'
+import { anyGuestLocked } from './guest-join.js'
 
 // Every e2e room is named "E2E <spec name> <timestamp>" (see
 // tests/playwright/helpers.js's createRoom and every spec's own call) — an
@@ -36,10 +34,7 @@ function isTestRoom(name) {
  *  from each WAV's own byte size and sample rate, not estimated. */
 function recordingSeconds(slug) {
   let seconds = 0
-  for (const file of listServerCopyFiles(slug)) {
-    const dataBytes = Math.max(0, file.byteSize - 44)
-    seconds += dataBytes / (file.sampleRate * BYTES_PER_SAMPLE)
-  }
+  for (const file of listServerCopyFiles(slug)) seconds += serverCopySeconds(file)
   return Math.round(seconds)
 }
 
@@ -75,7 +70,7 @@ export function getUsageDashboard(env = process.env) {
         slug: room.slug,
         name: room.name,
         createdAt: room.created_at,
-        guestLocked: roomGuestLocked(room, { env }),
+        guestLocked: anyGuestLocked(room, { env }),
         calls: usage?.calls ?? 0,
         tokens: usage?.tokens ?? 0,
         cost: usage?.cost ?? 0,

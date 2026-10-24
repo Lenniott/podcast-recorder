@@ -38,7 +38,7 @@ function getDb() {
   // Guest Research Access (see CONTEXT.md) — set once, at room creation,
   // replacing the old deployment-wide RESEARCH_GUEST_CAN_ASK env var.
   // Stored as 0/1 (SQLite has no boolean type); read back as a JS boolean
-  // by getRoomBySlug/getActiveRoomBySlug's callers via `!!room.guest_ai_allowed`.
+  // by getRoomBySlug's callers via `!!room.guest_ai_allowed`.
   try {
     _db.prepare(`ALTER TABLE rooms ADD COLUMN guest_ai_allowed INTEGER NOT NULL DEFAULT 0`).run()
   } catch (e) {
@@ -165,19 +165,9 @@ export function createRoom({ slug, name, passwordHash, passwordPlain = null, gue
   `).run(slug, name, passwordHash, passwordPlain, guestAiAllowed ? 1 : 0, now, now)
 }
 
+/** The room row, including one older than any guest-lock window. Age does not hide it. */
 export function getRoomBySlug(slug) {
   return getDb().prepare('SELECT * FROM rooms WHERE slug = ?').get(slug) || null
-}
-
-/**
- * The room row when the slug exists, including rooms older than
- * ROOM_MAX_AGE_HOURS. Age never deletes. `cleanupExpired` is accepted so
- * older callers keep working, and it must not delete.
- */
-export function getActiveRoomBySlug(slug, options = {}) {
-  // cleanupExpired used to delete aged rooms. Ignore it: age never deletes.
-  void options.cleanupExpired
-  return getRoomBySlug(slug)
 }
 
 /** Every room, newest first — Usage Dashboard's own room list. Age does not drop a row. */
@@ -221,7 +211,7 @@ export function listGuestAccess(slug) {
 }
 
 export function roomExists(slug) {
-  return !!getActiveRoomBySlug(slug)
+  return !!getRoomBySlug(slug)
 }
 
 export function deleteRoom(slug) {
@@ -396,14 +386,6 @@ export function getResearchUsageByRoom() {
     GROUP BY room_slug
     ORDER BY MAX(created_at) DESC
   `).all()
-}
-
-/**
- * Age does not delete a room. Always returns 0. The startup scheduler still
- * calls this so process startup keeps the same shape — do not make it delete.
- */
-export function cleanupExpiredRooms() {
-  return 0
 }
 
 export default { getDb }

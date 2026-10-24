@@ -43,7 +43,6 @@ describe('authorizeServerCopyRequest', () => {
   beforeEach(() => {
     process.env.DB_PATH = ':memory:'
     process.env.SECRET = SECRET
-    process.env.ROOM_MAX_AGE_HOURS = '12'
     _resetDb()
   })
 
@@ -135,7 +134,6 @@ describe('authorizeServerCopyHostRequest', () => {
   beforeEach(() => {
     process.env.DB_PATH = ':memory:'
     process.env.SECRET = SECRET
-    process.env.ROOM_MAX_AGE_HOURS = '12'
     _resetDb()
   })
 

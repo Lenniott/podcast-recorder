@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  getActiveRoomBySlug: vi.fn(() => ({
+  getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash',
     guest_ai_allowed: 0
@@ -29,7 +29,7 @@ vi.mock('../../src/lib/server/research-eval-log.js', () => ({
   appendResearchEvalLog: vi.fn()
 }))
 
-import { getActiveRoomBySlug, getCustomPrompt } from '../../src/lib/server/db.js'
+import { getRoomBySlug, getCustomPrompt } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms, _setResearchFetchForTests } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -123,7 +123,7 @@ describe('setupWss — highlight → Custom Prompt → Card Annotation (ADR-0008
       if (id === HICKS_LAW_BLOCKS.id) return { ...HICKS_LAW_BLOCKS }
       return null
     })
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
     // A key has to be present or askResearchAssistant refuses before it ever
     // builds a request — this is a stand-in, and the injected fake above is
     // what actually answers, so it is never sent anywhere.
@@ -306,7 +306,7 @@ describe('setupWss — highlight → Custom Prompt → Card Annotation (ADR-0008
 
   it('with Guest Research Access on, a guest can trigger one — same gate as Ask', async () => {
     _resetRooms()
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room2', password_hash: 'mock-hash', guest_ai_allowed: 1 })
+    getRoomBySlug.mockReturnValue({ slug: 'room2', password_hash: 'mock-hash', guest_ai_allowed: 1 })
     const wss2 = mockWss()
     setupWss(wss2)
     const g = mockWs()

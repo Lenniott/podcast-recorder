@@ -17,8 +17,10 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - DB_PATH=/app/data/rooms.db
-      # Room metadata and server-copy files expire together after this many hours
-      - ROOM_MAX_AGE_HOURS=${ROOM_MAX_AGE_HOURS:-12}
+      # Guest lock. Age does not delete a room.
+      - GUEST_LOCK_HOURS=${GUEST_LOCK_HOURS:-12}
+      - GUEST_LOCK_RECORDING_MINUTES=${GUEST_LOCK_RECORDING_MINUTES:-10}
+      - GUEST_LOCK_INACTIVITY_HOURS=${GUEST_LOCK_INACTIVITY_HOURS:-2}
       - ROOM_STATE_GRACE_MS=${ROOM_STATE_GRACE_MS:-10000}
       # Per-IP sliding-window limits for general and authentication POSTs
       - MAX_POSTS_PER_MIN=${MAX_POSTS_PER_MIN:-20}

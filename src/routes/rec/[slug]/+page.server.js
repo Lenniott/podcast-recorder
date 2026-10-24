@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getRoomBySlug, listCustomPromptSummaries, recordGuestAccess } from '$lib/server/db.js'
-import { guestJoinDecision } from '$lib/server/guest-join.js'
+import { getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
+import { guestJoinDecision, noteAdmittedGuest } from '$lib/server/guest-join.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
 const COOKIE = (slug) => `pr_auth_${slug}`
 const NAME_COOKIE = (slug) => `pr_name_${slug}`
@@ -41,7 +41,9 @@ export async function load({ params, cookies }) {
   if (!guestJoinDecision(room, { isHost: isHostClaim, clientId, env }).allowed) {
     throw redirect(303, '/?guestlocked=1')
   }
-  if (clientId) recordGuestAccess(slug, clientId, Date.now())
+  // clientId is already null for a host. A refusal returned above, so this
+  // stamp is only a guest who was let in.
+  if (clientId) noteAdmittedGuest(slug, clientId)
   console.log('[load /rec/%s] authenticated=%s', slug, authenticated)
 
   return {
@@ -112,7 +114,9 @@ export const actions = {
         maxAge: COOKIE_MAX_AGE,
         secure: isSecure()
       })
-      recordGuestAccess(slug, clientId, Date.now())
+      // After the password check, and not for a host. Stamping earlier, or
+      // stamping the host, would clear a guest's inactivity lock.
+      if (!isHost) noteAdmittedGuest(slug, clientId)
     }
     console.log('[action enter] cookie set (secure=%s) → redirect', isSecure())
 

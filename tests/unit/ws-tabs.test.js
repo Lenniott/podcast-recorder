@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  getActiveRoomBySlug: vi.fn(() => ({
+  getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash'
   })),
@@ -20,7 +20,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
-import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
+import { getRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { MAX_TABS } from '../../src/lib/room/tab-sync.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
@@ -36,7 +36,7 @@ describe('setupWss — tabs (structure: create/switch/close)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -180,7 +180,7 @@ describe('setupWss — the Transcript is not a tab_switch destination (ADR-0008,
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -257,7 +257,7 @@ describe('setupWss — tab_video (per-tab shared video, symmetric control)', () 
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
@@ -345,7 +345,7 @@ describe('setupWss — tab_text (shared textarea, symmetric)', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host  = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')

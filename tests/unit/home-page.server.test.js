@@ -562,7 +562,7 @@ describe('+page.server', () => {
       })
       expect(result).toMatchObject({
         status: 403,
-        data: { unlockError: 'Not authorised.' }
+        data: { error: 'Not authorised.' }
       })
       expect(getRoomBySlug(SLUG)).toMatchObject({
         created_at: CREATED_AT,
@@ -714,7 +714,7 @@ describe('+page.server', () => {
       })
       expect(result).toMatchObject({
         status: 403,
-        data: { unlockError: 'Not authorised.' }
+        data: { error: 'Not authorised.' }
       })
       expect(getRoomBySlug(A)).toMatchObject({ created_at: CREATED_AT, guest_lock_at: LOCKED_AT })
       expect(getRoomBySlug(B)).toMatchObject({ created_at: CREATED_AT, guest_lock_at: LOCKED_AT })

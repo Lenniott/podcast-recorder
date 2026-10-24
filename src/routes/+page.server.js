@@ -46,6 +46,16 @@ function isSiteAuthed(cookies) {
   return !env.SITE_PASSWORD || verifySiteToken(cookies.get(SITE_COOKIE))
 }
 
+/**
+ * The site-password gate for dashboard mutations. Unlock and delete helpers
+ * do not take a siteAuthed flag — a caller that skipped this check would
+ * be deleting or unlocking with no password, so the check stays here.
+ */
+function requireSiteAuth(cookies) {
+  if (!isSiteAuthed(cookies)) return fail(403, { error: 'Not authorised.' })
+  return null
+}
+
 async function readCustomPromptForm(request) {
   const data = await request.formData()
   return {
@@ -141,19 +151,20 @@ export const actions = {
   },
 
   unlock_room: async ({ request, cookies }) => {
-    if (!isSiteAuthed(cookies)) return fail(403, { unlockError: 'Not authorised.' })
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
     const data = await request.formData()
-    const slug = String(data.get('slug') || '')
-    unlockRoom(slug)
+    // An unknown slug returns { ok: false } and does not throw. The
+    // dashboard still redirects home. Delete answers 404 for that case.
+    unlockRoom(String(data.get('slug') || ''))
     throw redirect(303, '/')
   },
 
   delete_room: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
     const data = await request.formData()
-    const result = deleteDashboardRoom({
-      slug: data.get('slug'),
-      siteAuthed: isSiteAuthed(cookies)
-    })
+    const result = deleteDashboardRoom(data.get('slug'))
     if (!result.ok) return fail(result.status)
     throw redirect(303, '/')
   },
@@ -161,19 +172,18 @@ export const actions = {
   // Bulk variants of the row actions. Unknown slugs are skipped inside
   // unlockRooms / deleteRooms and do not abort the rest of the posted set.
   unlock_rooms: async ({ request, cookies }) => {
-    if (!isSiteAuthed(cookies)) return fail(403, { unlockError: 'Not authorised.' })
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
     const data = await request.formData()
     unlockRooms(data.getAll('slug'))
     throw redirect(303, '/')
   },
 
   delete_rooms: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
     const data = await request.formData()
-    const result = deleteRooms({
-      slugs: data.getAll('slug'),
-      siteAuthed: isSiteAuthed(cookies)
-    })
-    if (!result.ok) return fail(result.status)
+    deleteRooms(data.getAll('slug'))
     throw redirect(303, '/')
   },
 

@@ -79,10 +79,7 @@ describe('deleteRooms', () => {
     const keepDir = plantServerCopy('bulkkeep01')
     recordResearchUsage({ roomSlug: 'bulkdel01', mode: 'ask', tokens: 7, cost: 1 })
 
-    const result = deleteRooms({
-      slugs: ['bulkdel01', 'bulkdel02'],
-      siteAuthed: true
-    })
+    const result = deleteRooms(['bulkdel01', 'bulkdel02'])
 
     expect(result).toEqual({
       ok: true,
@@ -102,32 +99,12 @@ describe('deleteRooms', () => {
     expect(getResearchUsageTotals()).toMatchObject({ calls: 1, tokens: 7, cost: 1 })
   })
 
-  it('deletes nothing when siteAuthed is false', () => {
-    seed('bulkdel01', 'Drop One')
-    seed('bulkdel02', 'Drop Two')
-    const copyDir = plantServerCopy('bulkdel01')
-    const slugs = ['bulkdel01', 'bulkdel02']
-
-    const result = deleteRooms({ slugs, siteAuthed: false })
-
-    expect(result).toEqual({ ok: false, status: 403, deleted: [], skipped: slugs })
-    expect(getRoomBySlug('bulkdel01')).toMatchObject({ name: 'Drop One', guest_lock_at: LOCKED_AT })
-    expect(getRoomBySlug('bulkdel02')).toMatchObject({ name: 'Drop Two' })
-    expect(existsSync(copyDir)).toBe(true)
-    expect(getUsageDashboard({}).rooms.map((room) => room.slug)).toEqual(
-      expect.arrayContaining(['bulkdel01', 'bulkdel02'])
-    )
-  })
-
   it('skips unknown slugs and still deletes the known ones', () => {
     seed('bulkdel01', 'Drop One')
     seed('bulkkeep01', 'Keep')
     const copyDir = plantServerCopy('bulkdel01')
 
-    const result = deleteRooms({
-      slugs: ['no-such-room', 'bulkdel01', 'also-missing'],
-      siteAuthed: true
-    })
+    const result = deleteRooms(['no-such-room', 'bulkdel01', 'also-missing'])
 
     expect(result).toEqual({
       ok: true,
@@ -145,7 +122,7 @@ describe('deleteRooms', () => {
     seed('bulkkeep01', 'Keep')
     const copyDir = plantServerCopy('bulkkeep01')
 
-    expect(deleteRooms({ slugs: [], siteAuthed: true })).toEqual({
+    expect(deleteRooms([])).toEqual({
       ok: true,
       status: 200,
       deleted: [],

@@ -120,7 +120,6 @@ describe('rec/[slug]/+page.server', () => {
     process.env.DB_PATH = ':memory:'
     process.env.SECRET = SECRET
     process.env.SERVER_COPY_DIR = serverCopyDir
-    process.env.ROOM_MAX_AGE_HOURS = '12'
     process.env.GUEST_LOCK_HOURS = '12'
     process.env.GUEST_LOCK_RECORDING_MINUTES = '10'
     process.env.GUEST_LOCK_INACTIVITY_HOURS = '2'
@@ -497,6 +496,7 @@ describe('rec/[slug]/+page.server', () => {
       )
       expect(cookies.jar.get(`pr_auth_${SLUG}`).value).toHaveLength(64)
       expect(getRoomBySlug(SLUG)?.slug).toBe(SLUG)
+      expect(getGuestLastAccess(SLUG, 'longguest01')).toBeNull()
     })
 
     it('lets a host claim enter a locked room', async () => {

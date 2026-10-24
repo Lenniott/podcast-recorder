@@ -215,9 +215,10 @@ Other guests are decided from their own copies and access. Before any
 server-copy file exists, guests stay allowed even if the clock is older
 than the limit. The host (`pr_host_<slug>`, via `getHostClaim`) is always
 allowed. Guest lock does not delete the room, and it is not a host lock.
-`ROOM_MAX_AGE_HOURS` is a separate comparison and is not this join gate.
-Refusal goes through `guestJoinDecision` for both the room page and the
-room WebSocket.
+Refusal is `guestJoinDecision` for both the room page and the room
+WebSocket. The dashboard shows the room locked when `anyGuestLocked` is
+true — any refusal from that same decision. After a guest is admitted,
+`noteAdmittedGuest` records last access. A refused join does not.
 _Avoid_: host lock, expiry, delete-on-age
 
 **Unlock**:

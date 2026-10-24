@@ -5,7 +5,7 @@
  *
  * A server-copy upload is only authorized for a room that still exists.
  * Age does not delete a room and does not make it unavailable —
- * `getActiveRoomBySlug` returns an old room. A room that is actually gone
+ * `getRoomBySlug` returns an old room. A room that is actually gone
  * is rejected here exactly like a room that never existed. On top of that,
  * the caller must hold the
  * same per-room session cookie the rest of the app already uses to gate
@@ -25,7 +25,7 @@
  * the capability token for the exact `clientId` it's acting on.
  */
 import { env } from '$env/dynamic/private'
-import { getActiveRoomBySlug } from './db.js'
+import { getRoomBySlug } from './db.js'
 import { verifySessionToken, verifyServerCopyToken, getHostClaim } from './auth.js'
 
 const AUTH_COOKIE = (slug) => `pr_auth_${slug}`
@@ -55,7 +55,7 @@ export function isValidServerCopyClientId(clientId) {
  * ticket 11 — it never dealt in per-`clientId` ownership.)
  */
 export function authorizeServerCopyRequest({ slug, cookies, clientId, token }) {
-  const room = getActiveRoomBySlug(slug)
+  const room = getRoomBySlug(slug)
   if (!room) return { ok: false, status: 410, reason: 'room-unavailable' }
 
   const sessionToken = cookies.get(AUTH_COOKIE(slug))
@@ -81,7 +81,7 @@ export function authorizeServerCopyRequest({ slug, cookies, clientId, token }) {
  * rather than inventing a third definition of "host."
  */
 export function authorizeServerCopyHostRequest({ slug, cookies }) {
-  const room = getActiveRoomBySlug(slug)
+  const room = getRoomBySlug(slug)
   if (!room) return { ok: false, status: 410, reason: 'room-unavailable' }
 
   if (!getHostClaim(slug, cookies, room, env.SECRET)) {

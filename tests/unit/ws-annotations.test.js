@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ─── Mock db so ws-rooms doesn't need a real DB ─────────────────────────────
 vi.mock('../../src/lib/server/db.js', () => ({
-  getActiveRoomBySlug: vi.fn(() => ({
+  getRoomBySlug: vi.fn(() => ({
     slug: 'room1',
     password_hash: 'mock-hash',
     guest_ai_allowed: 0
@@ -26,7 +26,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
   makeServerCopyToken: vi.fn((slug, clientId) => `token:${slug}:${clientId}`)
 }))
 
-import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
+import { getRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 
@@ -49,7 +49,7 @@ describe('setupWss — Annotations (per-tab, shared — see ADR-0008 and ticket 
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash', guest_ai_allowed: 0 })
     host = mockWs()
     guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')

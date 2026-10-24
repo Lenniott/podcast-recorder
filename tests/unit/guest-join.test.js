@@ -14,8 +14,9 @@ import {
   getGuestLockHours,
   getGuestLockInactivityHours,
   getGuestLockRecordingMinutes,
+  anyGuestLocked,
   guestJoinDecision,
-  roomGuestLocked,
+  noteAdmittedGuest,
   unlockRoom
 } from '../../src/lib/server/guest-join.js'
 
@@ -275,7 +276,7 @@ describe('guest join', () => {
       plantWav('guest-a.wav', wavBytes(601))
       plantWav('guest-b.wav', 4)
       const room = roomAt(NOW - HOUR)
-      expect(roomGuestLocked(room, { now: NOW, env: ENV })).toBe(true)
+      expect(anyGuestLocked(room, { now: NOW, env: ENV })).toBe(true)
       expect(guestJoinDecision(room, { now: NOW, env: ENV }).reason).toBe('ok')
     })
   })
@@ -357,6 +358,17 @@ describe('guest join', () => {
       expect(unlockRoom('', NOW)).toEqual({ ok: false })
       expect(unlockRoom(undefined, NOW)).toEqual({ ok: false })
       expect(getRoomBySlug('no-such-slug')).toBeNull()
+    })
+  })
+
+  describe('noteAdmittedGuest', () => {
+    it('records last access for a guest and ignores an empty id', () => {
+      createRoom({ slug: SLUG, name: 'Admitted', passwordHash: 'hash-value' })
+      noteAdmittedGuest(SLUG, 'guest-a', NOW)
+      noteAdmittedGuest(SLUG, '', NOW + 1)
+      noteAdmittedGuest('', 'guest-a', NOW + 1)
+      expect(getGuestLastAccess(SLUG, 'guest-a')).toBe(NOW)
+      expect(getGuestLastAccess(SLUG, '')).toBeNull()
     })
   })
 })
