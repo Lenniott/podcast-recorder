@@ -1,3 +1,6 @@
+/** Linear RMS at or below this is no signal. About −80 dBFS. */
+export const SIGNAL_RMS = 0.0001
+
 /** Signal evidence is not a microphone quality score. A silent room and a dead
  * input can both produce zeros, so no-signal devices remain selectable. */
 export function rankMicrophones(devices, preferredId) {
@@ -88,7 +91,7 @@ export async function assessMicrophone(device, { audioContext, mediaDevices = na
     }
     if (track.readyState === 'ended') throw new Error('Microphone disconnected during assessment')
     const rms = Math.sqrt(sum / count)
-    return { deviceId: device.deviceId, label: device.label, status: rms > 0.0001 ? 'signal' : 'no-signal',
+    return { deviceId: device.deviceId, label: device.label, status: rms > SIGNAL_RMS ? 'signal' : 'no-signal',
       rms, peak, muted: !!track.muted, settings: track.getSettings?.() ?? {} }
   } catch (error) {
     return { deviceId: device.deviceId, label: device.label, status: 'unavailable', error: error.message }

@@ -43,6 +43,7 @@ export function createAudioEngine({
   let unwatchMic = () => {}
   let switchVersion = 0
   let closed = false
+  let microphoneRequest = null
   const microphones = createMicrophoneManager({
     list: async () => { await loadDevices(); return getDevices() },
     assess: device => assessMicrophone(device, { audioContext: audioCtx,
@@ -56,7 +57,19 @@ export function createAudioEngine({
   // Detection only reports the event. Both this path and callers use the same switch function.
   function micEnded() {
     micConnected = false
-    void switchToBestMic().catch(error => report('mic-disconnected', 'Microphone reconnect failed.', error))
+    void requestMicrophone()
+  }
+
+  function requestMicrophone() {
+    if (micConnected) return Promise.resolve(true)
+    if (microphoneRequest) return microphoneRequest
+    microphoneRequest = switchToBestMic()
+      .catch(error => {
+        report('mic-disconnected', 'Microphone reconnect failed.', error)
+        return false
+      })
+      .finally(() => { if (micConnected) microphoneRequest = null })
+    return microphoneRequest
   }
 
   async function switchMic(deviceId) {
@@ -90,6 +103,7 @@ export function createAudioEngine({
       report('mic-processing', 'Browser left audio processing on for the selected microphone.')
     }
     micConnected = true
+    microphoneRequest = null
     unwatchMic = watchMicrophoneDisconnect(track, micEnded)
     setSelectedDeviceId(micDeviceId)
     onMicConnected?.()
@@ -212,6 +226,7 @@ export function createAudioEngine({
     },
     switchMic,
     switchToBestMic,
+    requestMicrophone,
     refreshMicrophones,
     listMicrophones: microphones.listMicrophones,
     assessMicrophones: microphones.assessMicrophones,

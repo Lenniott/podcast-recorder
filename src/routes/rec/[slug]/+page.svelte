@@ -204,7 +204,7 @@
       if (!recordingSession || (recordingState !== 'recording' && recordingState !== 'stopping')) return
       const i16 = float32ToInt16(buffer)
 
-      bytesWritten += recordingSession.writeChunk(i16, { micConnected: audioEngine.micConnected })
+      bytesWritten += recordingSession.writeChunk(i16)
     },
     onIssue(issue) {
       if (recordingSession) recordingSession.reportIssue(issue)
@@ -424,9 +424,15 @@
     await audioEngine.changeMic(selectedDeviceId)
   }
 
-  // Callable independently of disconnect detection, including a future UI action.
+  // Re-measure, then leave the current device if another one is actually sending audio.
   async function switchToBestMic(options = { excludeCurrent: true }) {
-    await audioEngine.assessMicrophones()
+    const ranked = await audioEngine.assessMicrophones()
+    const skipCurrent = options.excludeCurrent !== false
+    const live = ranked.some(device => device.status === 'signal' && (!skipCurrent || device.deviceId !== selectedDeviceId))
+    if (!live) {
+      recordingSession?.reportIssue({ code: 'no-signal', severity: 'warning', destination: 'capture', message: 'No microphone is sending a signal.' })
+      return false
+    }
     return audioEngine.switchToBestMic(options)
   }
 
@@ -674,7 +680,8 @@
         fileWritable = null
         recordingState = 'idle'
       },
-      onStopRequested: () => { if (recordingSession === session) void stopRecording() }
+      onStopRequested: () => { if (recordingSession === session) void stopRecording() },
+      onMicrophoneNeeded: () => switchToBestMic({ excludeCurrent: true }),
     })
 
     try {

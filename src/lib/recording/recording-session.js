@@ -1,13 +1,15 @@
 import { createCaptureWriter } from './capture-writer.js'
 import { buildWavHeader } from './audio-utils.js'
+import { SIGNAL_RMS } from './microphones.js'
 
 /** Coordinates one take. Issues are data for the caller; save failures also
  * request Stop. Destination completion is independent and never inferred. */
 export function createRecordingSession({ sampleRate, file, upload, stopCapture, onWritten, onIssue,
-  onStopRequested, onLocalFinished, silenceSeconds = 600, slowWriteMs = 1000, writeTimeoutMs = 20000 }) {
+  onStopRequested, onLocalFinished, onMicrophoneNeeded, noSignalSeconds = 3, slowWriteMs = 1000, writeTimeoutMs = 20000 }) {
   let accepting = true
   let stopPromise = null
   let silentSamples = 0
+  let noSignalSettled = false
   const reported = new Set()
 
   function reportIssue(issue) {
@@ -24,11 +26,33 @@ export function createRecordingSession({ sampleRate, file, upload, stopCapture, 
   const writer = createCaptureWriter({ sampleRate, write: bytes => file.write(bytes), onWritten,
     onIssue: reportIssue, slowWriteMs, writeTimeoutMs })
 
-  function writeChunk(samples, { micConnected = true } = {}) {
+  function hasSignal(samples) {
+    let sum = 0
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i] / 32768
+      sum += s * s
+    }
+    return Math.sqrt(sum / samples.length) > SIGNAL_RMS
+  }
+
+  function writeChunk(samples) {
     if (!accepting || !samples?.length) return 0
-    silentSamples = micConnected && samples.every(s => s === 0) ? silentSamples + samples.length : 0
-    if (silentSamples >= silenceSeconds * sampleRate) {
-      reportIssue({ code: 'prolonged-silence', severity: 'warning', destination: 'capture', message: 'The connected microphone has recorded prolonged silence.' })
+    if (hasSignal(samples)) {
+      silentSamples = 0
+      noSignalSettled = false
+    } else if (!noSignalSettled) {
+      silentSamples += samples.length
+      if (silentSamples >= noSignalSeconds * sampleRate) {
+        silentSamples = 0
+        noSignalSettled = true
+        let switched
+        try { switched = onMicrophoneNeeded?.() } catch { /* connecting cannot block saving */ }
+        if (switched && typeof switched.then === 'function') {
+          switched.then(ok => { noSignalSettled = ok === false }, () => { noSignalSettled = false })
+        } else {
+          noSignalSettled = switched === false
+        }
+      }
     }
     // Neither submission may prevent the other destination receiving this chunk.
     try { upload.handleChunk(samples) } catch (error) {

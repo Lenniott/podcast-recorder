@@ -258,6 +258,30 @@ describe('capture start/stop protocol', () => {
   })
 })
 
+it('asks once for a microphone while none is connected', async () => {
+  installAudioGlobals()
+  let stream
+  const getUserMedia = vi.fn(async () => {
+    if (!stream) {
+      stream = createStream('Mic 1')
+      return stream
+    }
+    throw new Error('no input')
+  })
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const { engine } = createEngine()
+    await engine.init()
+    await engine.requestMicrophone()
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+
+    stream.track.onended()
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    await engine.requestMicrophone()
+    expect(getUserMedia).toHaveBeenCalledTimes(2)
+  } finally { vi.unstubAllGlobals() }
+})
+
 it('quiet audio never reconnects; an ended track does', async () => {
   const { workletNode } = installAudioGlobals()
   const stream = createStream()

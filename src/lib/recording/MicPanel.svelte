@@ -63,9 +63,9 @@
 
     {#if micFallback}
       <p class="fallback-warn">
-        <AlertTriangle /> Original mic disconnected — switched to
-        <strong>{micFallbackName}</strong>. Recording continues. Reconnect your
-        mic or pick a new one above.
+        <AlertTriangle /> Previous microphone had no signal — switched to
+        <strong>{micFallbackName}</strong>. Recording continues. Reconnect it
+        or pick another above.
       </p>
     {/if}
   </div>
