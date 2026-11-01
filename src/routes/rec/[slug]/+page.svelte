@@ -4,16 +4,16 @@
   import { browser } from '$app/environment'
   import { page } from '$app/stores'
   import { buildWavHeader, float32ToInt16, buildWavBlob } from '$lib/recording/audio-utils.js'
-  import { createCaptureWriter } from '$lib/recording/capture-writer.js'
+  import { createRecordingSession } from '$lib/recording/recording-session.js'
   import { createServerCopyUpload } from '$lib/server-copy/server-copy-upload.js'
   import {
     deriveServerCopyDisplay,
-    deriveServerCopyUploadState,
-    shouldAnnounceServerCopyFailure
+    deriveServerCopyUploadState
   } from '$lib/server-copy/server-copy-status.js'
   import { deriveExitGuard, isIncompleteServerCopyUpload } from '$lib/recording/exit-guard.js'
   import { createWrittenAudioRing } from '$lib/recording/written-audio-ring.js'
   import { METER_MIN, dbToMeterPct } from '$lib/recording/meter.js'
+  import Model from '$lib/Model.svelte'
   import RecordingCheckModal from '$lib/recording/RecordingCheckModal.svelte'
   import PasswordGate from '$lib/PasswordGate.svelte'
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
@@ -29,6 +29,7 @@
   } from '$lib/recording/recording-check-share.js'
   import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
   import { createAudioEngine } from '$lib/recording/audio-engine.js'
+  import { listMicrophones } from '$lib/recording/microphones.js'
   import { createLevelMeter } from '$lib/recording/level-meter.js'
   import { createTranscriptCapture } from '$lib/room/transcript-capture.js'
   // The two transcript reducers, unchanged (ADR-0002's append-only
@@ -77,7 +78,7 @@
   let micPermission = 'prompt' // prompt | granted | denied
   let micFallback = false      // true when we auto-fell-back to a different mic
   let micFallbackName = ''     // label of the fallback device
-
+  let micIssues = false // draft UI; current issue reporting is console-only
   // ─── Audio recording state ──────────────────────────────────────────
   let audioEngineReady = false
   let fileWritable = null      // FileSystemWritableFileStream
@@ -88,10 +89,8 @@
   let recordingTimer = null
   let bytesWritten = 0         // display-only running total (updates immediately, not disk-confirmed)
   let recordingSampleRate = 48000
-  let captureWriter = null     // owns the WAV byte stream — see $lib/recording/capture-writer.js
-  // Convenience mirror of the local recording — see $lib/server-copy/server-copy-upload.js.
-  // Fed from captureWriter's own onWritten seam (via handleWritten below), so
-  // it can never race ahead of, or substitute for, local write confirmation.
+  let recordingSession = null     // coordinates this take and both save destinations
+  // Independent server destination, fed the same captured chunks as the local writer.
   // A failed/slow/rejected upload must never block or delay anything above.
   let serverCopyUpload = null
   let serverCopyTakeId = null
@@ -120,7 +119,7 @@
   }
   // While recording, the waveform draws from this instead of analyserNode —
   // it only ever holds audio the Capture Writer has confirmed was actually
-  // written to disk (fed via captureWriter's onWritten). The mic signal can
+  // written to disk (fed via recordingSession's onWritten). The mic signal can
   // look perfectly healthy while the file silently diverges from it; a
   // display sourced from the mic can never catch that. See
   // $lib/recording/written-audio-ring.js.
@@ -186,7 +185,6 @@
 
   // ─── Gain ────────────────────────────────────────────────────────────
   let gainValue   = 1.0        // linear multiplier (1.0 = 0 dB)
-
   // ─── dBFS meter ──────────────────────────────────────────────────────
   /** Smoothed RMS for the green bar. Peak only drives the hold line. */
   let meterFillDb  = METER_MIN
@@ -203,14 +201,20 @@
   const audioEngine = createAudioEngine({
     onLevel: levelMeter.handleLevel,
     onChunk(buffer) {
-      if (!captureWriter || (recordingState !== 'recording' && recordingState !== 'stopping')) return
+      if (!recordingSession || (recordingState !== 'recording' && recordingState !== 'stopping')) return
       const i16 = float32ToInt16(buffer)
-      // Queued internally and flushed in the background — a slow disk
-      // just makes the queue longer, it can never fabricate silence.
-      bytesWritten += captureWriter.writeChunk(i16)
+
+      bytesWritten += recordingSession.writeChunk(i16)
     },
-    onDeviceGapResolved(gapSec) {
-      if (recordingState === 'recording') captureWriter?.notifyDeviceGap(gapSec)
+    onIssue(issue) {
+      if (recordingSession) recordingSession.reportIssue(issue)
+      else handleRecordingIssue(issue)
+    },
+    onMicRanking(ranked) {
+      console.info('[recording] Microphone assessment: signal evidence, not hardware quality')
+      console.table(ranked.map((mic, index) => ({ priority: index + 1, label: mic.label,
+        deviceId: mic.deviceId, status: mic.status, rms: mic.rms, peak: mic.peak,
+        sampleRate: mic.settings?.sampleRate, channels: mic.settings?.channelCount, error: mic.error })))
     },
     onMicConnected() {
       injectReconnectMarker()
@@ -220,8 +224,7 @@
     getSelectedDeviceId: () => selectedDeviceId,
     setSelectedDeviceId: (id) => { selectedDeviceId = id },
     setMicFallback: (value) => { micFallback = value },
-    setMicFallbackName: (name) => { micFallbackName = name },
-    setMicPermissionDenied: () => { micPermission = 'denied' }
+    setMicFallbackName: (name) => { micFallbackName = name }
   })
 
   let sessionStarted = false
@@ -242,14 +245,6 @@
   // (ticket 07) shows. Derived via deriveServerCopyDisplay, same as the
   // sidebar (ticket 06), so the two never disagree on what "percent" means.
   let serverCopyUploadPercent = 0
-  // Ticket 08: the wait modal only stays open for "still might finish"
-  // states (see exit-guard.js's isIncompleteServerCopyUpload) — `failed`
-  // isn't one of them, so it closes the instant a copy gives up, same as
-  // if it had completed. This flag gates the one-time alert that fills
-  // that gap (see the reactive block below) so it fires at most once per
-  // take; reset alongside the rest of this take's server-copy state in
-  // startRecording().
-  let serverCopyFailureAnnounced = false
   let allowNextGuardedNavigation = false
   /** False once we have a display name from cookie, sessionStorage, or form. */
   let nameGateShow = !data.participantName?.trim()
@@ -264,23 +259,6 @@
   // reached ticket 05's definition of complete yet. Scoped to this
   // participant only — the sidebar (ticket 06) is the all-participants view.
   $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload
-  // Ticket 08: fills the gap left by the wait modal above closing silently
-  // on failure — see shouldAnnounceServerCopyFailure's doc comment. A
-  // plain `$:` block (not something tied only to serverCopyUpload's own
-  // onProgress callback) so this still fires when recordingState alone
-  // flips to 'idle' after the copy had already failed while still
-  // recording, not only when a fresh progress event happens to land after.
-  $: if (shouldAnnounceServerCopyFailure({
-    recordingState,
-    uploadState: serverCopyUploadState,
-    announced: serverCopyFailureAnnounced
-  })) {
-    serverCopyFailureAnnounced = true
-    alert(
-      "Your server copy could not finish uploading and won't complete. " +
-      "Your recording is already saved on this device — you'll need to send that file to the host another way."
-    )
-  }
   // Single source of truth for both severity tiers of the exit guard — see
   // $lib/recording/exit-guard.js for why active-recording always wins when both are
   // true, so the two warnings can never collide or double-fire.
@@ -423,8 +401,7 @@
 
   async function loadDevices() {
     try {
-      const all = await navigator.mediaDevices.enumerateDevices()
-      devices = all.filter(d => d.kind === 'audioinput')
+      devices = await listMicrophones()
       if (!selectedDeviceId && devices.length > 0) {
         selectedDeviceId = devices[0].deviceId
       }
@@ -447,18 +424,22 @@
     await audioEngine.changeMic(selectedDeviceId)
   }
 
-  /**
-   * Mic disappeared. Walk through every available device until one works.
-   * Last resort: no deviceId at all (browser picks built-in).
-   * Recording never stops — there will be a short gap in audio, nothing more.
-   */
-  async function connectMicWithFallback() {
-    await audioEngine.connectMicWithFallback()
+  // Re-measure, then leave the current device if another one is actually sending audio.
+  async function switchToBestMic(options = { excludeCurrent: true }) {
+    const ranked = await audioEngine.assessMicrophones()
+    const skipCurrent = options.excludeCurrent !== false
+    const live = ranked.some(device => device.status === 'signal' && (!skipCurrent || device.deviceId !== selectedDeviceId))
+    if (!live) {
+      recordingSession?.reportIssue({ code: 'no-signal', severity: 'warning', destination: 'capture', message: 'No microphone is sending a signal.' })
+      return false
+    }
+    return audioEngine.switchToBestMic(options)
   }
 
   async function initAudioEngine() {
     await audioEngine.init()
     audioEngineReady = true
+    void audioEngine.assessMicrophones().catch(error => handleRecordingIssue({ code: 'mic-assessment-failed', severity: 'warning', destination: 'capture', message: 'Could not assess microphones.', error }))
     const analyser = audioEngine.getAnalyserNode()
     writtenRing = createWrittenAudioRing(analyser.fftSize)
     audioEngine.setGain(gainValue)
@@ -495,7 +476,7 @@
   })
 
   /**
-   * Fires once per chunk, only after captureWriter has actually confirmed
+   * Fires once per chunk, only after recordingSession has actually confirmed
    * it was written (see capture-writer.js's onWritten). Feeds the live
    * waveform always; feeds the listen-back check's buffer only while that
    * check is open, capped so a host who leaves it open doesn't grow it
@@ -505,10 +486,6 @@
     writtenRing?.push(i16)
     recordingCheck.handleWritten(i16)
     if (recordingCheck.consumeAutoShare()) sendRecordingCheckPreview()
-    // Same seam, chained: the server-copy mirror only ever sees a chunk
-    // after it's already been handed to writtenRing/the preview buffer,
-    // i.e. after captureWriter has confirmed it hit local disk.
-    serverCopyUpload?.handleWritten(i16)
   }
 
   /**
@@ -655,18 +632,21 @@
       })
     } catch (e) {
       if (e.name === 'AbortError') return // user cancelled
-      alert(`Could not open file: ${e.message}`)
+      handleRecordingIssue({ code: 'save-failed', severity: 'error', destination: 'local', message: 'Could not open the recording file.', error: e })
       return
     }
 
-    fileWritable = await fileHandle.createWritable()
-    activeFileHandle = fileHandle
     recordingSampleRate = audioEngine.sampleRate
-
-    // Write placeholder WAV header (will patch at end with real size)
-    await fileWritable.write(buildWavHeader(0, recordingSampleRate))
+    try {
+      fileWritable = await fileHandle.createWritable()
+      await fileWritable.write(buildWavHeader(0, recordingSampleRate))
+      activeFileHandle = fileHandle
+    } catch (error) {
+      handleRecordingIssue({ code: 'save-failed', severity: 'error', destination: 'local', message: 'Could not start the local recording file.', error })
+      fileWritable = null
+      return
+    }
     bytesWritten = 44
-    audioEngine.clearPendingGap() // any gap before "recording" started isn't ours to backfill
 
     // Fresh take, fresh server-copy session — reset any status left over
     // from a previous take before this one has told the server anything,
@@ -676,25 +656,46 @@
     serverCopyTakeId = makeServerCopyTakeId()
     serverCopyUploadState = 'idle'
     serverCopyUploadPercent = 0
-    serverCopyFailureAnnounced = false
     sendServerCopyProgress(deriveServerCopyDisplay(null), { force: true })
+    let session
     serverCopyUpload = createServerCopyUpload({
       slug: data.slug,
       clientId,
       takeId: serverCopyTakeId,
       sampleRate: recordingSampleRate,
       onProgress: handleServerCopyProgress,
+      onIssue: issue => session?.reportIssue(issue),
       token: serverCopyToken
     })
-    startServerCopyUploadWhenReady()
-
-    captureWriter = createCaptureWriter({
+    recordingSession = session = createRecordingSession({
       sampleRate: recordingSampleRate,
-      write: (buf) => fileWritable.write(buf),
-      onWritten: handleWritten
+      file: fileWritable,
+      upload: serverCopyUpload,
+      stopCapture: () => audioEngine.stopCapture(),
+      onWritten: handleWritten,
+      onIssue: handleRecordingIssue,
+      onLocalFinished: result => {
+        if (recordingSession !== session || !result.saved) return
+        activeFileHandle = null
+        fileWritable = null
+        recordingState = 'idle'
+      },
+      onStopRequested: () => { if (recordingSession === session) void stopRecording() },
+      onMicrophoneNeeded: () => switchToBestMic({ excludeCurrent: true }),
     })
 
+    try {
+      audioEngine.startCapture()
+    } catch (error) {
+      handleRecordingIssue({ code: 'capture-start-failed', severity: 'error', destination: 'capture', message: 'Could not start audio capture.', error })
+      await recordingSession.stop()
+      recordingSession = null
+      activeFileHandle = null
+      fileWritable = null
+      return
+    }
     recordingState = 'recording'
+    startServerCopyUploadWhenReady()
     recordingSeconds = 0
     recordingStartedAtMs = Date.now()
 
@@ -705,6 +706,12 @@
     // own doc comment) — placed after every write-path-critical step above
     // has already completed.
     transcriptCapture.start()
+  }
+
+  // UI can consume this same issue object later. Saving never depends on it.
+  function handleRecordingIssue(issue) {
+    const log = issue.severity === 'error' ? console.error : console.warn
+    log('[recording]', issue)
   }
 
   async function stopRecording() {
@@ -728,31 +735,15 @@
       sendRecordingCheck(false)
     }
 
-    // Record through one final short grace window so a nearly-full worklet
-    // buffer can cross BUFFER_SIZE and post a real chunk before we finalize.
-    // The port handler keeps accepting chunks while recordingState is
-    // 'stopping'; otherwise this wait would merely discard the chunk it was
-    // supposed to protect.
-    await new Promise(r => setTimeout(r, 300))
-    const { dataByteCount } = await captureWriter.stop()
-    captureWriter = null
-
-    // The explicit "final length is now known" signal — see
-    // $lib/server-copy/server-copy-upload.js's finish() doc. Must come after local
-    // write confirmation (captureWriter.stop() above), never before. Not
-    // awaited: a slow/failing/rejected server copy must never delay or
-    // gate the local WAV finalize below (that's ticket 07's blocking-modal
-    // job, not this one, and only in the UI layer, never here).
-    serverCopyUpload?.finish()
-
-    // Patch the WAV header with the real data size
-    await fileWritable.seek(0)
-    await fileWritable.write(buildWavHeader(dataByteCount, recordingSampleRate))
-    await fileWritable.close()
-
-    activeFileHandle = null
-    fileWritable = null
-    recordingState = 'idle'
+    const session = recordingSession
+    const result = await session.stop()
+    console.info('[recording] Save result', result)
+    if (recordingSession === session) {
+      recordingSession = null
+      activeFileHandle = null
+      fileWritable = null
+      recordingState = 'idle'
+    }
   }
 
   async function toggleRecording() {
@@ -981,9 +972,13 @@
   // DEVICE CHANGE DETECTION
   // ───────────────────────────────────────────────────────────────────
 
-  function onDeviceChange() {
-    // Device list changed — reload and reconnect if our mic disappeared
-    connectMicWithFallback().catch(console.error)
+  async function onDeviceChange() {
+    try {
+      if (audioEngineReady) await audioEngine.refreshMicrophones()
+      else await loadDevices()
+    } catch (error) {
+      handleRecordingIssue({ code: 'mic-assessment-failed', severity: 'warning', destination: 'capture', message: 'Could not refresh microphones.', error })
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -1145,6 +1140,29 @@
     {clockOffset}
   />
 
+{#if micIssues}
+  <Model
+    open={micIssues}
+    labelledBy="mic-issues-title"
+    actions={[
+      {
+        label: 'Select a different microphone',
+        onClick: () => {
+          changeMic()
+          micIssues = false
+        }
+      }
+    ]}
+  >
+    <h2 id="mic-issues-title">Mic Issues</h2>
+    <p>We're having trouble recording audio. Please try a different microphone.</p>
+    <select aria-label="Replacement microphone" bind:value={selectedDeviceId}>
+      {#each devices as device (device.deviceId)}
+        <option value={device.deviceId}>{device.label}</option>
+      {/each}
+    </select>
+  </Model>
+{/if}
 <RecordingCheckModal
   open={checkModalOpen}
   sentence={checkSentence}

@@ -52,8 +52,27 @@ Open `http://localhost:5173`
 ```bash
 npm test                 # unit tests (Vitest)
 npm run test:coverage    # same, plus a coverage/ HTML report
+npm run test:mutation    # mutate capture-writer.js and check whether tests fail
+npm run test:mutation:recording # recording, upload/storage, reconnect, and worklet
 npm run test:e2e         # Playwright (needs .env with SECRET)
 ```
+
+Mutation testing uses Stryker with the existing Vitest configuration. The initial
+scope is `src/lib/recording/capture-writer.js`; change `mutate` in
+`stryker.config.json` to explore another module. Open
+`reports/mutation/mutation.html` after a run to inspect each mutation and the tests
+that caught it. Surviving mutations need review: some expose missing behavioural
+assertions, while others are equivalent to the original code. The command reports
+a baseline without enforcing a minimum score.
+
+The broader recording command runs modules one at a time and saves reports under
+`reports/mutation/recording/<module>/`. Completed reports remain available if a
+later run is interrupted. For a focused run, use
+`npm run test:mutation:recording -- room-connection`. Every selected module is
+retested; incremental reuse is disabled because the pinned runner can reuse stale
+results after tests change. `summary.json` in the recording report directory lists completed modules.
+Related-test discovery keeps each module focused on the tests importing it. The
+worklet runs separately because its tests read source into a VM rather than import it.
 
 ---
 

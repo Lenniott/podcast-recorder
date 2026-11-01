@@ -181,6 +181,79 @@ describe('createRoomConnection', () => {
     expect(statuses).toContain('disconnected')
   })
 
+  it('increases backoff across failed handshakes and resets it after opening', () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(1)
+    const { conn, sockets } = setup()
+    conn.connect()
+    sockets[0].close()
+    vi.advanceTimersByTime(999)
+    expect(sockets).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    sockets[1].close()
+    vi.advanceTimersByTime(1999)
+    expect(sockets).toHaveLength(2)
+    vi.advanceTimersByTime(1)
+    expect(sockets).toHaveLength(3)
+    sockets[2].open()
+    sockets[2].close()
+    vi.advanceTimersByTime(999)
+    expect(sockets).toHaveLength(3)
+    vi.advanceTimersByTime(1)
+    expect(sockets).toHaveLength(4)
+    conn.disconnect()
+  })
+
+  it('ignores open, close, and error callbacks from an obsolete socket', () => {
+    vi.useFakeTimers()
+    const { conn, sockets, statuses, onOpen } = setup()
+    const resync = vi.fn()
+    conn.registerResync(resync)
+    conn.connect()
+    const old = sockets[0]
+    old.open()
+    conn.disconnect()
+    conn.connect()
+    sockets[1].open()
+    statuses.length = 0
+    onOpen.mockClear()
+    resync.mockClear()
+
+    old.onopen()
+    old.onclose()
+    old.onerror()
+    expect(statuses).toEqual([])
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(resync).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    conn.send({ type: 'recording', recording: true })
+    expect(sockets[1].sent).toEqual(['{"type":"recording","recording":true}'])
+    conn.disconnect()
+  })
+
+  it('reports disconnected immediately while the socket close callback is still pending', async () => {
+    const socket = makeAsyncCloseSocket()
+    const statuses = []
+    const conn = createRoomConnection({ createSocket: () => socket,
+      onStatusChange: status => statuses.push(status) })
+    conn.connect()
+    socket.open()
+    conn.disconnect()
+    expect(statuses).toEqual(['connecting', 'connected', 'disconnected'])
+    await Promise.resolve()
+  })
+
+  it('supports omitted observers and disconnect before any socket exists', () => {
+    const socket = makeSocket()
+    const conn = createRoomConnection({ createSocket: () => socket })
+    expect(() => conn.disconnect()).not.toThrow()
+    conn.connect()
+    expect(() => socket.open()).not.toThrow()
+    expect(() => socket.message('{"type":"presence"}')).not.toThrow()
+    conn.disconnect()
+    expect(socket.readyState).toBe(3)
+  })
+
   it('disconnect() suppresses a pending reconnect', () => {
     vi.useFakeTimers()
     vi.spyOn(Math, 'random').mockReturnValue(0)

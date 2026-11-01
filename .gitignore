@@ -31,6 +31,10 @@ blob-report/
 # Vitest coverage (HTML/text reports)
 coverage/
 
+# Mutation testing sandboxes and reports
+.stryker-tmp/
+reports/mutation/
+
 # Claude Code agent worktrees — local, ephemeral git worktrees for
 # background subagents; never meant to be tracked (each is its own
 # nested checkout of this repo).

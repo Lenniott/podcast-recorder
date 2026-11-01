@@ -3,7 +3,6 @@ import { env } from '$env/dynamic/private'
 import { deleteRoom, getRoomBySlug, listCustomPromptSummaries } from '$lib/server/db.js'
 import { isRoomExpired } from '$lib/server/room-lifetime.js'
 import { verifyPassword, makeSessionToken, verifySessionToken, getHostClaim } from '$lib/server/auth.js'
-
 const COOKIE = (slug) => `pr_auth_${slug}`
 const NAME_COOKIE = (slug) => `pr_name_${slug}`
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 days

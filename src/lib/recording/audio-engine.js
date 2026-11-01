@@ -1,3 +1,5 @@
+import { createMicrophoneManager, assessMicrophone, openMicrophone, watchMicrophoneDisconnect } from './microphones.js'
+
 /**
  * WebAudio graph + mic resilience: AudioContext/worklet/analyser/gain-node
  * setup, connecting to a specific input device, and automatically falling
@@ -6,21 +8,20 @@
  * Device-list UI state stays page-local for Svelte reactivity. This module
  * reads/writes it through injected accessors.
  *
- * Guardrail: silence is written only for a measured, real device gap. This
- * module owns the measurement; the caller owns the decision to persist it.
+ * The worklet owns continuous samples, including zeros when input is missing.
  */
 export function createAudioEngine({
   onLevel,
   onChunk,
-  onDeviceGapResolved,
+  onIssue,
   onMicConnected,
+  onMicRanking,
   loadDevices,
   getDevices,
   getSelectedDeviceId,
   setSelectedDeviceId,
   setMicFallback,
-  setMicFallbackName,
-  setMicPermissionDenied
+  setMicFallbackName
 }) {
   let audioCtx = null
   let workletNode = null
@@ -29,103 +30,101 @@ export function createAudioEngine({
   let gainNode = null
   let micSource = null
   let micStream = null
-  let micGapStartedAt = null
+  let recording = false
+  let stopRequest = null
+  let stopId = 0
+  let micConnected = false
 
-  function resolveMicGap() {
-    if (micGapStartedAt == null) return
-    const gapSec = (audioCtx?.currentTime || 0) - micGapStartedAt
-    micGapStartedAt = null
-    onDeviceGapResolved?.(gapSec)
+  function report(code, message, error) {
+    onIssue?.({ code, severity: 'warning', destination: 'capture', message, error })
   }
 
-  async function connectMic(deviceId, { strictDevice = false } = {}) {
-    if (!audioCtx) return
+  let micDeviceId = ''
+  let unwatchMic = () => {}
+  let switchVersion = 0
+  let closed = false
+  let microphoneRequest = null
+  const microphones = createMicrophoneManager({
+    list: async () => { await loadDevices(); return getDevices() },
+    assess: device => assessMicrophone(device, { audioContext: audioCtx,
+      stream: device.deviceId === micDeviceId ? micStream : undefined }),
+    switchMic,
+    getCurrentId: () => micDeviceId,
+    isConnected: () => micConnected,
+    onRanking: ranked => onMicRanking?.(ranked)
+  })
 
-    if (micGapStartedAt == null) micGapStartedAt = audioCtx?.currentTime ?? null
-
-    micSource?.disconnect()
-    micStream?.getTracks().forEach(t => t.stop())
-
-    const constraints = {
-      audio: {
-        deviceId: deviceId
-          ? (strictDevice ? { exact: deviceId } : { ideal: deviceId })
-          : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1
-      }
-    }
-
-    micStream = await navigator.mediaDevices.getUserMedia(constraints)
-    micStream.getAudioTracks().forEach(track => {
-      track.onended = () => {
-        micGapStartedAt = audioCtx?.currentTime ?? null
-        connectMicWithFallback()
-      }
-    })
-
-    micSource = audioCtx.createMediaStreamSource(micStream)
-    micSource.connect(gainNode)
-    gainNode.connect(workletNode)
-    gainNode.connect(analyserNode)
-    onMicConnected?.()
-    resolveMicGap()
+  // Detection only reports the event. Both this path and callers use the same switch function.
+  function micEnded() {
+    micConnected = false
+    void requestMicrophone()
   }
 
-  async function connectMicWithFallback() {
-    await loadDevices()
+  function requestMicrophone() {
+    if (micConnected) return Promise.resolve(true)
+    if (microphoneRequest) return microphoneRequest
+    microphoneRequest = switchToBestMic()
+      .catch(error => {
+        report('mic-disconnected', 'Microphone reconnect failed.', error)
+        return false
+      })
+      .finally(() => { if (micConnected) microphoneRequest = null })
+    return microphoneRequest
+  }
 
-    const selectedDeviceId = getSelectedDeviceId()
-    const stillAvailable = getDevices().some(d => d.deviceId === selectedDeviceId)
-    if (stillAvailable) {
-      try {
-        await connectMic(selectedDeviceId, { strictDevice: true })
-        setMicFallback(false)
-        return
-      } catch { /* fall through */ }
+  async function switchMic(deviceId) {
+    if (!audioCtx || closed) throw new Error('Audio engine is not available')
+    const version = ++switchVersion
+    // Keep the existing input until its replacement has opened successfully.
+    const nextStream = await openMicrophone(deviceId)
+    if (closed || version !== switchVersion) {
+      nextStream.getTracks().forEach(track => track.stop())
+      throw new Error('Microphone switch was superseded')
     }
-
-    for (const device of getDevices()) {
-      if (device.deviceId === selectedDeviceId) continue
-      try {
-        await connectMic(device.deviceId)
-        setSelectedDeviceId(device.deviceId)
-        setMicFallback(true)
-        setMicFallbackName(device.label || 'Unknown microphone')
-        return
-      } catch { continue }
-    }
-
+    let nextSource
     try {
-      micSource?.disconnect()
-      micStream?.getTracks().forEach(t => t.stop())
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
-      })
-      micStream.getAudioTracks().forEach(track => {
-        track.onended = () => {
-          micGapStartedAt = audioCtx?.currentTime ?? null
-          connectMicWithFallback()
-        }
-      })
-      micSource = audioCtx.createMediaStreamSource(micStream)
-      micSource.connect(gainNode)
-      gainNode.connect(workletNode)
-      gainNode.connect(analyserNode)
-      onMicConnected?.()
-      resolveMicGap()
-
-      await loadDevices()
-      const label = micStream.getAudioTracks()[0]?.label || ''
-      const match = getDevices().find(d => d.label === label)
-      if (match) setSelectedDeviceId(match.deviceId)
-      setMicFallback(true)
-      setMicFallbackName(label || 'Built-in microphone')
-    } catch {
-      setMicPermissionDenied()
+      if (!nextStream.getAudioTracks().length) throw new Error('Microphone has no audio track')
+      nextSource = audioCtx.createMediaStreamSource(nextStream)
+      nextSource.connect(gainNode)
+    } catch (error) {
+      nextSource?.disconnect()
+      nextStream.getTracks().forEach(track => track.stop())
+      throw error
     }
+    unwatchMic()
+    micSource?.disconnect()
+    micStream?.getTracks().forEach(track => track.stop())
+    micStream = nextStream
+    micSource = nextSource
+    const track = micStream.getAudioTracks()[0]
+    const settings = track.getSettings?.() ?? {}
+    micDeviceId = settings.deviceId || deviceId
+    if (settings.echoCancellation || settings.noiseSuppression || settings.autoGainControl) {
+      report('mic-processing', 'Browser left audio processing on for the selected microphone.')
+    }
+    micConnected = true
+    microphoneRequest = null
+    unwatchMic = watchMicrophoneDisconnect(track, micEnded)
+    setSelectedDeviceId(micDeviceId)
+    onMicConnected?.()
+  }
+
+  async function switchToBestMic(options) {
+    const previous = micDeviceId
+    const switched = await microphones.switchToBestMic(options)
+    if (!switched) {
+      report('mic-disconnected', 'No microphone could be connected.')
+      return false
+    }
+    setMicFallback(micDeviceId !== previous)
+    setMicFallbackName(micStream.getAudioTracks()[0]?.label || 'Microphone')
+    return true
+  }
+
+  async function refreshMicrophones() {
+    const devices = await microphones.listMicrophones()
+    if (microphones.detectMicDisconnect(devices)) await switchToBestMic()
+    return microphones.assessMicrophones()
   }
 
   async function init() {
@@ -143,15 +142,24 @@ export function createAudioEngine({
     analyserNode.fftSize = 2048
     gainNode = audioCtx.createGain()
     gainNode.gain.value = 1.0
+    gainNode.connect(workletNode)
+    gainNode.connect(analyserNode)
     workletNode.connect(silentSink)
     silentSink.connect(audioCtx.destination)
 
-    workletNode.port.onmessage = async (e) => {
-      if (e.data.type === 'level') onLevel?.(e.data.rms, e.data.peak)
-      if (e.data.type === 'data') onChunk?.(e.data.buffer)
+    audioCtx.onstatechange = () => {
+      if (recording && audioCtx.state !== 'running') report('audio-suspended', 'Audio processing stopped; no samples are being captured.')
     }
-
-    await connectMic(getSelectedDeviceId())
+    workletNode.onprocessorerror = (error) => report('processor-failed', 'Audio processor failed.', error)
+    workletNode.port.onmessage = (e) => {
+      if (e.data.type === 'level') onLevel?.(e.data.rms, e.data.peak)
+      if (e.data.type === 'data' && recording) onChunk?.(e.data.buffer)
+      if (e.data.type === 'stopped' && stopRequest?.id === e.data.id) {
+        recording = false
+        stopRequest.resolve()
+      }
+    }
+    await switchMic(getSelectedDeviceId())
   }
 
   async function ensureRunning() {
@@ -175,11 +183,34 @@ export function createAudioEngine({
     workletNode?.port.postMessage({ type: 'debug_marker' })
   }
 
-  function clearPendingGap() {
-    micGapStartedAt = null
+  function startCapture() {
+    if (!workletNode || audioCtx.state !== 'running') throw new Error('Audio processing is not running')
+    recording = true
+    workletNode.port.postMessage({ type: 'start' })
+  }
+
+  function stopCapture() {
+    if (stopRequest) return stopRequest.promise
+    if (!recording) return Promise.resolve()
+    const id = ++stopId
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        recording = false
+        stopRequest = null
+        reject(new Error('Audio processor did not acknowledge Stop; the final chunk may be missing'))
+      }, 3000)
+      stopRequest = { id, resolve: () => { clearTimeout(timer); stopRequest = null; resolve() } }
+    })
+    stopRequest.promise = promise
+    workletNode.port.postMessage({ type: 'stop', id })
+    return promise
   }
 
   function close() {
+    closed = true
+    switchVersion++
+    microphones.close()
+    unwatchMic()
     micStream?.getTracks().forEach(t => t.stop())
     silentSink?.disconnect()
     audioCtx?.close()
@@ -187,14 +218,27 @@ export function createAudioEngine({
 
   return {
     init,
-    changeMic: (deviceId) => connectMic(deviceId, { strictDevice: true }),
-    connectMicWithFallback,
+    async changeMic(deviceId) {
+      try { await switchMic(deviceId); setMicFallback(false) } catch (error) {
+        setSelectedDeviceId(micDeviceId)
+        report('mic-disconnected', 'Selected microphone could not be connected.', error)
+      }
+    },
+    switchMic,
+    switchToBestMic,
+    requestMicrophone,
+    refreshMicrophones,
+    listMicrophones: microphones.listMicrophones,
+    assessMicrophones: microphones.assessMicrophones,
+    detectMicDisconnect: microphones.detectMicDisconnect,
     ensureRunning,
     setGain,
     scheduleClapTone,
     postDebugMarker,
     getAnalyserNode: () => analyserNode,
-    clearPendingGap,
+    startCapture,
+    stopCapture,
+    get micConnected() { return micConnected },
     get sampleRate() { return Math.round(audioCtx?.sampleRate || 48000) },
     close
   }

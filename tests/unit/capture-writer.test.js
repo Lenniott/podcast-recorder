@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createCaptureWriter } from '../../src/lib/recording/capture-writer.js'
 
 const SAMPLE_RATE = 48000
 const BUFFER_SIZE = 8192 // matches static/worklet/recorder-processor.js
+
+afterEach(() => vi.useRealTimers())
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -29,41 +31,32 @@ function realChunk(n = BUFFER_SIZE, fill = 1) {
 
 // ─── regression: the diagnosed bug ─────────────────────────────────────────
 // A write() that is slower than the real-time duration of one chunk must
-// NEVER cause silence to be fabricated — only notifyDeviceGap() may do that.
+// NEVER cause silence to be fabricated — the writer must preserve the submitted samples.
 
 describe('createCaptureWriter — slow disk does not fabricate silence', () => {
   it('writes only real audio, never silence, when write() is slower than real-time', async () => {
+    vi.useFakeTimers()
     // 250ms/write vs 170.7ms of real audio per chunk — the exact regime
     // that produced ~0.33s of manufactured silence per ~0.17s of speech.
+    const N = 6
     const sink = makeSlowSink(250)
     const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < N; i++) {
       writer.writeChunk(realChunk())
-      await delay(BUFFER_SIZE / SAMPLE_RATE * 1000) // arrive at the worklet's real-time cadence
+      await vi.advanceTimersByTimeAsync(BUFFER_SIZE / SAMPLE_RATE * 1000)
     }
-    await writer.stop()
+    const stopped = writer.stop()
+    await vi.runAllTimersAsync()
+    await stopped
 
-    expect(sink.written.length).toBe(6)
+    expect(sink.written.length).toBe(N)
     for (const chunk of sink.written) {
       // every written chunk is the real (non-zero) audio we queued —
       // no interleaved all-zero silence chunk anywhere in the file
       expect(chunk.every((s) => s === 1)).toBe(true)
     }
-    expect(writer.samplesWritten).toBe(6 * BUFFER_SIZE)
-  })
-
-  it('backlog from a slow disk never turns into gapSamples math at all', async () => {
-    const sink = makeSlowSink(500) // much slower than one chunk's real-time duration
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
-
-    for (let i = 0; i < 4; i++) writer.writeChunk(realChunk())
-    await writer.stop()
-
-    // 4 real chunks in, 4 real chunks out — no bonus silence chunks,
-    // regardless of how far behind the disk fell.
-    expect(sink.written.length).toBe(4)
-    expect(writer.dataByteCount).toBe(4 * BUFFER_SIZE * 2)
+    expect(writer.samplesWritten).toBe(N * BUFFER_SIZE)
   })
 })
 
@@ -105,70 +98,6 @@ describe('createCaptureWriter — onWritten', () => {
     expect(seen).toEqual([0, 100, 200])
   })
 
-  it('fires for notifyDeviceGap silence too — it reflects everything actually written, not just real audio', async () => {
-    const sink = makeSlowSink(0)
-    const seen = []
-    const writer = createCaptureWriter({
-      sampleRate: SAMPLE_RATE,
-      write: sink.write,
-      onWritten: (i16) => seen.push(i16.length)
-    })
-
-    writer.notifyDeviceGap(0.1) // 4800 samples at 48kHz
-    await writer.stop()
-
-    expect(seen).toEqual([4800])
-  })
-
-  it('is optional — omitting it changes nothing else about behavior', async () => {
-    const sink = makeSlowSink(0)
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
-    writer.writeChunk(realChunk())
-    await expect(writer.stop()).resolves.toBeTruthy()
-  })
-})
-
-// ─── notifyDeviceGap: the only legitimate source of silence ────────────────
-
-describe('createCaptureWriter — notifyDeviceGap', () => {
-  it('backfills exactly durationSec of silence, in samples', async () => {
-    const sink = makeSlowSink(0)
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
-
-    writer.notifyDeviceGap(0.5) // 500ms real device gap
-    await writer.stop()
-
-    expect(sink.written.length).toBe(1)
-    expect(sink.written[0].length).toBe(Math.round(0.5 * SAMPLE_RATE))
-    expect(sink.written[0].every((s) => s === 0)).toBe(true)
-  })
-
-  it('ignores non-positive or missing durations', async () => {
-    const sink = makeSlowSink(0)
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
-
-    writer.notifyDeviceGap(0)
-    writer.notifyDeviceGap(-1)
-    writer.notifyDeviceGap(undefined)
-    await writer.stop()
-
-    expect(sink.written.length).toBe(0)
-  })
-
-  it('interleaves real audio and a real gap in the order reported', async () => {
-    const sink = makeSlowSink(0)
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
-
-    writer.writeChunk(realChunk(100, 1))
-    writer.notifyDeviceGap(0.1)
-    writer.writeChunk(realChunk(100, 2))
-    await writer.stop()
-
-    expect(sink.written.map((c) => c.length)).toEqual([100, Math.round(0.1 * SAMPLE_RATE), 100])
-    expect(sink.written[0].every((s) => s === 1)).toBe(true)
-    expect(sink.written[1].every((s) => s === 0)).toBe(true)
-    expect(sink.written[2].every((s) => s === 2)).toBe(true)
-  })
 })
 
 // ─── regression: the OLD handler's reentrancy bug ──────────────────────────
@@ -185,6 +114,7 @@ describe('createCaptureWriter — notifyDeviceGap', () => {
 
 describe('createCaptureWriter — immune to the old handler-reentrancy bug', () => {
   it('writes real chunks in exact call order under jittery latency worse than the chunk cadence', async () => {
+    vi.useFakeTimers()
     const N = 40
     const CHUNK_MS = (BUFFER_SIZE / SAMPLE_RATE) * 1000 // ~170.7ms real-time cadence
     const callOrder = []
@@ -192,7 +122,7 @@ describe('createCaptureWriter — immune to the old handler-reentrancy bug', () 
       sampleRate: SAMPLE_RATE,
       write: async (buf) => {
         const id = new Int16Array(buf)[0]
-        await delay(150 + Math.random() * 200) // 150-350ms — worse than the 170.7ms cadence
+        await delay(id % 2 ? 350 : 150) // alternating latency around the 170.7ms cadence
         callOrder.push(id)
       }
     })
@@ -201,9 +131,11 @@ describe('createCaptureWriter — immune to the old handler-reentrancy bug', () 
       const chunk = realChunk(BUFFER_SIZE, 1)
       chunk[0] = i // tag each chunk so we can verify write() saw it in order
       writer.writeChunk(chunk)
-      await delay(CHUNK_MS) // arrive at the worklet's real-time cadence, not waiting on writes
+      await vi.advanceTimersByTimeAsync(CHUNK_MS)
     }
-    await writer.stop()
+    const stopped = writer.stop()
+    await vi.runAllTimersAsync()
+    await stopped
 
     expect(callOrder).toEqual(Array.from({ length: N }, (_, i) => i + 1))
   }, 25000)
@@ -235,7 +167,6 @@ describe('createCaptureWriter — stop() drains the real queue instead of guessi
     await writer.stop()
 
     writer.writeChunk(realChunk())
-    writer.notifyDeviceGap(1)
     await writer.drain()
 
     expect(sink.written.length).toBe(0)
@@ -254,41 +185,35 @@ describe('createCaptureWriter — stop() drains the real queue instead of guessi
   })
 })
 
-// ─── future upload mirror seam ─────────────────────────────────────────────
-// This ticket adds no upload feature. It locks in that a future "server
-// copy" mirror can attach to onWritten — the confirmed-write seam — without
-// ever being able to delay, corrupt, or block the local WAV write path.
-// A mirror in these tests stands in for that future code: it's just a
-// function passed as `onWritten` that a later ticket would use to push
-// confirmed chunks to a network queue.
+// Observers may not block or corrupt local writes.
 
-describe('createCaptureWriter — future upload mirror cannot delay local writes', () => {
-  it('a slow mirror does not delay subsequent local chunk writes', async () => {
+describe('createCaptureWriter — onWritten observer cannot delay local writes', () => {
+  it('a slow observer does not delay subsequent local chunk writes', async () => {
     const sink = makeSlowSink(0) // local disk is instant
-    const mirrorSeen = []
-    let releaseMirror
-    const mirror = vi.fn((i16, offset) => {
-      mirrorSeen.push(offset)
+    const observerSeen = []
+    let releaseObserver
+    const observer = vi.fn((i16, offset) => {
+      observerSeen.push(offset)
       // The FIRST call hangs forever (simulates a stalled upload). If the
       // writer ever awaited this, every later chunk would never write.
-      if (mirrorSeen.length === 1) {
-        return new Promise((resolve) => { releaseMirror = resolve })
+      if (observerSeen.length === 1) {
+        return new Promise((resolve) => { releaseObserver = resolve })
       }
     })
-    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write, onWritten: mirror })
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write, onWritten: observer })
 
     writer.writeChunk(realChunk(100))
     writer.writeChunk(realChunk(100))
     writer.writeChunk(realChunk(100))
-    await writer.stop() // must resolve without ever waiting on the hung mirror
+    await writer.stop() // must resolve without ever waiting on the hung observer
 
     expect(sink.written.length).toBe(3)
     expect(writer.samplesWritten).toBe(300)
-    // the still-pending first mirror call never got in the way
-    expect(releaseMirror).toBeTypeOf('function')
+    // the still-pending first observer call never got in the way
+    expect(releaseObserver).toBeTypeOf('function')
   })
 
-  it('a slow mirror does not delay stop()/finalization timing', async () => {
+  it('a slow observer does not delay stop()/finalization timing', async () => {
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
@@ -301,19 +226,19 @@ describe('createCaptureWriter — future upload mirror cannot delay local writes
     const result = await writer.stop()
     const elapsed = Date.now() - start
 
-    expect(elapsed).toBeLessThan(500) // nowhere near the mirror's 5s
+    expect(elapsed).toBeLessThan(500) // nowhere near the observer's 5s
     expect(result.samplesWritten).toBe(BUFFER_SIZE)
   })
 })
 
-describe('createCaptureWriter — future upload mirror cannot corrupt or block local writes', () => {
-  it('a mirror that throws synchronously does not stop later chunks from being written', async () => {
+describe('createCaptureWriter — onWritten observer cannot corrupt or block local writes', () => {
+  it('a observer that throws synchronously does not stop later chunks from being written', async () => {
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
       write: sink.write,
       onWritten: (i16, offset) => {
-        if (offset === 0) throw new Error('mirror blew up')
+        if (offset === 0) throw new Error('observer blew up')
       }
     })
 
@@ -323,13 +248,13 @@ describe('createCaptureWriter — future upload mirror cannot corrupt or block l
     const result = await writer.stop()
 
     // all three real chunks made it to disk in order, despite the first
-    // mirror invocation throwing
+    // observer invocation throwing
     expect(sink.written.length).toBe(3)
     expect(sink.written.map((c) => c[0])).toEqual([1, 2, 3])
     expect(result.samplesWritten).toBe(300)
   })
 
-  it('a mirror whose returned promise rejects does not stop later chunks from being written', async () => {
+  it('a observer whose returned promise rejects does not stop later chunks from being written', async () => {
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
@@ -348,12 +273,12 @@ describe('createCaptureWriter — future upload mirror cannot corrupt or block l
     expect(result.dataByteCount).toBe(400)
   })
 
-  it('a mirror that throws on every call still leaves the full WAV written and finalized', async () => {
+  it('a observer that throws on every call still leaves the full WAV written and finalized', async () => {
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
       write: sink.write,
-      onWritten: () => { throw new Error('mirror always fails') }
+      onWritten: () => { throw new Error('observer always fails') }
     })
 
     for (let i = 0; i < 5; i++) writer.writeChunk(realChunk(100, i + 1))
@@ -363,7 +288,7 @@ describe('createCaptureWriter — future upload mirror cannot corrupt or block l
     expect(result.samplesWritten).toBe(500)
   })
 
-  it('a hung mirror does not prevent drain() from resolving or later writes from queuing', async () => {
+  it('a hung observer does not prevent drain() from resolving or later writes from queuing', async () => {
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
@@ -380,36 +305,36 @@ describe('createCaptureWriter — future upload mirror cannot corrupt or block l
   })
 })
 
-describe('createCaptureWriter — local write confirmation is never gated on the mirror settling', () => {
-  it('samplesWritten/dataByteCount and onWritten itself fire before the mirror has settled, not after', async () => {
-    let mirrorSettled = false
-    let sawUnsettledMirrorAtNotifyTime = false
+describe('createCaptureWriter — local write confirmation is never gated on the observer settling', () => {
+  it('samplesWritten/dataByteCount and onWritten itself fire before the observer has settled, not after', async () => {
+    let observerSettled = false
+    let sawUnsettledObserverAtNotifyTime = false
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
       sampleRate: SAMPLE_RATE,
       write: sink.write,
       onWritten: () => {
-        // At the moment the mirror is invoked, local state must already be
-        // authoritative — the mirror is downstream, never a gate.
-        if (writer.samplesWritten === 100 && !mirrorSettled) {
-          sawUnsettledMirrorAtNotifyTime = true
+        // At the moment the observer is invoked, local state must already be
+        // authoritative — the observer is downstream, never a gate.
+        if (writer.samplesWritten === 100 && !observerSettled) {
+          sawUnsettledObserverAtNotifyTime = true
         }
-        return delay(50).then(() => { mirrorSettled = true })
+        return delay(50).then(() => { observerSettled = true })
       }
     })
 
     writer.writeChunk(realChunk(100))
-    await writer.stop() // resolves long before the mirror's 50ms settles
+    await writer.stop() // resolves long before the observer's 50ms settles
 
-    expect(sawUnsettledMirrorAtNotifyTime).toBe(true)
-    expect(mirrorSettled).toBe(false) // proves stop() did NOT wait for the mirror
+    expect(sawUnsettledObserverAtNotifyTime).toBe(true)
+    expect(observerSettled).toBe(false) // proves stop() did NOT wait for the observer
     expect(writer.samplesWritten).toBe(100)
   })
 
-  it('fails the intent of the seam if write confirmation were (hypothetically) awaited on the mirror', async () => {
+  it('fails the intent of the seam if write confirmation were (hypothetically) awaited on the observer', async () => {
     // This test exists to fail loudly if a future change makes writeChunk's
-    // internal handler `await` the mirror instead of firing it and moving
-    // on. A mirror that never resolves must never make local writes never
+    // internal handler `await` the observer instead of firing it and moving
+    // on. A observer that never resolves must never make local writes never
     // finish.
     const sink = makeSlowSink(0)
     const writer = createCaptureWriter({
@@ -427,6 +352,44 @@ describe('createCaptureWriter — local write confirmation is never gated on the
 
     expect(result).toBe('stopped')
   })
+})
+
+describe('createCaptureWriter — constructor', () => {
+  it('throws when sampleRate is not positive', () => {
+    expect(() => createCaptureWriter({ sampleRate: 0, write: () => {} })).toThrow(/sampleRate/)
+  })
+
+  it('throws when write is missing', () => {
+    expect(() => createCaptureWriter({ sampleRate: SAMPLE_RATE })).toThrow(/write/)
+  })
+})
+
+describe('createCaptureWriter — writeChunk', () => {
+  it('returns 0 and leaves the file empty for null, undefined, and an empty chunk', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
+
+    expect(writer.writeChunk(null)).toBe(0)
+    expect(writer.writeChunk(undefined)).toBe(0)
+    expect(writer.writeChunk(new Int16Array(0))).toBe(0)
+    await writer.stop()
+
+    expect(sink.written).toEqual([])
+    expect(writer.samplesWritten).toBe(0)
+    expect(writer.dataByteCount).toBe(0)
+  })
+
+  it('returns 200 for a 100-sample chunk, the bytes that save will add', async () => {
+    const sink = makeSlowSink(0)
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: sink.write })
+
+    expect(writer.writeChunk(realChunk(100))).toBe(200)
+    await writer.stop()
+
+    expect(sink.written.length).toBe(1)
+    expect(writer.dataByteCount).toBe(200)
+  })
+
 })
 
 describe('createCaptureWriter — pending', () => {
@@ -452,5 +415,105 @@ describe('createCaptureWriter — pending', () => {
     releases[1]()
     await writer.drain()
     expect(writer.pending).toBe(0)
+  })
+})
+
+describe('local save failures and exact input', () => {
+  it('reports a rejection once, never confirms it or skips it, and rejects stop', async () => {
+    const writes = []
+    const confirmed = []
+    const issues = []
+    const writer = createCaptureWriter({ sampleRate: 48000,
+      write: async buf => {
+        const value = new Int16Array(buf)[0]
+        writes.push(value)
+        if (value === 2) throw new Error('disk failed')
+      }, onWritten: samples => confirmed.push(samples[0]), onIssue: issue => issues.push(issue) })
+    for (const value of [1, 2, 3]) writer.writeChunk(new Int16Array([value]))
+    await expect(writer.stop()).rejects.toThrow('disk failed')
+    expect(writes).toEqual([1, 2])
+    expect(confirmed).toEqual([1])
+    expect(writer.samplesWritten).toBe(1)
+    expect(writer.pending).toBe(0)
+    expect(issues).toHaveLength(1)
+    expect(issues[0]).toMatchObject({
+      code: 'save-failed', severity: 'error', destination: 'local',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
+  })
+
+  it('owns only the samples supplied, including subarrays and subsequent caller mutation', async () => {
+    const written = []
+    const writer = createCaptureWriter({ sampleRate: 48000, write: async buf => written.push([...new Int16Array(buf)]) })
+    const input = new Int16Array([99, 1, 2, 99])
+    writer.writeChunk(input.subarray(1, 3))
+    input.fill(0)
+    await writer.stop()
+    expect(written).toEqual([[1, 2]])
+    expect(writer.dataByteCount).toBe(4)
+  })
+})
+
+describe('local write timing', () => {
+  it('warns only once across slow chunks and cancels timers after successful writes', async () => {
+    vi.useFakeTimers()
+    const releases = []
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE,
+      slowWriteMs: 100, writeTimeoutMs: 1000, onIssue,
+      write: () => new Promise(resolve => releases.push(resolve)) })
+
+    writer.writeChunk(realChunk(2))
+    writer.writeChunk(realChunk(2))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'slow-write', severity: 'warning', destination: 'local',
+      message: expect.stringMatching(/\S/)
+    })
+    releases[0]()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(releases).toHaveLength(2)
+    expect(onIssue).toHaveBeenCalledTimes(1)
+    releases[1]()
+    await expect(writer.stop()).resolves.toEqual({ samplesWritten: 4, dataByteCount: 8 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not warn after a fast write has already been confirmed', async () => {
+    vi.useFakeTimers()
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: async () => {}, onIssue })
+    writer.writeChunk(realChunk(2))
+    await writer.drain()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(onIssue).not.toHaveBeenCalled()
+    await writer.stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reports a timed-out write without confirming it, even if the disk resolves later', async () => {
+    vi.useFakeTimers()
+    let release
+    const onWritten = vi.fn()
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE,
+      slowWriteMs: 1000, writeTimeoutMs: 100, onWritten, onIssue,
+      write: () => new Promise(resolve => { release = resolve }) })
+    writer.writeChunk(realChunk(2))
+    const stopped = expect(writer.stop()).rejects.toThrow(/timed out/i)
+    await vi.advanceTimersByTimeAsync(100)
+    await stopped
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'save-failed', severity: 'error', destination: 'local',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
+    release()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(onWritten).not.toHaveBeenCalled()
+    expect(writer.samplesWritten).toBe(0)
+    expect(writer.dataByteCount).toBe(0)
+    expect(writer.pending).toBe(0)
+    expect(onIssue).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

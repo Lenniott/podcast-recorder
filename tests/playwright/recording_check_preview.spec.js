@@ -45,7 +45,7 @@ test('host gets the guest test clip automatically without the guest clicking Lis
   await expandPresenceTable(host)
   await guest.getByRole('button', { name: 'Start Recording' }).click()
   await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.locator('.check-overlay')).toBeVisible()
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
 
   await expect(presenceRow(host, 'Alex').getByTestId('check-preview-play')).toBeVisible({ timeout: 20_000 })
 

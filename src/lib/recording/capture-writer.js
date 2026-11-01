@@ -1,141 +1,70 @@
-/**
- * Capture Writer — owns the WAV byte stream for one take.
- *
- * Chunks are queued and flushed in the background, decoupled from the
- * real-time cadence they arrive at: a slow disk just makes the queue
- * longer, it is never mistaken for a microphone dropout. Digital silence
- * is written ONLY when the caller reports an explicit gap (a real device
- * reconnect/swap) via notifyDeviceGap() — never inferred from how long a
- * write took.
- *
- * `write` is injected (a Blob/ArrayBuffer -> Promise<void> adapter), so
- * this is testable with an in-memory fake and, in the app, backed by a
- * FileSystemWritableFileStream.
- *
- * `onWritten(i16, sampleOffset)` is optional and fires only AFTER a chunk's
- * write() has actually resolved — never on writeChunk() being called. It's
- * the one seam anything that needs to show "what's really on disk" (a live
- * waveform, a listen-back preview) should hang off, instead of the live mic
- * signal — the write path is the thing that can silently break; the mic
- * never lies about what it's picking up.
- *
- * That same seam is the intended attachment point for a future "upload a
- * copy to the server" mirror — it only ever sees a chunk AFTER local write
- * confirmation, so upload can never race ahead of, or substitute for, the
- * local WAV. The dispatch to onWritten is deliberately fire-and-forget and
- * error-isolated (see notify() below): local write confirmation — the
- * queue advancing, samplesWritten/dataByteCount updating, drain()/stop()
- * resolving — never waits on onWritten, so a slow, throwing, or rejecting
- * observer (a stalled upload, a dropped connection) can neither delay a
- * local write/finalization nor break the chain for chunks after it.
- */
-export function createCaptureWriter({ sampleRate, write, onWritten }) {
-  if (!(sampleRate > 0)) throw new Error('createCaptureWriter: sampleRate must be > 0')
+/** Ordered local PCM writes. Failed saves stop this destination; they never
+ * count as confirmed audio or allow later chunks to skip past the failure. */
+export function createCaptureWriter({ sampleRate, write, onWritten, onIssue, slowWriteMs = 1000, writeTimeoutMs = 20000 }) {
+  if (!Number.isFinite(sampleRate) || !(sampleRate > 0)) throw new Error('createCaptureWriter: sampleRate must be > 0')
   if (typeof write !== 'function') throw new Error('createCaptureWriter: write must be a function')
-
-  let tail = Promise.resolve()   // chain of queued writes, oldest-first
-  let pending = 0                // writes queued but not yet flushed
-  let samplesWritten = 0         // authoritative — only advances once a write resolves
-  let dataByteCount = 0          // authoritative — mirrors samplesWritten in bytes
+  let tail = Promise.resolve()
+  let pending = 0
+  let samplesWritten = 0
+  let dataByteCount = 0
   let closed = false
+  let failure = null
+  let slowReported = false
 
-  function enqueue(fn) {
+  function notify(fn, ...args) {
+    try { Promise.resolve(fn?.(...args)).catch(() => {}) } catch { /* observers cannot break saving */ }
+  }
+
+  function writeChunk(input) {
+    if (closed || failure || !input || input.length === 0) return 0
+    // Own just the submitted samples, including when the input is a subarray.
+    const samples = input.slice()
+    const bytes = samples.byteLength
     pending++
-    tail = tail.then(fn).finally(() => { pending-- })
-    return tail
-  }
-
-  /**
-   * Fire an observer (currently only onWritten) after a chunk is confirmed
-   * written, without letting it touch the write chain in any way: never
-   * awaited (a slow or hung observer can't delay the next queued write or
-   * drain()/stop()), and any synchronous throw or async rejection is
-   * swallowed here rather than propagating into `tail` — which would
-   * otherwise poison every write queued after it, since `tail.then(fn)` on
-   * a rejected promise skips fn without ever calling the real write().
-   */
-  function notify(fn, i16, offset) {
-    if (!fn) return
-    try {
-      const result = fn(i16, offset)
-      if (result && typeof result.then === 'function') {
-        result.catch(() => {})
+    tail = tail.then(async () => {
+      if (failure) return
+      let slowTimer
+      let timeoutTimer
+      try {
+        slowTimer = setTimeout(() => {
+          if (slowReported) return
+          slowReported = true
+          notify(onIssue, { code: 'slow-write', severity: 'warning', destination: 'local', message: 'Local audio write is taking longer than expected.' })
+        }, slowWriteMs)
+        await Promise.race([
+          Promise.resolve().then(() => write(samples.buffer)),
+          new Promise((_, reject) => {
+            timeoutTimer = setTimeout(() => reject(new Error('Local audio write timed out')), writeTimeoutMs)
+          })
+        ])
+        const offset = samplesWritten
+        samplesWritten += samples.length
+        dataByteCount += bytes
+        notify(onWritten, samples, offset)
+      } catch (error) {
+        failure = error
+        notify(onIssue, { code: 'save-failed', severity: 'error', destination: 'local', message: 'Local audio save failed.', error })
+      } finally {
+        clearTimeout(slowTimer)
+        clearTimeout(timeoutTimer)
       }
-    } catch {
-      // A misbehaving observer must never affect local recording.
-    }
-  }
-
-  /**
-   * Advance the authoritative counters for one chunk (real audio or
-   * device-gap silence, whichever `write()` just confirmed) and fire the
-   * onWritten seam. Shared by writeChunk and notifyDeviceGap so the two
-   * write paths can never drift on how a confirmed write is accounted for.
-   */
-  function confirmWritten(samples, sampleCount, byteCount) {
-    const offset = samplesWritten
-    samplesWritten += sampleCount
-    dataByteCount += byteCount
-    notify(onWritten, samples, offset)
-  }
-
-  /**
-   * Queue one chunk of real PCM audio (Int16Array). Fire-and-forget by
-   * design — callers that need to know the recording is still keeping up
-   * should read `.pending`, not await this.
-   * Returns the byte length that will be added once flushed, so a caller
-   * can update a progress display immediately without waiting on disk I/O.
-   */
-  function writeChunk(i16) {
-    if (closed || !i16 || i16.length === 0) return 0
-    const bytes = i16.byteLength
-    enqueue(async () => {
-      await write(i16.buffer)
-      confirmWritten(i16, i16.length, bytes)
-    })
+    }).finally(() => { pending-- })
     return bytes
   }
 
-  /**
-   * Report a REAL gap — a mic dropout, device swap, or reconnect — as
-   * measured wall-clock seconds with no audio captured. Backfills that
-   * exact duration as digital silence so the file's timeline stays
-   * continuous. This is the only path that ever writes silence.
-   */
-  function notifyDeviceGap(durationSec) {
-    if (closed || !(durationSec > 0)) return 0
-    const gapSamples = Math.round(durationSec * sampleRate)
-    if (gapSamples <= 0) return 0
-    const bytes = gapSamples * 2 // Int16 = 2 bytes/sample
-    enqueue(async () => {
-      const silence = new Int16Array(gapSamples)
-      await write(silence.buffer)
-      confirmWritten(silence, gapSamples, bytes)
-    })
-    return bytes
-  }
-
-  /** Resolves once every write queued so far (including ones queued while
-   *  waiting) has actually completed. */
   async function drain() {
-    while (pending > 0) {
-      await tail.catch(() => {}) // a failed write shouldn't hang drain() forever
-    }
+    while (pending > 0) await tail
+    if (failure) throw failure
   }
 
-  /** Drains the queue and stops accepting further writes. Returns the
-   *  final, authoritative sample/byte counts for the WAV header patch. */
   async function stop() {
-    await drain()
     closed = true
+    await drain()
     return { samplesWritten, dataByteCount }
   }
 
   return {
-    writeChunk,
-    notifyDeviceGap,
-    drain,
-    stop,
+    writeChunk, drain, stop,
     get samplesWritten() { return samplesWritten },
     get dataByteCount() { return dataByteCount },
     get pending() { return pending }
