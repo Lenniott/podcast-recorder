@@ -92,7 +92,7 @@ export async function assessMicrophone(device, { audioContext, mediaDevices = na
     if (track.readyState === 'ended') throw new Error('Microphone disconnected during assessment')
     const rms = Math.sqrt(sum / count)
     return { deviceId: device.deviceId, label: device.label, status: rms > SIGNAL_RMS ? 'signal' : 'no-signal',
-      rms, peak, muted: !!track.muted, settings: track.getSettings?.() ?? {} }
+      rms, peak, settings: track.getSettings?.() ?? {} }
   } catch (error) {
     return { deviceId: device.deviceId, label: device.label, status: 'unavailable', error: error.message }
   } finally {

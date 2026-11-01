@@ -53,6 +53,67 @@ function makeFakeFetch() {
   return { fetchImpl, calls, get bytesAcked() { return bytesAcked } }
 }
 
+describe('upload safety contracts', () => {
+  it('owns the exact submitted subarray and sends the required HTTP payloads', async () => {
+    const { fetchImpl, calls } = makeFakeFetch()
+    const onProgress = vi.fn()
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl, onProgress })
+    const input = new Int16Array([99, 1, 2, 99])
+    upload.handleChunk(input.subarray(1, 3))
+    input.fill(0)
+    expect(await upload.finish()).toBe(true)
+    expect(calls).toHaveLength(3)
+    for (const { init } of calls) expect(init.method).toBe('POST')
+    expect(calls[0].init.headers).toEqual({ 'content-type': 'application/json' })
+    expect(calls[1].init.headers).toEqual({ 'content-type': 'application/octet-stream' })
+    expect([...new Int16Array(calls[1].init.body)]).toEqual([1, 2])
+    expect(calls[2].init.headers).toEqual({ 'content-type': 'application/json' })
+    expect(JSON.parse(calls[2].init.body).totalBytes).toBe(4)
+    expect(onProgress).toHaveBeenCalled()
+    expect(onProgress.mock.calls.at(-1)[0]).toMatchObject({
+      capturedBytes: 4, ackedBytes: 4, progress: 1, finalized: true
+    })
+  })
+
+  it.each([
+    { ok: false, status: 410, accepted: true },
+    { ok: true, status: 200, accepted: false }
+  ])('requires both HTTP success and explicit session acceptance: %j', async response => {
+    const onIssue = vi.fn()
+    const fetchImpl = vi.fn(async () => ({ ...response, json: async () => ({ accepted: response.accepted }) }))
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl, onIssue })
+    upload.handleChunk(i16(2))
+    expect(await upload.start()).toBe(false)
+    expect(await upload.finish()).toBe(false)
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(upload.getStatus()).toMatchObject({ failed: true, finalized: false, error: expect.any(Error) })
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'save-failed', severity: 'error', destination: 'server',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
+  })
+
+  it.each([
+    { ok: false, status: 410, finalized: true },
+    { ok: true, status: 200, finalized: false }
+  ])('requires both HTTP success and explicit finalization: %j', async response => {
+    const { fetchImpl: success } = makeFakeFetch()
+    const onIssue = vi.fn()
+    const fetchImpl = vi.fn((url, init) => String(url).includes('/finalize')
+      ? Promise.resolve({ ...response, json: async () => ({ finalized: response.finalized }) })
+      : success(url, init))
+    const upload = createServerCopyUpload({ slug: SLUG, clientId: CLIENT_ID, fetchImpl, onIssue })
+    expect(await upload.start()).toBe(true)
+    upload.handleChunk(i16(2))
+    expect(await upload.finish()).toBe(false)
+    expect(upload.getStatus()).toMatchObject({ failed: true, finalized: false, error: expect.any(Error) })
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'save-failed', severity: 'error', destination: 'server',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
+  })
+})
+
 describe('createServerCopyUpload — gated by session acceptance', () => {
   it('does not send any chunk bytes before start() has been accepted', async () => {
     let resolveSession
@@ -146,6 +207,7 @@ describe('createServerCopyUpload — progress tracking', () => {
     releaseChunk()
     await delay(20)
     expect(upload.getStatus().ackedBytes).toBe(100)
+    expect(upload.getStatus().progress).toBe(0.5)
   })
 
   it('can report 100% mid-recording on a fast connection without special-casing', async () => {
@@ -492,8 +554,7 @@ describe('createServerCopyUpload — retries a transient failure with backoff', 
     await flushRetries()
 
     // Bounded: a small, fixed number of attempts, not an unbounded retry loop.
-    expect(chunkAttempts).toBeGreaterThan(1)
-    expect(chunkAttempts).toBeLessThan(20)
+    expect(chunkAttempts).toBe(5)
     expect(upload.getStatus().failed).toBe(true)
   })
 

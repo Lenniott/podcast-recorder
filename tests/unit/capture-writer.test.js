@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createCaptureWriter } from '../../src/lib/recording/capture-writer.js'
 
 const SAMPLE_RATE = 48000
 const BUFFER_SIZE = 8192 // matches static/worklet/recorder-processor.js
+
+afterEach(() => vi.useRealTimers())
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -33,6 +35,7 @@ function realChunk(n = BUFFER_SIZE, fill = 1) {
 
 describe('createCaptureWriter — slow disk does not fabricate silence', () => {
   it('writes only real audio, never silence, when write() is slower than real-time', async () => {
+    vi.useFakeTimers()
     // 250ms/write vs 170.7ms of real audio per chunk — the exact regime
     // that produced ~0.33s of manufactured silence per ~0.17s of speech.
     const N = 6
@@ -41,9 +44,11 @@ describe('createCaptureWriter — slow disk does not fabricate silence', () => {
 
     for (let i = 0; i < N; i++) {
       writer.writeChunk(realChunk())
-      await delay(BUFFER_SIZE / SAMPLE_RATE * 1000) // arrive at the worklet's real-time cadence
+      await vi.advanceTimersByTimeAsync(BUFFER_SIZE / SAMPLE_RATE * 1000)
     }
-    await writer.stop()
+    const stopped = writer.stop()
+    await vi.runAllTimersAsync()
+    await stopped
 
     expect(sink.written.length).toBe(N)
     for (const chunk of sink.written) {
@@ -109,6 +114,7 @@ describe('createCaptureWriter — onWritten', () => {
 
 describe('createCaptureWriter — immune to the old handler-reentrancy bug', () => {
   it('writes real chunks in exact call order under jittery latency worse than the chunk cadence', async () => {
+    vi.useFakeTimers()
     const N = 40
     const CHUNK_MS = (BUFFER_SIZE / SAMPLE_RATE) * 1000 // ~170.7ms real-time cadence
     const callOrder = []
@@ -116,7 +122,7 @@ describe('createCaptureWriter — immune to the old handler-reentrancy bug', () 
       sampleRate: SAMPLE_RATE,
       write: async (buf) => {
         const id = new Int16Array(buf)[0]
-        await delay(150 + Math.random() * 200) // 150-350ms — worse than the 170.7ms cadence
+        await delay(id % 2 ? 350 : 150) // alternating latency around the 170.7ms cadence
         callOrder.push(id)
       }
     })
@@ -125,9 +131,11 @@ describe('createCaptureWriter — immune to the old handler-reentrancy bug', () 
       const chunk = realChunk(BUFFER_SIZE, 1)
       chunk[0] = i // tag each chunk so we can verify write() saw it in order
       writer.writeChunk(chunk)
-      await delay(CHUNK_MS) // arrive at the worklet's real-time cadence, not waiting on writes
+      await vi.advanceTimersByTimeAsync(CHUNK_MS)
     }
-    await writer.stop()
+    const stopped = writer.stop()
+    await vi.runAllTimersAsync()
+    await stopped
 
     expect(callOrder).toEqual(Array.from({ length: N }, (_, i) => i + 1))
   }, 25000)
@@ -428,6 +436,10 @@ describe('local save failures and exact input', () => {
     expect(writer.samplesWritten).toBe(1)
     expect(writer.pending).toBe(0)
     expect(issues).toHaveLength(1)
+    expect(issues[0]).toMatchObject({
+      code: 'save-failed', severity: 'error', destination: 'local',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
   })
 
   it('owns only the samples supplied, including subarrays and subsequent caller mutation', async () => {
@@ -439,5 +451,69 @@ describe('local save failures and exact input', () => {
     await writer.stop()
     expect(written).toEqual([[1, 2]])
     expect(writer.dataByteCount).toBe(4)
+  })
+})
+
+describe('local write timing', () => {
+  it('warns only once across slow chunks and cancels timers after successful writes', async () => {
+    vi.useFakeTimers()
+    const releases = []
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE,
+      slowWriteMs: 100, writeTimeoutMs: 1000, onIssue,
+      write: () => new Promise(resolve => releases.push(resolve)) })
+
+    writer.writeChunk(realChunk(2))
+    writer.writeChunk(realChunk(2))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'slow-write', severity: 'warning', destination: 'local',
+      message: expect.stringMatching(/\S/)
+    })
+    releases[0]()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(releases).toHaveLength(2)
+    expect(onIssue).toHaveBeenCalledTimes(1)
+    releases[1]()
+    await expect(writer.stop()).resolves.toEqual({ samplesWritten: 4, dataByteCount: 8 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not warn after a fast write has already been confirmed', async () => {
+    vi.useFakeTimers()
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE, write: async () => {}, onIssue })
+    writer.writeChunk(realChunk(2))
+    await writer.drain()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(onIssue).not.toHaveBeenCalled()
+    await writer.stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reports a timed-out write without confirming it, even if the disk resolves later', async () => {
+    vi.useFakeTimers()
+    let release
+    const onWritten = vi.fn()
+    const onIssue = vi.fn()
+    const writer = createCaptureWriter({ sampleRate: SAMPLE_RATE,
+      slowWriteMs: 1000, writeTimeoutMs: 100, onWritten, onIssue,
+      write: () => new Promise(resolve => { release = resolve }) })
+    writer.writeChunk(realChunk(2))
+    const stopped = expect(writer.stop()).rejects.toThrow(/timed out/i)
+    await vi.advanceTimersByTimeAsync(100)
+    await stopped
+    expect(onIssue).toHaveBeenCalledExactlyOnceWith({
+      code: 'save-failed', severity: 'error', destination: 'local',
+      message: expect.stringMatching(/\S/), error: expect.any(Error)
+    })
+    release()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(onWritten).not.toHaveBeenCalled()
+    expect(writer.samplesWritten).toBe(0)
+    expect(writer.dataByteCount).toBe(0)
+    expect(writer.pending).toBe(0)
+    expect(onIssue).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

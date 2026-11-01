@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.js"
+  },
+  "mutate": ["src/lib/recording/capture-writer.js"],
+  "ignorePatterns": ["/.env", "/data/**", "/.scratch/**", "/.svelte-kit/**", "/build/**", "/coverage/**", "/test-results/**", "/playwright-report/**"],
+  "reporters": ["progress", "clear-text", "html", "json"],
+  "concurrency": 2,
+  "thresholds": { "break": 0 }
+}

@@ -19,8 +19,8 @@ No browser-storage layer or crash-recovery promise. Both destinations failing ca
 The page consumes `onIssue({ code, severity, destination, message, error })` and logs it. Future warning UI can use the same callback. Duplicate issues are suppressed per take.
 
 - `slow-write`: local write remains pending beyond one second; warning only.
-- `prolonged-silence`: connected microphone produces `SILENCE_SECONDS` of zero samples (default 600); warning only. An all-zero chunk while no microphone is connected asks for one connection and does not count toward that timer.
-- `mic-disconnected`: reconnect attempts failed; warning only. Quiet audio does not trigger reconnect.
+- `no-signal`: a few seconds of input at or below the signal floor, and no other microphone is sending audio; warning only. The recording continues. Another microphone with signal is selected instead of reporting this.
+- `mic-disconnected`: reconnect attempts failed; warning only.
 - `audio-suspended` / `processor-failed`: capture processing is interrupted; warning only.
 - `capture-stop-failed`: Stop was not acknowledged; final tail is uncertain.
 - `save-failed`: permanent local or server failure; stop capture and finish the surviving destination.
