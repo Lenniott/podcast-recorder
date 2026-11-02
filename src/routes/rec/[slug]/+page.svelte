@@ -88,6 +88,7 @@
 
   // ─── WebSocket state ────────────────────────────────────────────────
   let wsStatus = 'disconnected' // connected | connecting | disconnected
+  let guestLocked = false
   let peers = []               // [{ clientId, name, recording, checking, role, isHost, micLabel }]
   let roomTabs = null          // RoomTabs component instance
   let researchPanel = null     // ResearchPanel component instance
@@ -1200,6 +1201,9 @@
   const pendingClaps = []
 
   const room = createRoomConnection({
+    onLocked() {
+      guestLocked = true
+    },
     createSocket() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
       return new WebSocket(`${proto}//${location.host}/ws?slug=${data.slug}`)
@@ -1561,6 +1565,13 @@
   <title>{data.roomName} — Podpatch</title>
 </svelte:head>
 
+{#if guestLocked}
+  <div class="guest-lock-notice" role="alert">
+    This room is locked. Ask the host to unlock it.
+    <button type="button" class="btn-secondary btn-sm" on:click={() => { guestLocked = false; room.connect() }}>Try again</button>
+  </div>
+{/if}
+
 {#if !data.authenticated}
   <PasswordGate roomName={data.roomName} formError={form?.error} bind:myName clientId={clientId || ''} />
 {:else if nameGateShow}
@@ -1746,6 +1757,25 @@
 {/if}
 
 <style>
+  .guest-lock-notice {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    color: var(--warn-text);
+    box-shadow: 0 4px 16px #0003;
+  }
+
   .stop-confirm-overlay {
     position: fixed;
     inset: 0;

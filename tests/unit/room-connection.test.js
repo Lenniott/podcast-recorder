@@ -63,6 +63,19 @@ function setup(overrides = {}) {
 }
 
 describe('createRoomConnection', () => {
+  it('reports a guest lock and stops automatic reconnects after a 4403 close', () => {
+    vi.useFakeTimers()
+    const locks = []
+    const { conn, sockets, statuses } = setup({ onLocked: () => locks.push('locked') })
+    conn.connect()
+    sockets[0].open()
+    sockets[0].readyState = 3
+    sockets[0].onclose({ code: 4403 })
+    vi.advanceTimersByTime(60_000)
+    expect(locks).toEqual(['locked'])
+    expect(statuses.at(-1)).toBe('disconnected')
+    expect(sockets).toHaveLength(1)
+  })
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
