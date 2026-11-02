@@ -82,6 +82,11 @@
           </div>
         {/if}
         <div class="page-content">
+          {#if form?.missingRooms?.length}
+            <p class="notice-banner notice-warn" role="status">
+              Rooms not found: {form.missingRooms.join(", ")}. Other selected rooms were processed.
+            </p>
+          {/if}
           {#if data.usageDashboard && openTab === "dashboard"}
             <UsageDashboardStats usageDashboard={data.usageDashboard} />
           {:else if openTab === "prompt"}

@@ -154,9 +154,10 @@ export const actions = {
     const denied = requireSiteAuth(cookies)
     if (denied) return denied
     const data = await request.formData()
-    // An unknown slug returns { ok: false } and does not throw. The
-    // dashboard still redirects home. Delete answers 404 for that case.
-    unlockRoom(String(data.get('slug') || ''))
+    // Missing rooms are reported on the dashboard instead of looking like
+    // a successful unlock. Delete also returns its existing 404 status.
+    const slug = String(data.get('slug') || '')
+    if (!unlockRoom(slug).ok) return { missingRooms: [slug || '(missing slug)'] }
     throw redirect(303, '/')
   },
 
@@ -165,7 +166,7 @@ export const actions = {
     if (denied) return denied
     const data = await request.formData()
     const result = deleteDashboardRoom(data.get('slug'))
-    if (!result.ok) return fail(result.status)
+    if (!result.ok) return fail(result.status, { missingRooms: [String(data.get('slug') || '(missing slug)')] })
     throw redirect(303, '/')
   },
 
@@ -175,7 +176,8 @@ export const actions = {
     const denied = requireSiteAuth(cookies)
     if (denied) return denied
     const data = await request.formData()
-    unlockRooms(data.getAll('slug'))
+    const result = unlockRooms(data.getAll('slug'))
+    if (result.skipped.length) return { missingRooms: result.skipped }
     throw redirect(303, '/')
   },
 
@@ -183,7 +185,8 @@ export const actions = {
     const denied = requireSiteAuth(cookies)
     if (denied) return denied
     const data = await request.formData()
-    deleteRooms(data.getAll('slug'))
+    const result = deleteRooms(data.getAll('slug'))
+    if (result.skipped.length) return { missingRooms: result.skipped }
     throw redirect(303, '/')
   },
 

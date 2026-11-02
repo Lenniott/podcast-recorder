@@ -573,14 +573,11 @@ describe('+page.server', () => {
     it('does not crash on an unknown slug, and the page still loads afterwards', async () => {
       process.env.SITE_PASSWORD = SITE_PASSWORD
       const { actions, load } = await loadPage()
-      await expectRedirect(
-        () => actions.unlock_room({
-          request: formRequest({ slug: 'no-such-room' }),
-          cookies: makeCookies({ pr_site_auth: siteToken() })
-        }),
-        303,
-        '/'
-      )
+      const result = await actions.unlock_room({
+        request: formRequest({ slug: 'no-such-room' }),
+        cookies: makeCookies({ pr_site_auth: siteToken() })
+      })
+      expect(result.missingRooms).toEqual(['no-such-room'])
       const data = await load({
         cookies: makeCookies({ pr_site_auth: siteToken() }),
         url: new URL('http://test/')
@@ -593,14 +590,11 @@ describe('+page.server', () => {
       process.env.SITE_PASSWORD = SITE_PASSWORD
       seedLockedRoom()
       const { actions, load } = await loadPage()
-      await expectRedirect(
-        () => actions.unlock_room({
-          request: formRequest({}),
-          cookies: makeCookies({ pr_site_auth: siteToken() })
-        }),
-        303,
-        '/'
-      )
+      const result = await actions.unlock_room({
+        request: formRequest({}),
+        cookies: makeCookies({ pr_site_auth: siteToken() })
+      })
+      expect(result.missingRooms).toEqual(['(missing slug)'])
       expect(getRoomBySlug(SLUG)).toMatchObject({
         created_at: CREATED_AT,
         guest_lock_at: LOCKED_AT
@@ -660,6 +654,7 @@ describe('+page.server', () => {
         cookies: makeCookies({ pr_site_auth: siteToken() })
       })
       expect(result.status).toBe(404)
+      expect(result.data.missingRooms).toEqual(['no-such-room'])
       const data = await load({
         cookies: makeCookies({ pr_site_auth: siteToken() }),
         url: new URL('http://test/')
@@ -725,14 +720,11 @@ describe('+page.server', () => {
       seed(A)
       const { actions } = await loadPage()
       const before = Date.now()
-      await expectRedirect(
-        () => actions.unlock_rooms({
-          request: formRequestSlugs(['no-such-room', A]),
-          cookies: makeCookies({ pr_site_auth: siteToken() })
-        }),
-        303,
-        '/'
-      )
+      const result = await actions.unlock_rooms({
+        request: formRequestSlugs(['no-such-room', A]),
+        cookies: makeCookies({ pr_site_auth: siteToken() })
+      })
+      expect(result.missingRooms).toEqual(['no-such-room'])
       const after = Date.now()
       const room = getRoomBySlug(A)
       expect(room.created_at).toBe(CREATED_AT)
@@ -796,14 +788,11 @@ describe('+page.server', () => {
       process.env.SITE_PASSWORD = SITE_PASSWORD
       seed(A)
       const { actions } = await loadPage()
-      await expectRedirect(
-        () => actions.delete_rooms({
-          request: formRequestSlugs(['no-such-room', A]),
-          cookies: makeCookies({ pr_site_auth: siteToken() })
-        }),
-        303,
-        '/'
-      )
+      const result = await actions.delete_rooms({
+        request: formRequestSlugs(['no-such-room', A]),
+        cookies: makeCookies({ pr_site_auth: siteToken() })
+      })
+      expect(result.missingRooms).toEqual(['no-such-room'])
       expect(getRoomBySlug(A)).toBeNull()
       expect(getRoomBySlug('no-such-room')).toBeNull()
     })

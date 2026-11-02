@@ -142,6 +142,37 @@ test('changing search clears hidden selections and empty actions send no request
   expect(posts).toEqual([])
 })
 
+test('bulk actions report missing rooms while processing the selected room', async ({ page }) => {
+  const name = `Dash Missing ${Date.now()}`
+  await stubYouTubeApi(page)
+  const slug = slugFrom(await createRoom(page, { name, password: 'missing-pass' }))
+  const db = new Database(E2E_DB_PATH)
+  try {
+    db.prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?').run(Date.now() - 13 * 3600000, slug)
+  } finally {
+    db.close()
+  }
+  mkdirSync(join(E2E_SERVER_COPY_DIR, slug), { recursive: true })
+  writeFileSync(join(E2E_SERVER_COPY_DIR, slug, 'missingguest.wav'), Buffer.alloc(320))
+  for (const action of ['unlock_rooms', 'delete_rooms']) {
+    await page.goto('/')
+    await unlockIfNeeded(page)
+    await page.getByRole('textbox', { name: 'Search rooms' }).fill(name)
+    await page.getByRole('checkbox', { name: 'Select all visible rooms' }).click()
+    if (action === 'delete_rooms') await page.getByRole('button', { name: 'Delete selected', exact: true }).click()
+    await page.locator(`form[action="?/${action}"]`).evaluate(form => {
+      const input = document.createElement('input')
+      input.type = 'hidden'
+      input.name = 'slug'
+      input.value = 'no-such-room'
+      form.append(input)
+    })
+    await page.getByRole('button', { name: action === 'unlock_rooms' ? 'Unlock selected' : 'Delete selected rooms', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText('Rooms not found: no-such-room')
+  }
+  await expect(page.getByRole('link', { name, exact: true })).toHaveCount(0)
+})
+
 test('row checkmarks follow mouse and keyboard selection, including select-all', async ({ page }) => {
   const stamp = Date.now()
   const nameA = `Dash Checks ${stamp} A`
