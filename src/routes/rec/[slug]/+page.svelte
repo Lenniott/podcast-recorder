@@ -119,11 +119,14 @@
   let devices = []             // MediaDeviceInfo[]
   let selectedDeviceId = ''
   let micPermission = 'prompt' // prompt | granted | denied
+  let openingMic = false
+  let openingMicDepth = 0
   let micFallback = false      // true when we auto-fell-back to a different mic
   let micFallbackName = ''     // label of the fallback device
 
   // ─── Audio recording state ──────────────────────────────────────────
   let audioEngineReady = false
+  let audioEngineInit = null
   let activeLocalCopyName = null // the take this page is still writing; never listed for Save
   let captureTakeName = null   // the take captureSession writes, for the ask on a real stop
   // [{ name, durationSeconds, endedEarly, url }] — this room's unsaved takes in this browser.
@@ -478,7 +481,11 @@
   }
 
   // Any click counts as the gesture Safari needs before audio can run.
-  function wakeAudio() {
+  function wakeAudio(event) {
+    // This button wakes audio itself after its loading state has painted.
+    // Document capture runs before the button handler, so waking here can
+    // block Safari before that handler even gets to change the label.
+    if (event?.target?.closest?.('[data-room-continue]')) return
     if (audioState !== 'running') void audioEngine.ensureRunning()
   }
 
@@ -666,19 +673,34 @@
     }
   }
 
+  function beginOpeningMic() {
+    openingMicDepth += 1
+    openingMic = true
+  }
+
+  function endOpeningMic() {
+    openingMicDepth = Math.max(0, openingMicDepth - 1)
+    openingMic = openingMicDepth > 0
+  }
+
   /** User manually picked a new mic from the dropdown */
   async function changeMic() {
     micFallback = false
     rememberMic()
-    if (!audioEngineReady) {
-      try {
-        await initAudioEngine()
-      } catch (err) {
-        console.error('Audio init for mic change failed', err)
-        return
+    beginOpeningMic()
+    try {
+      if (!audioEngineReady) {
+        try {
+          await initAudioEngine()
+        } catch (err) {
+          console.error('Audio init for mic change failed', err)
+          return
+        }
       }
+      await audioEngine.changeMic(selectedDeviceId)
+    } finally {
+      endOpeningMic()
     }
-    await audioEngine.changeMic(selectedDeviceId)
   }
 
   // Re-measure, then leave the current device if another one is actually sending audio.
@@ -693,7 +715,15 @@
     return audioEngine.switchToBestMic(options)
   }
 
-  async function initAudioEngine() {
+  function initAudioEngine() {
+    if (audioEngineReady) return Promise.resolve()
+    if (!audioEngineInit) {
+      audioEngineInit = initializeAudioEngine().finally(() => { audioEngineInit = null })
+    }
+    return audioEngineInit
+  }
+
+  async function initializeAudioEngine() {
     await audioEngine.init()
     audioEngineReady = true
     void audioEngine.assessMicrophones().catch(error => handleRecordingIssue({ code: 'mic-assessment-failed', severity: 'warning', destination: 'capture', message: 'Could not assess microphones.', error }))
@@ -881,12 +911,15 @@
   async function startRecording({ signal } = {}) {
     if (signal?.aborted) return
     if (!audioEngineReady) {
+      beginOpeningMic()
       try {
         await initAudioEngine()
       } catch (err) {
         console.error('Audio init on record failed', err)
         alert('Could not start audio engine. Please refresh and try again.')
         return
+      } finally {
+        endOpeningMic()
       }
     }
     if (signal) {
@@ -1454,22 +1487,26 @@
     sessionStarted = true
     audioInitError = ''
     try {
+      // Room presence and shared tabs must not wait for browser mic permission
+      // or audio setup. Recording still waits for initAudioEngine().
+      connectWs()
+      void refreshLocalCopies()
       await tick()
       waveformRenderer.resizeCanvas()
 
       await requestMicPermission()
       if (micPermission === 'granted') {
+        beginOpeningMic()
         try {
           await initAudioEngine()
         } catch (err) {
           console.error('Audio init on join failed', err)
           audioInitError = 'Could not initialize microphone meter. You can still try recording.'
+        } finally {
+          endOpeningMic()
         }
       }
 
-      // Presence/sync should still work even if local audio init fails.
-      connectWs()
-      void refreshLocalCopies()
       navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
     } catch (err) {
       sessionStarted = false
@@ -1583,6 +1620,7 @@
     {devices}
     bind:selectedDeviceId
     {micPermission}
+    {openingMic}
     {audioInitError}
     {micFallback}
     {micFallbackName}
@@ -1617,6 +1655,7 @@
     {devices}
     bind:selectedDeviceId
     {micPermission}
+    {openingMic}
     {audioInitError}
     {micFallback}
     {micFallbackName}

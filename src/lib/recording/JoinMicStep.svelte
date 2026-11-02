@@ -1,4 +1,5 @@
 <script>
+  import { flushSync } from 'svelte'
   import { Mic } from '$lib/icons'
   import MicPanel from '$lib/recording/MicPanel.svelte'
 
@@ -6,6 +7,7 @@
     devices = [],
     selectedDeviceId = $bindable(''),
     micPermission = 'prompt',
+    openingMic = false,
     audioInitError = '',
     micFallback = false,
     micFallbackName = '',
@@ -15,6 +17,17 @@
     onGainInput = () => {},
     onContinue = () => {}
   } = $props()
+
+  let loadingRoom = $state(false)
+
+  function continueToRoom() {
+    if (loadingRoom) return
+    flushSync(() => { loadingRoom = true })
+    // Give the browser a paint before room setup can occupy the main thread.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => onContinue())
+    })
+  }
 </script>
 
 <main class="gate-wrap">
@@ -26,6 +39,7 @@
       {devices}
       bind:selectedDeviceId
       {micPermission}
+      {openingMic}
       {audioInitError}
       {micFallback}
       {micFallbackName}
@@ -34,8 +48,8 @@
       {onChangeMic}
       {onGainInput}
     />
-    <button type="button" class="btn-primary btn-block" onclick={onContinue}>
-      Continue to room
+    <button type="button" class="btn-primary btn-block" data-room-continue onclick={continueToRoom} disabled={loadingRoom} aria-busy={loadingRoom}>
+      {loadingRoom ? 'Loading room...' : 'Continue to room'}
     </button>
   </div>
 </main>

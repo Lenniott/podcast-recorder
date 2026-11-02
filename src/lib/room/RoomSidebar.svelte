@@ -21,6 +21,7 @@
   export let devices = [];
   export let selectedDeviceId = "";
   export let micPermission = "prompt";
+  export let openingMic = false;
   export let audioInitError = "";
   export let micFallback = false;
   export let micFallbackName = "";
@@ -88,6 +89,7 @@
           {devices}
           bind:selectedDeviceId
           {micPermission}
+          {openingMic}
           {audioInitError}
           {micFallback}
           {micFallbackName}
