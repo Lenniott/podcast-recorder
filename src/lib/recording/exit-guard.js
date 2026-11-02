@@ -10,10 +10,12 @@
  *     artifact (see AGENTS.md's "one rule everything else serves") and the
  *     warning must say so plainly.
  *   - an INCOMPLETE SERVER COPY *after* the local recording has already
- *     stopped — the WAV is already safe on disk; only the convenience
+ *     stopped — the take is kept in this browser; only the convenience
  *     mirror to the server hasn't finished uploading/finalizing yet.
- *     Leaving costs a manual re-send later, never the recording itself,
- *     and the warning must not read as if it does.
+ *     Leaving costs a manual send later, never the recording itself, and
+ *     the warning must not read as if it does. Until the person saves the
+ *     take there is no file they can send, so the warning says to save
+ *     first rather than claiming a file is already on disk.
  *
  * Everything else is the *normal* case (idle / no recording yet, or the
  * server copy already complete): the leave message is reassurance, not a
@@ -38,8 +40,8 @@ const RECORDING_MESSAGE =
   'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
 
 const UPLOAD_MESSAGE =
-  "Your recording is already saved on this device. The server copy hasn't finished uploading yet — " +
-  "if you leave now, you'll need to send the local file to the host another way. Leave anyway?"
+  "The server copy of your recording hasn't finished uploading yet. If you'll need to send the recording " +
+  'to the host another way, save it from this page before you leave. Leave anyway?'
 
 const REASSURANCE_MESSAGE =
   "Your recording is backed up automatically — you don't need to send the local file to the host."

@@ -236,47 +236,51 @@ server so the host can collect takes from `ServerCopyFilesModal`. It is
 not the recording itself (that's the Local Copy — a resilience file, not
 guest homework). Guest-facing leave/exit copy is therefore
 reassurance-first: backed up automatically, nothing to send — except
-when the upload is still incomplete (`uploading` / `catching_up`), which
-is the only leave warning that asks them to send the local file another
-way. A permanent upload failure is a separate one-time alert, not that
-leave warning and not reassurance.
+while a take is still being written, and while the upload is still
+incomplete (`uploading` / `catching_up`). The upload warning tells them
+to save the Local Copy first if they will need to send it, and they can
+still leave. A permanent upload failure is a separate one-time alert,
+not that leave warning and not reassurance.
 _Avoid_: treating the local WAV as something the guest must deliver in
 the normal case
 
 **Local Copy**:
-The WAV this browser writes to disk on this device — insurance if the
-server or internet drops out, not "the backup" in the sense of something
-the guest must personally deliver. The join click chooses one folder for
-the visit (`showDirectoryPicker`). Each recording attempt is a new file in
-that folder (`…-take-1.wav`, `…-take-2.wav`, numbered per browser visit,
-never reusing a name already in the folder); a rejected Check Turn leaves
-that attempt's file on disk as written and the check restarts on the next
-file. In the normal case the host uses the automatic **server copy** upload
-(`ServerCopyFilesModal`); the guest does not normally send this file
-anywhere unless that upload failed. The server-copy modal's "Take N" is a
-display index over files the server actually has — it is not this `-take-N`
-suffix, and the two can disagree (a missing upload shifts the index).
+The WAV this browser writes on this device while the take is running —
+insurance if the server or internet drops out, not something the guest
+must personally deliver. The person cannot open it until the take has
+stopped and they save it out; that save works in any browser and does not
+wait for the server copy. They are asked to save when a take stops for real. A rejected Check
+Turn is not that ask: the short file stays listed, with its length,
+until they remove it.
+A Local Copy stays on this device through a refresh and through leaving the
+room, saved or not, until they remove it and confirm (saving alone never
+deletes it), and the room lists it again the next time this
+browser opens the room. A take that stopped before it closed is still a
+Local Copy: it is marked as ended early, and it can be saved the same
+way. Each recording attempt is its own file (`…-take-1.wav`,
+`…-take-2.wav`, numbered per browser visit, never overwritten by a later
+attempt); a rejected Check Turn leaves that attempt and the check
+restarts on the next file. In the normal case the host uses the automatic **server copy**
+upload (`ServerCopyFilesModal`); the guest does not normally send this
+file anywhere unless that upload failed. The server-copy modal's "Take N"
+is a display index over files the server actually has — it is not this
+`-take-N` suffix, and the two can disagree (a missing upload shifts the
+index).
 _Avoid_: the backup (as busywork the guest must deliver), only copy, silent
-about the server copy
+about the server copy, a folder chosen at join
 
 **Synced Recording Session**:
-Room-level start/stop of local recording, authored only by the host over
-the room WebSocket (`recording_session`, phase `recording` | `idle`). Each
-browser still writes its own Local Copy via the existing start/stop path;
-the session message is coordination, not the recording. With the socket
-down, each peer's own Start/Stop still writes a real file and does not
-wait on the room. A guest Start while connected is local-only — it must
-not start the host. The host re-announces this phase on reconnect via
-`room.registerResync`. A connected host's Stop asks first
-(`STOP_BOTH_CONFIRM`); nothing is sent until they confirm, and the phase
-stays `recording` until the tail **Take Marker** closes the file. The
-host's file still closes if the guest's browser is gone — the host never
-waits on the guest — and the host is then told the other side may still
-be recording (`OTHER_SIDE_UNCERTAIN`). A guest Stop stays local-only;
-with the socket down, Stop closes the file immediately with no dialog.
-_Avoid_: treating the room socket as required to record; folding this into
-`recording_state` (that's one peer's own write flag, not the room session);
-a `stopping` phase; waiting on a guest acknowledgement to stop
+The room's desired recording state, followed by each participant's own
+recorder and mic-check flow. The host has priority control; while the host
+is absent, the guest controls that same room state, and a joining host
+inherits an active recording.
+_Avoid_: a host's local recording flag; a separate guest-only session
+
+**Recording Request**:
+A guest's pending request to start or stop the room while the host controls
+it. The guest waits for approval or refusal; if the host leaves, the guest
+gains control and the pending request takes effect.
+_Avoid_: recording immediately while waiting for approval
 
 **Check Turn**:
 Whose turn it currently is in the host-then-guest mic-check sequence after

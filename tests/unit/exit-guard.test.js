@@ -40,10 +40,11 @@ describe('deriveExitGuard', () => {
     expect(guard.severity).toBe('upload')
   })
 
-  it('says the local recording is already saved and leaving means sending it another way', () => {
+  it('says to save the recording first if it will need sending another way, without claiming a file is already on disk', () => {
     const guard = deriveExitGuard({ hasActiveLocalRecording: false, hasIncompleteServerCopyUpload: true })
-    expect(guard.message).toMatch(/saved/i)
+    expect(guard.message).toMatch(/save it from this page before you leave/i)
     expect(guard.message).toMatch(/another way/i)
+    expect(guard.message).not.toMatch(/already saved/i)
   })
 
   it('prioritizes the active-recording warning when both conditions are true, so the two warnings never collide', () => {
@@ -65,14 +66,14 @@ describe('deriveExitGuard', () => {
     const guard = leaveGuard({ recording: false, uploadState: 'idle' })
     expect(guard.blocking).toBe(false)
     expect(guard.message).toMatch(/backed up automatically/i)
-    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
+    expect(guard.message).not.toMatch(/send the recording to the host another way/i)
   })
 
   it('uses reassurance copy after a completed server-copy upload', () => {
     const guard = leaveGuard({ recording: false, uploadState: 'complete' })
     expect(guard.blocking).toBe(false)
     expect(guard.message).toMatch(/backed up automatically/i)
-    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
+    expect(guard.message).not.toMatch(/send the recording to the host another way/i)
   })
 
   it('keeps the send-it-yourself warning for incomplete uploads on the confirmation path', () => {
@@ -80,8 +81,8 @@ describe('deriveExitGuard', () => {
       const guard = leaveGuard({ recording: false, uploadState })
       expect(guard.blocking).toBe(true)
       expect(guard.severity).toBe('upload')
-      expect(guard.message).toMatch(/saved on this device/i)
-      expect(guard.message).toMatch(/send the local file to the host another way/i)
+      expect(guard.message).toMatch(/save it from this page/i)
+      expect(guard.message).toMatch(/send the recording to the host another way/i)
     }
   })
 
@@ -89,7 +90,7 @@ describe('deriveExitGuard', () => {
     const guard = leaveGuard({ recording: false, uploadState: 'failed' })
     expect(guard.blocking).toBe(false)
     expect(guard.message).not.toMatch(/backed up automatically/i)
-    expect(guard.message).not.toMatch(/send the local file to the host another way/i)
+    expect(guard.message).not.toMatch(/send the recording to the host another way/i)
   })
 })
 

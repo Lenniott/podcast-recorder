@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
+import {
+  stubYouTubeApi,
+  createRoom,
+  joinAsGuest,
+  passRecordingCheck,
+  expandPresenceTable,
+  presenceRow,
+  startViaGuestRequest
+} from './helpers.js'
 
 test('host can play the guest listen-back clip from the presence table without downloading', async ({ browser }) => {
   const host = await browser.newPage()
@@ -12,9 +20,8 @@ test('host can play the guest listen-back clip from the presence table without d
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
 
   await expandPresenceTable(host)
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await startViaGuestRequest(host, guest)
+  await passRecordingCheck(host)
 
   await expect(presenceRow(host, 'Alex').getByTestId('check-preview-waiting')).toBeVisible()
   await expect(presenceRow(guest, 'Host').getByTestId('check-preview-play')).toHaveCount(0)
@@ -43,8 +50,8 @@ test('host gets the guest test clip automatically without the guest clicking Lis
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
 
   await expandPresenceTable(host)
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await startViaGuestRequest(host, guest)
+  await passRecordingCheck(host)
   await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
 
   await expect(presenceRow(host, 'Alex').getByTestId('check-preview-play')).toBeVisible({ timeout: 20_000 })

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, expandPresenceTable, presenceRow, startGuestTakeWithHost } from './helpers.js'
 
 // Exhausted upload retries stop capture while the local destination finishes.
 
@@ -45,10 +45,7 @@ test('exhausted upload retries stop capture and finish the local recording', asy
   // the session is accepted normally and only chunk delivery breaks.
   await guest.route('**/server-copy/chunks*', (route) => route.abort())
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest) // clears .check-overlay so Stop Recording is clickable later
+  await startGuestTakeWithHost(host, guest)
 
   // Failure is broadcast to both participants.
   await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
@@ -62,7 +59,7 @@ test('exhausted upload retries stop capture and finish the local recording', asy
     { timeout: 30_000 }
   )
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
   expect(await guest.evaluate(() => window.__localSaved)).toBe(true)
   expect(await guest.evaluate(() => window.__recordingIssues)).toEqual(
     expect.arrayContaining([expect.objectContaining({ code: 'save-failed', destination: 'server' })])

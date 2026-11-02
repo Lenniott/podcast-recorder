@@ -14,17 +14,28 @@ that isn't true?
 
 ## Recording, locally
 
-Each browser captures its own audio. The **Local Copy** folder is chosen once at room
-join (`showDirectoryPicker` from the explainer screen's own click, in
-`readwrite` mode, `startIn: 'downloads'`, so a guest's remote-triggered
-start needs no gesture). Chrome refuses the Downloads folder itself
-("contains system files"); a folder inside it is allowed.
-`startRecording()` must not call either picker: it calls
-`localCopyPicker.openNext()` for a new `-take-N.wav` in that folder, then
-`openRecordingFile`. A rejected check finalizes that file (header patched,
-bytes left) and rolls to the next one — never delete, truncate, or reopen
-an earlier attempt, including one left in the folder by an earlier visit
-(`createWritable()` truncates).
+Each browser captures its own audio. The **Local Copy** is written into this
+browser's private storage (OPFS, `local-copy/<room>/…-take-N.wav`) by
+`local-copy-worker.js` through a sync access handle, so every chunk lands in
+place and a crash keeps the audio. Don't swap that for `createWritable()`:
+it only publishes on close, so a crash loses the whole take. Works in Chrome,
+Firefox and Safari; there is no folder picker and no user gesture at start.
+`startRecording()` calls `localCopy.openNext()` for a new take. A rejected
+check finalizes that file and rolls to the next one — never delete, truncate,
+or reopen an earlier attempt, including one left by an earlier visit.
+Save is a real `<a download>` link to a Blob of a fresh header plus
+`file.slice()` (Safari drops the click's user activation across awaits, and a
+take that ended early is repaired from its size without rewriting it). Save
+never deletes: the page can't see whether the download landed, so a take
+leaves this browser only through a confirmed Remove. Kept takes are listed
+again on later visits.
+
+Safari (and DuckDuckGo on Mac) leave `AudioContext.resume()` pending until
+a click on the page. Never `await` it outside a click: doing so in audio
+init blocked `connectWs()`, so the room showed "Waiting for guest" with no
+tabs. Any click wakes audio; until then the room shows the mic is paused.
+Playwright's browsers lift this rule, so `audio_needs_click.spec.js`
+reproduces it.
 
 `recording-session.js` feeds the same ordered chunks independently to the local
 WAV writer and server upload. A permanent save failure stops capture and lets
@@ -69,18 +80,23 @@ One WebSocket connection per browser, owned by `src/lib/room/room-connection.js`
 Reconnects use backoff + jitter and are otherwise invisible to callers.
 
 The one thing to know: any state that's true locally but not yet known to the
-server (recording, talking, the host's **Synced Recording Session** phase,
-anything like them added later) must re-announce itself on every successful
+server (recording, talking, anything like them added later) must re-announce itself on every successful
 connect — register it with `room.registerResync(fn)`. Skipping this is exactly
 how the "Recording" pill went stuck-wrong after any reconnect and stayed that
 way for a whole session, undetected — Talk had its own one-off fix, Recording
 didn't, and nobody noticed until a real episode broke. Don't hand-build a fix
-for a new flag; register it on the existing mechanism. The session phase is
-the same class of bug: a host who reconnects mid-take must re-send
-`recording_session` so the room's stored phase and the other peer match
-local truth. A live Check Turn (`recording_check` with `turn`, plus `open`
+for a new flag; register it on the existing mechanism. Room recording control
+also registers there, but `recording_session_sync` reads the authoritative
+room phase. Its local phase seeds only an uninitialized room; replaying an
+old host phase into a known room would overwrite a guest's valid change
+while the host was away. Explicit offline control changes are re-announced
+when that peer still holds control. A live Check Turn (`recording_check` with `turn`, plus `open`
 if this peer's modal is up) is the same: re-announce it on `registerResync`
 or the other peer's stay-quiet / modal pairing goes stale after a blip.
+Once Check Turn is `passed`, ignore a late presence of `host`/`guest` so
+stay-quiet cannot come back; a solo-passed peer that later joins a
+host-led sequence must clear the emit gate so confirm/X can finish
+instead of reopening the modal forever.
 
 The take boundary is the scheduled **Take Marker** instant (`triggerAtMs`
 corrected by clock offset), not WebSocket receipt. Never truncate or
@@ -97,12 +113,15 @@ recording."
 ## Running things here
 
 - `npm run check:standalone` — confirms `ws-rooms.js` loads under plain Node
-  with no Vite/SvelteKit involved (`server.js`/`server-ws-dev.js` both load it
-  that way). Runs automatically before `npm test`. `npx vitest run` alone
-  won't catch a module in that import graph reaching for a SvelteKit-only
-  virtual import (`$env/*`, `$app/*`) — vitest itself runs through Vite, so
-  those always resolve there regardless of whether real startup would crash.
-  If you add a new import to anything `ws-rooms.js` pulls in, run this.
+ with no Vite/SvelteKit involved (`server.js`/`server-ws-dev.js` both load it
+ that way). Runs automatically before `npm test`. `npx vitest run` alone
+ won't catch a module in that import graph reaching for a SvelteKit-only
+ virtual import (`$env/*`, `$app/*`) — vitest itself runs through Vite, so
+ those always resolve there regardless of whether real startup would crash.
+ If you add a new import to anything `ws-rooms.js` pulls in, run this.
+ Vite HMR does **not** reload `server-ws-dev.js`: after changing
+ `ws-rooms.js` (or anything it imports), restart `npm run dev` or the
+ request/session handlers you just added will never run.
 - `npx vitest run` — unit tests, fast, no server needed.
 - `npm run test:coverage` — same unit tests plus a `coverage/` HTML report.
 - `npx svelte-check` — run `npx svelte-kit sync` first if `.svelte-kit/` is missing.

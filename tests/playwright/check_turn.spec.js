@@ -19,16 +19,16 @@ test('synced start runs host check then guest check with stay-quiet on the other
 
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
 
-  await expect(host.locator('.check-overlay')).toBeVisible()
+  await expect(host.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
   await expectCheckQuiet(guest, 'host')
   await expect(host.getByTestId('check-turn')).toHaveAttribute('data-check-turn', 'host')
   await expect(guest.getByTestId('check-turn')).toHaveAttribute('data-check-turn', 'host')
   await expect(host.getByTestId('check-turn')).toHaveAttribute('data-both-turns-passed', 'false')
 
   await passRecordingCheck(host)
-  await expect(guest.locator('.check-overlay')).toBeVisible()
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
   await expectCheckQuiet(host, 'guest')
   await expect(host.getByTestId('check-turn')).toHaveAttribute('data-check-turn', 'guest')
 

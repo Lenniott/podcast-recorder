@@ -41,7 +41,7 @@ async function startSyncedTake({ browser, password, beforeHostJoins }) {
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
 
   await passRecordingCheck(host)
   await passRecordingCheck(guest)
@@ -62,13 +62,13 @@ test('host Stop asks first; Cancel keeps both recording; confirm stops both afte
   await host.getByRole('button', { name: 'Keep recording' }).click()
   await expect(confirm).toHaveCount(0)
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
 
   await host.getByRole('button', { name: 'Stop Recording' }).click()
   await host.getByRole('button', { name: 'Stop for both' }).click()
   await expect(host.getByTestId('take-countdown')).toBeVisible()
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 20_000 })
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeVisible({ timeout: 20_000 })
   await expect(host.getByTestId('other-side-uncertain')).toHaveCount(0)
 
   await guest.close()

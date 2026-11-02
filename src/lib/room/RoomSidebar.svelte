@@ -4,6 +4,7 @@
   import MicPanel from "../recording/MicPanel.svelte";
   import WaveformPanel from "../recording/WaveformPanel.svelte";
   import RecordControls from "../recording/RecordControls.svelte";
+  import LocalCopyList from "../recording/LocalCopyList.svelte";
   import ServerCopyFilesModal from "../server-copy/ServerCopyFilesModal.svelte";
 
   export let collapsed = false;
@@ -37,14 +38,20 @@
   export let takeCountdownSec = 0;
 
   export let recordingState = "idle";
+  export let roomRecording = false;
   export let canRecord = false;
   export let myPeerIsRecording = false;
   export let recordingSeconds = 0;
   export let bytesWritten = 0;
+  export let hostRequestMode = null;
   export let onToggleRecording = () => {};
   export let onClap = () => {};
   export let formatTime = (s) => String(s);
   export let formatBytes = (b) => String(b);
+  export let localCopies = [];
+  export let onSaveLocalCopy = () => {};
+  export let onRemoveLocalCopy = () => {};
+  export let savedLocalCopyNames = new Set();
 
   let filesModalOpen = false;
 </script>
@@ -109,18 +116,29 @@
     <section class="sidebar-section">
       <RecordControls
         {recordingState}
+        {roomRecording}
         {canRecord}
         {micPermission}
         {wsStatus}
         {myPeerIsRecording}
         {recordingSeconds}
         {bytesWritten}
+        {hostRequestMode}
         {onToggleRecording}
         {onClap}
         {formatTime}
         {formatBytes}
         compact={collapsed}
       />
+      {#if !collapsed}
+        <LocalCopyList
+          takes={localCopies}
+          savedNames={savedLocalCopyNames}
+          {formatTime}
+          onSave={onSaveLocalCopy}
+          onRemove={onRemoveLocalCopy}
+        />
+      {/if}
     </section>
   </div>
   {#if !collapsed}

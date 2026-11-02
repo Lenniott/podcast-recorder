@@ -18,25 +18,40 @@
   import PasswordGate from '$lib/PasswordGate.svelte'
   import UnsupportedBrowserGate from '$lib/UnsupportedBrowserGate.svelte'
   import DisplayNameGate from '$lib/DisplayNameGate.svelte'
-  import JoinExplainer from '$lib/recording/JoinExplainer.svelte'
   import JoinMicStep from '$lib/recording/JoinMicStep.svelte'
   import RecordingRoom from '$lib/recording/RecordingRoom.svelte'
+  import LocalCopySavePrompt from '$lib/recording/LocalCopySavePrompt.svelte'
   import {
     JOIN_STEP,
-    afterLocalCopyChoice,
+    MIC_DEVICE_KEY,
     afterMicContinue,
-    createLocalCopyPicker,
     joinStepAfterName,
-    openRecordingFile,
-    showsExplainer,
+    micConfirmedKey,
+    preferredMicId,
     showsMic
   } from '$lib/recording/join-step.js'
   import {
+    createLocalCopyStore,
+    localCopySupported,
+    localCopyRemoveMessage,
+    localCopyWav,
+    requestLocalCopyPersistence
+  } from '$lib/recording/local-copy-store.js'
+  import Model from '$lib/Model.svelte'
+  import {
     OTHER_SIDE_UNCERTAIN,
     RECORDING_SESSION_PHASE,
+    RECORDING_SESSION_REQUEST_ACTION,
+    RECORDING_SESSION_REQUEST_TYPE,
     RECORDING_SESSION_TYPE,
     STOP_BOTH_CONFIRM,
+    GUEST_WANTS_START_TITLE,
+    GUEST_WANTS_STOP_TITLE,
+    HOST_DECLINED_START,
+    HOST_DECLINED_STOP,
     createRecordingSession,
+    guestWantsStartCopy,
+    guestWantsStopCopy,
     usesSyncedRecordingSession
   } from '$lib/recording/synced-recording-session.js'
   import ServerCopyWaitModal from '$lib/server-copy/ServerCopyWaitModal.svelte'
@@ -111,8 +126,12 @@
 
   // ─── Audio recording state ──────────────────────────────────────────
   let audioEngineReady = false
-  let fileWritable = null      // FileSystemWritableFileStream
-  let activeFileHandle = null
+  let activeLocalCopyName = null // the take this page is still writing; never listed for Save
+  let captureTakeName = null   // the take captureSession writes, for the ask on a real stop
+  // [{ name, durationSeconds, endedEarly, url }] — this room's unsaved takes in this browser.
+  let localCopies = []
+  let savePromptName = null
+  let lastStoppedName = null
   let recordingState = 'idle'  // idle | recording | stopping
   let recordingSeconds = 0
   let recordingStartedAtMs = null
@@ -265,14 +284,16 @@
   let copyLinkTimer = null
   const participantNameStorageKey = browser ? `pr_name_${data.slug}` : ''
 
-  // Browser capability check — File System Access API is Blink only
-  // Check for the actual API rather than sniffing the UA string
-  const browserSupported = browser ? ('showDirectoryPicker' in window) : true
-  const localCopyPicker = createLocalCopyPicker({
-    showDirectoryPicker: (options) => window.showDirectoryPicker(options)
+  // Check for the actual APIs rather than sniffing the UA string.
+  const browserSupported = browser ? localCopySupported() : true
+  const localCopy = browser && browserSupported ? createLocalCopyStore({ slug: data.slug }) : null
+  let joinStep = joinStepAfterName({
+    browserSupported,
+    micConfirmed: browser && sessionStorage.getItem(micConfirmedKey(data.slug)) === '1'
   })
-  let joinStep = joinStepAfterName({ browserSupported })
-  let choosingLocalCopy = false
+  // Safari keeps audio suspended until a click on the page; until then the
+  // mic is not being captured, and the room says so.
+  let audioState = 'running'
   // TEMP DEBUG FLAG: append ?debugReconnectMarker=1 while diagnosing mic-switch sync.
   const debugReconnectMarker = browser
     ? new URLSearchParams(window.location.search).get('debugReconnectMarker') === '1'
@@ -325,6 +346,9 @@
     onMicConnected() {
       injectReconnectMarker()
     },
+    onAudioState(state) {
+      audioState = state
+    },
     loadDevices,
     getDevices: () => devices,
     getSelectedDeviceId: () => selectedDeviceId,
@@ -365,14 +389,15 @@
 
   // ─── Derived ────────────────────────────────────────────────────────
   $: myPeerIsRecording = peers.find((p) => p.clientId !== clientId)?.recording ?? false
-  $: canRecord = micPermission === 'granted' && recordingState !== 'stopping'
+  $: canRecord = (roomRecording || micPermission === 'granted') && recordingState !== 'stopping' && !recordingControlBusy
   $: hasIncompleteServerCopyUpload = isIncompleteServerCopyUpload(serverCopyUploadState)
   $: hasActiveLocalRecording = recordingState === 'recording' || recordingState === 'stopping'
   // The post-stop blocking modal (ticket 07): our own recording has fully
-  // stopped (local WAV already saved) but our own server copy hasn't
-  // reached ticket 05's definition of complete yet. Scoped to this
-  // participant only — the sidebar (ticket 06) is the all-participants view.
-  $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload
+  // stopped but our own server copy hasn't reached ticket 05's definition
+  // of complete yet. Scoped to this participant only — the sidebar
+  // (ticket 06) is the all-participants view. Never in front of the ask
+  // to save: Save must not wait on the upload.
+  $: showUploadWaitModal = recordingState === 'idle' && hasIncompleteServerCopyUpload && !savePromptTake
   // Ticket 08: fills the gap left by the wait modal above closing silently
   // on failure — see shouldAnnounceServerCopyFailure's doc comment. A
   // plain `$:` block (not something tied only to serverCopyUpload's own
@@ -387,7 +412,7 @@
     serverCopyFailureAnnounced = true
     alert(
       "Your server copy could not finish uploading and won't complete. " +
-      "Your recording is already saved on this device — you'll need to send that file to the host another way."
+      "Save your recording from this page so you can send that file to the host another way."
     )
   }
   // Single source of truth for exit-guard copy — see $lib/recording/exit-guard.js.
@@ -426,21 +451,85 @@
     return n || 'Guest'
   }
 
-  async function chooseLocalCopyLocation() {
-    choosingLocalCopy = true
+  function continueFromMic() {
+    void requestLocalCopyPersistence()
+    void audioEngine.ensureRunning()
+    sessionStorage.setItem(micConfirmedKey(data.slug), '1')
+    rememberMic()
+    joinStep = afterMicContinue()
+  }
+
+  function rememberMic() {
+    try { if (selectedDeviceId) localStorage.setItem(MIC_DEVICE_KEY, selectedDeviceId) } catch {}
+  }
+
+  // Any click counts as the gesture Safari needs before audio can run.
+  function wakeAudio() {
+    if (audioState !== 'running') void audioEngine.ensureRunning()
+  }
+
+  // ─── Unsaved Local Copies ────────────────────────────────────────────
+  // Save is a real <a download> the person clicks: Safari refuses a download
+  // started after an await, so each take's URL exists before the click.
+  // A revoked URL would break a download still reading it, hence the delay.
+  const localCopyUrls = new Map() // `${name}:${size}:${lastModified}` -> object URL
+  let localCopyListSeq = 0
+
+  async function refreshLocalCopies() {
+    if (!localCopy) return
+    const seq = ++localCopyListSeq
+    let takes
     try {
-      const directory = await localCopyPicker.choose()
-      joinStep = afterLocalCopyChoice({ browserSupported, handle: directory })
-    } catch (e) {
-      alert(`Could not open folder: ${e.message}`)
-    } finally {
-      choosingLocalCopy = false
+      takes = await localCopy.list({
+        exclude: activeLocalCopyName ? [activeLocalCopyName] : [],
+        onUnreadable: ({ name, error }) => handleRecordingIssue({
+          code: 'local-copy-unreadable', severity: 'warning', destination: 'local',
+          message: `Could not read ${name} from this browser's storage.`, error
+        })
+      })
+    } catch (error) {
+      handleRecordingIssue({ code: 'local-copy-list-failed', severity: 'warning', destination: 'local', message: 'Could not list recordings kept in this browser.', error })
+      return
+    }
+    if (seq !== localCopyListSeq) return
+    const kept = new Set()
+    localCopies = takes.map((take) => {
+      const key = `${take.name}:${take.dataBytes}:${take.lastModified}`
+      if (!localCopyUrls.has(key)) localCopyUrls.set(key, URL.createObjectURL(localCopyWav(take, take.file)))
+      kept.add(key)
+      return { name: take.name, durationSeconds: take.durationSeconds, endedEarly: take.endedEarly, url: localCopyUrls.get(key) }
+    })
+    for (const [key, url] of localCopyUrls) {
+      if (kept.has(key)) continue
+      localCopyUrls.delete(key)
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
     }
   }
 
-  function continueFromMic() {
-    joinStep = afterMicContinue()
+  // Runs from the Save link's own click. The browser has been handed the
+  // WAV but has not necessarily finished writing it to Downloads.
+  // So nothing is deleted on the strength of a click alone: removal waits for
+  // the person to confirm, after they've seen the saved file open.
+  let savedLocalCopyNames = new Set()
+
+  function onLocalCopySaveClick(take) {
+    if (savePromptName === take.name) savePromptName = null
+    savedLocalCopyNames = new Set(savedLocalCopyNames).add(take.name)
   }
+
+  async function onLocalCopyRemoveClick(take) {
+    if (!confirm(localCopyRemoveMessage(take, savedLocalCopyNames.has(take.name)))) return
+    try {
+      await localCopy.remove(take.name)
+    } catch (error) {
+      handleRecordingIssue({ code: 'local-copy-remove-failed', severity: 'warning', destination: 'local', message: `Could not remove ${take.name} from this browser.`, error })
+    }
+    if (lastStoppedName === take.name) lastStoppedName = null
+    await refreshLocalCopies()
+  }
+
+  $: savePromptTake = localCopies.find((take) => take.name === savePromptName) ?? null
+  $: lastStoppedTake = localCopies.find((take) => take.name === lastStoppedName) ?? null
 
   function persistParticipantName() {
     if (!browser) return
@@ -554,7 +643,9 @@
     try {
       devices = await listMicrophones()
       if (!selectedDeviceId && devices.length > 0) {
-        selectedDeviceId = devices[0].deviceId
+        let savedId = null
+        try { savedId = localStorage.getItem(MIC_DEVICE_KEY) } catch {}
+        selectedDeviceId = preferredMicId(devices, savedId)
       }
     } catch (e) {
       console.warn('Could not enumerate devices', e)
@@ -564,6 +655,7 @@
   /** User manually picked a new mic from the dropdown */
   async function changeMic() {
     micFallback = false
+    rememberMic()
     if (!audioEngineReady) {
       try {
         await initAudioEngine()
@@ -687,7 +779,7 @@
     if (data.isHostClaim) {
       return usesSyncedRecordingSession({ wsStatus, isHost: true }) && otherPresent
     }
-    return recordingSession?.phase() === RECORDING_SESSION_PHASE.recording
+    return wsStatus === 'connected' && hostIsPresent()
   }
 
   function syncCheckTurnUi() {
@@ -799,7 +891,10 @@
       const pending = session.stop({ capture: false })
       try {
         await session.whenLocalFinished
-        if (captureSession === session) captureSession = null
+        if (captureSession === session) {
+          captureSession = null
+          captureTakeName = null
+        }
         return openNextAttempt()
       } finally {
         rollingAttempt = false
@@ -810,7 +905,7 @@
       }
     })()
     if (!(await attemptRoll)) {
-      await stopRecording()
+      await recordingSession.onLocalFailure()
       return true
     }
     if (recordingState !== 'recording') return true
@@ -825,7 +920,8 @@
     log('[recording]', issue)
   }
 
-  async function startRecording() {
+  async function startRecording({ signal } = {}) {
+    if (signal?.aborted) return
     if (!audioEngineReady) {
       try {
         await initAudioEngine()
@@ -835,9 +931,29 @@
         return
       }
     }
-    await audioEngine.ensureRunning()
+    if (signal) {
+      let cancel
+      try {
+        await Promise.race([
+          audioEngine.ensureRunning(),
+          new Promise(resolve => {
+            cancel = resolve
+            signal.addEventListener('abort', cancel, { once: true })
+            if (signal.aborted) resolve()
+          })
+        ])
+      } finally { signal.removeEventListener('abort', cancel) }
+    } else await audioEngine.ensureRunning()
+    if (signal?.aborted) return
 
     if (!(await openNextAttempt())) return
+    if (signal?.aborted) {
+      // Keep the newly opened attempt, even when it contains only its header.
+      const session = captureSession
+      if (session) await session.stop({ capture: false })
+      if (captureSession === session) { captureSession = null; captureTakeName = null }
+      return
+    }
 
     try {
       audioEngine.startCapture()
@@ -847,8 +963,7 @@
       if (session) await session.stop()
       if (captureSession === session) {
         captureSession = null
-        activeFileHandle = null
-        fileWritable = null
+        captureTakeName = null
       }
       return
     }
@@ -864,29 +979,29 @@
   }
 
   /**
-   * Opens the next Local Copy attempt in the join folder and points the
-   * capture writer, server copy, and Take Marker at it. Shared by
+   * Opens the next Local Copy attempt in this browser's storage and points
+   * the capture writer, server copy, and Take Marker at it. Shared by
    * startRecording and a retake roll so both write through one path.
    */
   async function openNextAttempt() {
     let attempt
-    let writable
     try {
-      attempt = await localCopyPicker.openNext({
+      attempt = await localCopy.openNext({
         participantName: getJoinName(),
         roomName: data.roomName
       })
-      writable = await openRecordingFile(attempt.fileHandle)
+      recordingSampleRate = audioEngine.sampleRate
+      // Placeholder header, patched with the real size when the take closes.
+      // A take that never closes keeps it, which is how it reads as ended early.
+      await attempt.file.write(buildWavHeader(0, recordingSampleRate))
     } catch (e) {
-      alert(e.message || `Could not open file: ${e.message}`)
+      if (attempt) void Promise.resolve(attempt.file.abort()).catch(() => {})
+      alert(`Could not start the recording in this browser: ${e.message}`)
       return false
     }
-    fileWritable = writable
-    activeFileHandle = attempt.fileHandle
-    recordingSampleRate = audioEngine.sampleRate
-
-    // Write placeholder WAV header (will patch at end with real size)
-    await writable.write(buildWavHeader(0, recordingSampleRate))
+    const writable = attempt.file
+    const takeName = attempt.name
+    activeLocalCopyName = takeName
     bytesWritten = 44
 
     // Fresh take, fresh server-copy session — reset any status left over
@@ -916,6 +1031,7 @@
     serverCopyUpload = upload
     startServerCopyUploadWhenReady()
 
+    captureTakeName = takeName
     captureSession = session = createCaptureSession({
       sampleRate: recordingSampleRate,
       file: writable,
@@ -924,14 +1040,15 @@
       onWritten: handleWritten,
       onIssue: handleRecordingIssue,
       onLocalFinished: result => {
+        // Saved or not, whatever reached the file is now listed for Save.
+        if (activeLocalCopyName === takeName) activeLocalCopyName = null
+        void refreshLocalCopies()
         if (captureSession !== session || !result.saved) return
-        activeFileHandle = null
-        fileWritable = null
         if (!rollingAttempt) recordingState = 'idle'
       },
       onStopRequested: () => {
         if (rollingAttempt || captureSession !== session) return
-        void stopRecording()
+        void recordingSession.onLocalFailure()
       },
       onMicrophoneNeeded: () => switchToBestMic({ excludeCurrent: true })
     })
@@ -969,15 +1086,19 @@
     await attemptRoll
     const session = captureSession
     if (session) {
+      const takeName = captureTakeName
       const result = await session.stop()
       console.info('[recording] Save result', result)
       if (captureSession === session) {
         captureSession = null
-        activeFileHandle = null
-        fileWritable = null
+        captureTakeName = null
         recordingState = 'idle'
         resetTakeMarker()
       }
+      // A real stop asks to save; a rejected Check Turn's roll does not come through here.
+      lastStoppedName = takeName
+      savePromptName = takeName
+      await refreshLocalCopies()
     } else {
       recordingState = 'idle'
       resetTakeMarker()
@@ -985,12 +1106,41 @@
   }
 
   let recordingSession = null
+  let roomRecording = false
+  let recordingControlBusy = false
+  let hostRequestMode = null
   let stopConfirmOpen = false
   let otherSideUncertain = false
+  let awaitingHostAction = null
+  let guestRequestOpen = false
+  let guestRequestAction = null
+  let guestRequestFrom = ''
+  let hostDeclinedToast = ''
+  let hostDeclinedToastTimer = null
+
+  function hostIsPresent() {
+    return peers.some((p) => p.role === 'host' && p.clientId && p.clientId !== clientId)
+  }
 
   function syncStopUi() {
+    roomRecording = recordingSession?.phase() === RECORDING_SESSION_PHASE.recording
+    recordingControlBusy = !!recordingSession?.changing
     stopConfirmOpen = !!recordingSession?.awaitingConfirm
     otherSideUncertain = !!recordingSession?.otherSideUncertain
+    awaitingHostAction = recordingSession?.awaitingHost || null
+    const pending = recordingSession?.pendingGuestRequest
+    guestRequestOpen = !!pending && !stopConfirmOpen
+    guestRequestAction = pending?.action || null
+    guestRequestFrom = pending?.from || ''
+  }
+
+  function showHostDeclinedToast(message) {
+    hostDeclinedToast = message
+    clearTimeout(hostDeclinedToastTimer)
+    hostDeclinedToastTimer = setTimeout(() => {
+      hostDeclinedToast = ''
+      hostDeclinedToastTimer = null
+    }, 4000)
   }
 
   async function toggleRecording() {
@@ -1009,8 +1159,26 @@
     syncStopUi()
   }
 
+  async function acceptGuestRecordingRequest() {
+    await recordingSession.acceptGuestRequest()
+    syncStopUi()
+    if (stopConfirmOpen) return
+    if (recordingState === 'recording') startTakeCountdownTick()
+  }
+
+  function dismissGuestRecordingRequest() {
+    recordingSession.dismissGuestRequest()
+    syncStopUi()
+  }
+
+
   // A take that ended some other way (e.g. a failed retake roll) has nothing left to confirm.
   $: if (stopConfirmOpen && recordingState !== 'recording') cancelSyncedStop()
+
+  $: {
+    peers; wsStatus; awaitingHostAction; recordingState; roomRecording;
+    hostRequestMode = recordingSession?.buttonMode ?? null
+  }
 
   // ───────────────────────────────────────────────────────────────────
   // CLAP
@@ -1080,6 +1248,11 @@
           const rejectedOnGuestTurn = checkSequence.turn === CHECK_TURN.guest
             && msg.checkTurn === CHECK_TURN.host
             && recordingState === 'recording'
+          if (!checkSequence.synced && msg.checkTurn === CHECK_TURN.host && recordingState === 'recording') {
+            // A returning host starts a paired check; replace the solo marker,
+            // while leaving every sample already written in its file.
+            resetTakeMarker()
+          }
           checkSequence.applyRemote(msg.checkTurn)
           if (rejectedOnGuestTurn) {
             void restartOnNextAttempt()
@@ -1182,11 +1355,29 @@
       // its collapse toggle when the panel is shut), not a tab-strip pill.
       if (msg.type === 'transcript_activity') researchPanel?.applyTranscriptActivity?.(msg)
       if (msg.type === 'recording_check_preview') applyCheckPreview(msg)
-      if (msg.type === RECORDING_SESSION_TYPE) void recordingSession.onMessage(msg)
+      if (msg.type === RECORDING_SESSION_TYPE || msg.type === RECORDING_SESSION_REQUEST_TYPE) {
+        const wasAwaiting = recordingSession?.awaitingHost || null
+        void recordingSession.onMessage(msg).then(() => {
+          syncStopUi()
+          if (
+            msg.type === RECORDING_SESSION_REQUEST_TYPE
+            && msg.action === RECORDING_SESSION_REQUEST_ACTION.dismissed
+            && wasAwaiting
+            && !recordingSession.awaitingHost
+          ) {
+            showHostDeclinedToast(
+              wasAwaiting === RECORDING_SESSION_REQUEST_ACTION.stop
+                ? HOST_DECLINED_STOP
+                : HOST_DECLINED_START
+            )
+          }
+        })
+      }
       if (msg.type === 'error')     console.warn('WS error:', msg.message)
     },
     onStatusChange(status) {
       wsStatus = status
+      syncStopUi()
     }
   })
 
@@ -1200,7 +1391,10 @@
     getRecordingState: () => recordingState,
     isHost: () => !!data.isHostClaim,
     getWsStatus: () => wsStatus,
-    requestTail: () => takeMarker.requestTail({ synced: true })
+    isHostPresent: hostIsPresent,
+    requestTail: () => takeMarker.requestTail({ synced: true }),
+    onChange: syncStopUi,
+    onIssue: handleRecordingIssue
   })
   takeMarker = createTakeMarker({
     send: (msg) => room.send(msg),
@@ -1320,6 +1514,7 @@
 
       // Presence/sync should still work even if local audio init fails.
       connectWs()
+      void refreshLocalCopies()
       navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
     } catch (err) {
       sessionStarted = false
@@ -1331,6 +1526,8 @@
     if (browser) {
       window.addEventListener('beforeunload', handleBeforeUnload)
       document.addEventListener('click', handleDocumentClick, { capture: true })
+      document.addEventListener('click', wakeAudio, { capture: true })
+      document.addEventListener('keydown', wakeAudio, { capture: true })
       refreshWaveformColors()
       window.addEventListener('themechange', refreshWaveformColors)
 
@@ -1386,6 +1583,8 @@
     if (copyLinkTimer) clearTimeout(copyLinkTimer)
     window.removeEventListener('beforeunload', handleBeforeUnload)
     document.removeEventListener('click', handleDocumentClick, { capture: true })
+    document.removeEventListener('click', wakeAudio, { capture: true })
+    document.removeEventListener('keydown', wakeAudio, { capture: true })
     window.removeEventListener('themechange', refreshWaveformColors)
     room.disconnect()
     audioEngine.close()
@@ -1404,8 +1603,6 @@
   <DisplayNameGate roomName={data.roomName} formError={form?.error} bind:myName />
 {:else if joinStep === JOIN_STEP.unsupported}
   <UnsupportedBrowserGate slug={data.slug} />
-{:else if showsExplainer(joinStep)}
-  <JoinExplainer choosing={choosingLocalCopy} onChooseSaveLocation={chooseLocalCopyLocation} />
 {:else if showsMic(joinStep)}
   <JoinMicStep
     {devices}
@@ -1459,12 +1656,18 @@
     {lastClapFrom}
     {takeCountdownSec}
     {recordingState}
+    {roomRecording}
     {canRecord}
     {myPeerIsRecording}
     {recordingSeconds}
     {bytesWritten}
+    {hostRequestMode}
     {checkPreviewByClientId}
     {stayQuietRole}
+    {localCopies}
+    onSaveLocalCopy={onLocalCopySaveClick}
+    onRemoveLocalCopy={onLocalCopyRemoveClick}
+    {savedLocalCopyNames}
     onToggleRecording={toggleRecording}
     onClap={sendClap}
     {formatTime}
@@ -1511,12 +1714,62 @@
     </div>
   </div>
 {/if}
+<Model
+  open={guestRequestOpen && guestRequestAction === RECORDING_SESSION_REQUEST_ACTION.start}
+  labelledBy="guest-request-title"
+  actions={[
+    { label: 'No', onClick: dismissGuestRecordingRequest },
+    { label: 'Yes, start', onClick: acceptGuestRecordingRequest, primary: true }
+  ]}
+>
+  <div data-testid="guest-record-request">
+    <h2 id="guest-request-title" class="guest-request-title">{GUEST_WANTS_START_TITLE}</h2>
+    <p class="guest-request-body">{guestWantsStartCopy(guestRequestFrom)}</p>
+  </div>
+</Model>
+<Model
+  open={guestRequestOpen && guestRequestAction === RECORDING_SESSION_REQUEST_ACTION.stop}
+  labelledBy="guest-stop-request-title"
+  actions={[
+    { label: 'No', onClick: dismissGuestRecordingRequest },
+    { label: 'Yes, stop', onClick: acceptGuestRecordingRequest, primary: true }
+  ]}
+>
+  <div data-testid="guest-stop-request">
+    <h2 id="guest-stop-request-title" class="guest-request-title">{GUEST_WANTS_STOP_TITLE}</h2>
+    <p class="guest-request-body">{guestWantsStopCopy(guestRequestFrom)}</p>
+  </div>
+</Model>
+{#if hostDeclinedToast}
+  <div class="host-declined-toast" role="status" aria-live="polite" data-testid="host-declined-toast">
+    {hostDeclinedToast}
+  </div>
+{/if}
+{#if audioEngineReady && audioState === 'suspended'}
+  <div class="audio-paused" role="alert" data-testid="audio-paused">
+    <span>Your browser has paused the mic. Nothing is being recorded from it.</span>
+    <button type="button" class="btn-primary" on:click={wakeAudio}>Turn mic back on</button>
+  </div>
+{/if}
 {#if otherSideUncertain && recordingState === 'idle'}
   <div class="other-side-uncertain" role="status" data-testid="other-side-uncertain">
     {OTHER_SIDE_UNCERTAIN}
   </div>
 {/if}
-<ServerCopyWaitModal open={showUploadWaitModal} percent={serverCopyUploadPercent} />
+<LocalCopySavePrompt
+  take={savePromptTake}
+  uploading={hasIncompleteServerCopyUpload}
+  percent={serverCopyUploadPercent}
+  {formatTime}
+  onSave={onLocalCopySaveClick}
+  onLater={() => { savePromptName = null }}
+/>
+<ServerCopyWaitModal
+  open={showUploadWaitModal}
+  percent={serverCopyUploadPercent}
+  take={lastStoppedTake}
+  onSave={onLocalCopySaveClick}
+/>
 {/if}
 
 <style>
@@ -1559,6 +1812,52 @@
     left: 50%;
     transform: translateX(-50%);
     z-index: 900;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border, #2a2a2e);
+    background: var(--bg-elevated, #18181b);
+    color: var(--warn-text);
+    font-size: 13px;
+  }
+
+  .guest-request-title {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+
+  .guest-request-body {
+    margin: 0;
+    color: var(--muted, #a1a1aa);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .host-declined-toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1100;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border, #2a2a2e);
+    background: var(--bg-elevated, #18181b);
+    color: var(--text, #fafafa);
+    font-size: 13px;
+    max-width: min(420px, calc(100vw - 32px));
+    text-align: center;
+  }
+
+  .audio-paused {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 950;
+    display: flex;
+    align-items: center;
+    gap: 12px;
     padding: 10px 16px;
     border-radius: 10px;
     border: 1px solid var(--border, #2a2a2e);

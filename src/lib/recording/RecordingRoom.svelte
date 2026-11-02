@@ -75,12 +75,18 @@
   export let lastClapFrom = null;
   export let takeCountdownSec = 0;
   export let recordingState = "idle";
+  export let roomRecording = false;
   export let canRecord = false;
   export let myPeerIsRecording = false;
   export let recordingSeconds = 0;
   export let bytesWritten = 0;
   export let checkPreviewByClientId = {};
   export let stayQuietRole = "";
+  export let localCopies = [];
+  export let onSaveLocalCopy = () => {};
+  export let onRemoveLocalCopy = () => {};
+  export let savedLocalCopyNames = new Set();
+  export let hostRequestMode = null;
   export let onToggleRecording = () => {};
   export let onClap = () => {};
   export let formatTime = (s) => String(s);
@@ -132,14 +138,20 @@
     {lastClapFrom}
     {takeCountdownSec}
     {recordingState}
+    {roomRecording}
     {canRecord}
     {myPeerIsRecording}
     {recordingSeconds}
     {bytesWritten}
+    {hostRequestMode}
     {onToggleRecording}
     {onClap}
     {formatTime}
     {formatBytes}
+    {localCopies}
+    {onSaveLocalCopy}
+    {onRemoveLocalCopy}
+    {savedLocalCopyNames}
   />
 
   <main class="room-main">

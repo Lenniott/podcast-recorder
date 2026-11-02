@@ -14,7 +14,7 @@ test('starting recording flips this peer to Recording on both browsers', async (
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
   await expect(guest.getByTestId('peer-recording')).toBeVisible()
   await expandPresenceTable(host)
   await expect(presenceRow(host, 'Host')).toHaveAttribute('data-recording', 'true')
@@ -38,7 +38,7 @@ test('recording pill survives a mid-take socket close and reconnect', async ({ b
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
   await expect(guest.getByTestId('peer-recording')).toBeVisible()
 
   await closeLiveSockets(host)

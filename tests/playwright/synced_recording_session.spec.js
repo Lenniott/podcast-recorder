@@ -9,7 +9,8 @@ import {
   expectCheckQuiet,
   expandPresenceTable,
   presenceRow,
-  stopAsHost
+  stopAsHost,
+  startViaGuestRequest
 } from './helpers.js'
 
 test('host Start starts guest recording without a guest click; host Stop stops both', async ({ browser }) => {
@@ -23,14 +24,14 @@ test('host Start starts guest recording without a guest click; host Stop stops b
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
 
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled()
   await host.getByRole('button', { name: 'Start Recording' }).click()
 
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
 
   await expectCheckQuiet(guest, 'host')
-  await expect(host.locator('.check-overlay')).toBeVisible()
+  await expect(host.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
   await passRecordingCheck(host)
   await expectCheckQuiet(host, 'guest')
   await passRecordingCheck(guest)
@@ -43,9 +44,147 @@ test('host Start starts guest recording without a guest click; host Stop stops b
   await stopAsHost(host)
 
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 20_000 })
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeVisible({ timeout: 20_000 })
   await expect(presenceRow(host, 'Host')).not.toHaveAttribute('data-recording', 'true')
   await expect(presenceRow(host, 'Alex')).not.toHaveAttribute('data-recording', 'true')
+
+  await guest.close()
+  await host.close()
+})
+
+test('guest Start with host present asks the host; accept starts both', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'sync-guest-ask'
+  const roomUrl = await createRoom(host, { name: `E2E Guest Ask ${Date.now()}`, password })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled()
+  await startViaGuestRequest(host, guest)
+  await expectCheckQuiet(guest, 'host')
+  await expect(host.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
+  await passRecordingCheck(host)
+  await passRecordingCheck(guest)
+  await expect(host.getByTestId('check-turn')).toHaveAttribute('data-both-turns-passed', 'true')
+  await expect(guest.getByTestId('check-turn')).toHaveAttribute('data-both-turns-passed', 'true')
+
+  await guest.close()
+  await host.close()
+})
+
+test('host declines a guest start request: guest button returns and a toast explains why', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'sync-guest-no'
+  const roomUrl = await createRoom(host, { name: `E2E Guest No ${Date.now()}`, password })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  await guest.getByRole('button', { name: 'Request to start recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Waiting for host…' })).toBeDisabled()
+  await expect(host.getByTestId('guest-record-request')).toBeVisible()
+  await host.getByRole('button', { name: 'No', exact: true }).click()
+
+  await expect(host.getByTestId('guest-record-request')).toHaveCount(0)
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled()
+  await expect(guest.getByTestId('host-declined-toast')).toHaveText("The host isn't ready to start yet.")
+  await expect(host.getByRole('button', { name: 'Start Recording' })).toBeVisible()
+
+  await guest.close()
+  await host.close()
+})
+
+test('host left the room: guest Start/Stop records solo without asking anyone', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'sync-host-gone'
+  const roomUrl = await createRoom(host, { name: `E2E Host Gone ${Date.now()}`, password })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  await host.close()
+  // Presence drops the host; guest stays connected and must not wait on anyone.
+  await expect(guest.getByText('Waiting for guest…').first()).toBeVisible({ timeout: 15_000 })
+
+  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await guest.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toHaveCount(0)
+  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
+
+  await passRecordingCheck(guest)
+  await guest.getByRole('button', { name: 'Stop Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 20_000 })
+
+  await guest.close()
+})
+
+test('a pending guest start takes effect automatically when the host leaves', async ({ browser }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'pending-host-leaves'
+  const roomUrl = await createRoom(host, { name: `E2E Pending Request ${Date.now()}`, password })
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+  await guest.getByRole('button', { name: 'Request to start recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Waiting for host…' })).toBeDisabled()
+  await expect(guest.getByTestId('cancel-host-request')).toHaveCount(0)
+  await expect(host.getByTestId('guest-record-request')).toBeVisible()
+  await host.close()
+  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeEnabled()
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
+  await passRecordingCheck(guest)
+  await guest.getByRole('button', { name: 'Stop Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeVisible()
+  await guest.close()
+})
+
+test('guest solo-passed then host returns: the room starts the host and Check Turn completes', async ({ browser }) => {
+  const host = await browser.newPage()
+  await trackLiveSockets(host)
+  await stubYouTubeApi(host)
+  const password = 'sync-guest-first'
+  const roomUrl = await createRoom(host, { name: `E2E Guest First ${Date.now()}`, password })
+
+  const guest = await browser.newPage()
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  // Drop the host's socket so presence loses them; guest can Start solo.
+  await host.context().setOffline(true)
+  await closeLiveSockets(host)
+  await expect(guest.getByText('Waiting for guest…').first()).toBeVisible({ timeout: 15_000 })
+
+  await guest.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await guest.getByRole('button', { name: 'Skip microphone check' }).click()
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toHaveCount(0)
+
+  await host.context().setOffline(false)
+  await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible({ timeout: 20_000 })
+
+  await expectCheckQuiet(guest, 'host')
+  await passRecordingCheck(host)
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
+  await passRecordingCheck(guest)
+  await expect(host.getByTestId('check-quiet')).toHaveCount(0)
+  await expect(guest.getByTestId('check-quiet')).toHaveCount(0)
+  await expect(host.getByTestId('check-turn')).toHaveAttribute('data-both-turns-passed', 'true')
+  await expect(guest.getByTestId('check-turn')).toHaveAttribute('data-both-turns-passed', 'true')
+  await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toHaveCount(0)
+
+  await expect(host.getByTestId('take-countdown')).toBeVisible()
+  await expect(guest.getByTestId('take-countdown')).toBeVisible()
+  await expect(host.getByTestId('take-marker')).toHaveAttribute('data-take-ready', 'true', { timeout: 15000 })
+  await expect(guest.getByTestId('take-marker')).toHaveAttribute('data-take-ready', 'true')
 
   await guest.close()
   await host.close()

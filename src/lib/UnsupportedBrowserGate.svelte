@@ -1,5 +1,5 @@
 <script>
-  import { Ban, Check, X } from '$lib/icons'
+  import { Ban, Check } from '$lib/icons'
 
   export let slug = ''
 </script>
@@ -9,20 +9,17 @@
     <div class="gate-icon"><Ban size={36} /></div>
     <h2>Browser not supported</h2>
     <p class="sub">
-      Recording requires the <strong>File System Access API</strong> to stream
-      audio directly to your disk. Your current browser doesn't support it.
+      Recording keeps a copy of your audio in this browser while you record.
+      Your current browser can't do that.
     </p>
     <div class="browser-list">
       <div class="browser-item ok"><Check /> Chrome</div>
       <div class="browser-item ok"><Check /> Edge</div>
-      <div class="browser-item ok"><Check /> Brave</div>
-      <div class="browser-item ok"><Check /> Opera</div>
-      <div class="browser-item bad"><X /> Safari</div>
-      <div class="browser-item bad"><X /> Firefox</div>
-      <div class="browser-item bad"><X /> DuckDuckGo</div>
+      <div class="browser-item ok"><Check /> Firefox</div>
+      <div class="browser-item ok"><Check /> Safari</div>
     </div>
     <p class="browser-note">
-      Open this link in Chrome or Edge and you're good to go.<br />
+      Update your browser, or open this link in a recent version of one of these.<br />
       The room URL is: <code>{slug}</code>
     </p>
   </div>
@@ -76,11 +73,6 @@
   .browser-item.ok {
     background: rgba(34, 197, 94, .1);
     color: var(--success-text);
-  }
-
-  .browser-item.bad {
-    background: rgba(239, 68, 68, .08);
-    color: var(--danger-text);
   }
 
   .browser-note {
