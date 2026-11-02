@@ -23,6 +23,10 @@
   // Collapsed-sidebar mode: same click handlers, icon-only buttons — Record/
   // Stop and Clap must stay reachable without expanding the sidebar.
   export let compact = false;
+  // Compact, but laid out as a row for the mobile header — which has the
+  // width the 72px collapsed sidebar lacks, so it also carries the REC
+  // timer the full stats bar would otherwise be the only place to show.
+  export let inline = false;
   // When the host is in the room, guest Start/Stop become a request instead
   // of a local write: 'request-start' | 'waiting-start' | 'request-stop' |
   // 'waiting-stop' | null.
@@ -51,7 +55,18 @@
 </script>
 
 {#if compact}
-  <div class="record-controls-compact">
+  <div class="record-controls-compact" class:inline>
+    {#if inline}
+      {#if recordingState === "recording"}
+        <div class="stat recording-stat inline-stat" data-testid="inline-rec-stat">
+          <span class="stat-dot"></span>
+          REC {formatTime(recordingSeconds)}
+          <span class="inline-bytes">{formatBytes(bytesWritten)}</span>
+        </div>
+      {:else if myPeerIsRecording && recordingState === "idle"}
+        <div class="stat warn-stat inline-stat"><AlertTriangle /> Guest is recording</div>
+      {/if}
+    {/if}
     <button
       type="button"
       class="btn-primary btn-icon"
@@ -174,6 +189,19 @@
     flex-direction: column;
     align-items: center;
     gap: 8px;
+  }
+  .record-controls-compact.inline {
+    flex-direction: row;
+  }
+  .inline-stat {
+    margin-top: 0;
+    font-size: 12px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .inline-bytes {
+    color: var(--muted);
+    font-weight: 400;
   }
 
   .rec-circle {
