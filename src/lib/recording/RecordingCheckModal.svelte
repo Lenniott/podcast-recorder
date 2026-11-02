@@ -109,11 +109,11 @@
 </Model>
 
 {#if !open && quietRole}
-  <div class="check-quiet" data-testid="check-quiet" role="status">
+  <div class="check-quiet" role="status">
     <div class="check-card">
       <div class="check-badge">● Recording</div>
       <h2>Stay quiet for a moment</h2>
-      <p class="check-hint">{stayQuietCopy(quietRole)}</p>
+      <p class="check-hint" data-testid="check-quiet">{stayQuietCopy(quietRole)}</p>
     </div>
   </div>
 {/if}

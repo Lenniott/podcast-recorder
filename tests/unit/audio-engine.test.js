@@ -121,6 +121,32 @@ describe('createAudioEngine', () => {
     expect(calls.chunks).toEqual([buffer])
   })
 
+  it('finishes init and reports the state when the browser holds resume() until a click (Safari)', async () => {
+    vi.useFakeTimers()
+    const { ctx } = installAudioGlobals({ state: 'suspended' })
+    ctx.resume = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => createStream()) } })
+    const states = []
+    const engine = createAudioEngine({
+      onAudioState: (state) => states.push(state),
+      loadDevices: async () => {},
+      getDevices: () => [{ deviceId: 'mic-1', label: 'Mic 1' }],
+      getSelectedDeviceId: () => 'mic-1',
+      setSelectedDeviceId: () => {},
+      setMicFallback: () => {},
+      setMicFallbackName: () => {}
+    })
+
+    await engine.init()
+    expect(states).toEqual(['suspended'])
+
+    const waiting = engine.ensureRunning()
+    await vi.advanceTimersByTimeAsync(1000)
+    await waiting
+    expect(() => engine.startCapture()).toThrow('Audio processing is not running')
+    vi.useRealTimers()
+  })
+
   it('resumes a suspended context and updates gain/clap/debug messages', async () => {
     vi.useFakeTimers()
     const { ctx, workletNode } = installAudioGlobals({ state: 'suspended' })

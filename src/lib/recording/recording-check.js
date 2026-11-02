@@ -172,11 +172,23 @@ export function createCheckTurnSequence() {
       turn = CHECK_TURN.idle
       return
     }
-    synced = true
     if (nextTurn === CHECK_TURN.passed) {
+      synced = true
+      // A late host/guest presence can move turn backwards after we already
+      // emitted passed; force the turn back even when emitPassed is a no-op.
+      if (emittedPassed) {
+        turn = CHECK_TURN.passed
+        return
+      }
       emitPassed()
       return
     }
+    // host | guest. After a synced pass, ignore stale presence so stay-quiet
+    // cannot come back. After a solo pass, clear the emit gate so a later
+    // host-led Check Turn can complete instead of looping on confirm/X.
+    if (turn === CHECK_TURN.passed && synced) return
+    synced = true
+    if (emittedPassed) emittedPassed = false
     turn = nextTurn
   }
 

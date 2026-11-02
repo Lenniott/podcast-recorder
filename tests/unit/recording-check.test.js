@@ -219,4 +219,68 @@ describe('createCheckTurnSequence', () => {
     seq.applyRemote(CHECK_TURN.passed)
     expect(seq.bothTurnsPassed).toBe(true)
   })
+
+  it('after a synced pass, a late host/guest presence cannot reopen stay-quiet', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    seq.confirm({ isHost: true })
+    seq.confirm({ isHost: false })
+    expect(seq.bothTurnsPassed).toBe(true)
+
+    seq.applyRemote(CHECK_TURN.guest)
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.stayQuietRole({ isHost: true })).toBe(null)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+
+    seq.applyRemote(CHECK_TURN.host)
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.stayQuietRole({ isHost: false })).toBe(null)
+  })
+
+  it('a passed that arrives after a late guest overwrite still ends on passed', () => {
+    const seq = createCheckTurnSequence()
+    seq.start({ synced: true })
+    seq.confirm({ isHost: true })
+    seq.confirm({ isHost: false })
+    // Simulate the old bug path that wrote turn backwards after emitPassed.
+    seq.applyRemote(CHECK_TURN.guest)
+    seq.applyRemote(CHECK_TURN.passed)
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.bothTurnsPassed).toBe(true)
+    expect(seq.stayQuietRole({ isHost: true })).toBe(null)
+  })
+
+  it('solo-passed guest can still complete a later host-led Check Turn without looping', () => {
+    const seq = createCheckTurnSequence()
+    const passed = []
+    seq.onBothTurnsPassed(() => passed.push(seq.turn))
+
+    // Guest started alone, skipped/confirmed their solo check.
+    seq.start({ synced: false })
+    seq.confirm({ isHost: false })
+    expect(seq.bothTurnsPassed).toBe(true)
+    expect(passed).toEqual([CHECK_TURN.passed])
+
+    // Host later starts a Synced Recording Session — room turn becomes host.
+    seq.applyRemote(CHECK_TURN.host)
+    expect(seq.turn).toBe(CHECK_TURN.host)
+    expect(seq.synced).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+    expect(seq.stayQuietRole({ isHost: false })).toBe(CHECK_TURN.host)
+
+    // Host confirms → guest's turn. Guest confirm must reach passed once.
+    seq.applyRemote(CHECK_TURN.guest)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(true)
+    seq.confirm({ isHost: false })
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.bothTurnsPassed).toBe(true)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+    expect(seq.stayQuietRole({ isHost: true })).toBe(null)
+    expect(passed).toEqual([CHECK_TURN.passed, CHECK_TURN.passed])
+
+    // Confirm again must not reopen the guest check.
+    seq.confirm({ isHost: false })
+    expect(seq.turn).toBe(CHECK_TURN.passed)
+    expect(seq.shouldOpenOwnCheck({ isHost: false })).toBe(false)
+  })
 })
