@@ -328,6 +328,10 @@ test('host can download a completed server copy; a guest cannot see the control'
   await stopViaGuestRequest(host, guest)
   // Generous timeout — see the happy-path spec's identical note above.
   await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
+  // Both peers get the ask-to-save; the host's overlay would intercept the
+  // download link click if left up.
+  await closeSavePrompt(host)
+  await closeSavePrompt(guest)
 
   const guestClientId = await guest.evaluate(() => sessionStorage.getItem('pr_clientId'))
 

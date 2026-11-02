@@ -52,9 +52,12 @@ test('local save failure stops real capture and completes the independent server
   await expandPresenceTable(page)
   await page.getByRole('button', { name: 'Start Recording' }).click()
   await expect.poll(() => page.evaluate(() => window.__recordingIssues.some(issue => issue.code === 'save-failed'))).toBe(true)
-  await expect(page.getByRole('button', { name: 'Finishing…' })).toBeVisible()
+  // Local finalize no longer holds the record button on "Finishing…" — the
+  // wait modal owns the still-in-flight server copy (ticket 07).
+  await expect(page.locator('.wait-overlay')).toBeVisible()
   await expect(page.getByText(/already saved on this device/)).toBeHidden()
   releaseFinalize()
+  await expect(page.locator('.wait-overlay')).toBeHidden({ timeout: 20000 })
   await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20000 })
   await expect(presenceRow(page, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute('data-copy-state', 'complete', { timeout: 20000 })
   expect(await page.evaluate(() => window.__localWrites)).toBe(4)

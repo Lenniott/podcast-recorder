@@ -90,13 +90,23 @@ also registers there, but `recording_session_sync` reads the authoritative
 room phase. Its local phase seeds only an uninitialized room; replaying an
 old host phase into a known room would overwrite a guest's valid change
 while the host was away. Explicit offline control changes are re-announced
-when that peer still holds control. A live Check Turn (`recording_check` with `turn`, plus `open`
-if this peer's modal is up) is the same: re-announce it on `registerResync`
-or the other peer's stay-quiet / modal pairing goes stale after a blip.
-Once Check Turn is `passed`, ignore a late presence of `host`/`guest` so
-stay-quiet cannot come back; a solo-passed peer that later joins a
-host-led sequence must clear the emit gate so confirm/X can finish
-instead of reopening the modal forever.
+when that peer still holds control.
+
+Check policy lives in `check-turn-coordinator.js`; the page supplies facts,
+confirmed writes with their attempt identity, and file/marker adapters. Register
+its `resync()` with the room. The existing room recording state owns the check's
+`sessionId`, `roundId`, and `revision`; actions use those identities as a compare
+and swap. Keep metadata on presence, previews, and marker events. Reconnects
+retain rounds; a new participant pairing or rejection starts a new one. A late
+retake result must pass both lifecycle and abort guards before publishing.
+The attempt adapter seals and retains files and returns an outcome; it never
+starts a check. Stop closes check UI before awaiting a roll or file finalization.
+
+Skip/Close/Escape on one's own check advances only that participant and returns
+them to the room. Waiting and retaking have Back to room/Escape without passing
+anyone. Dismissal survives replay, turn changes, and retake completion; Show check
+explicitly reopens current pending work. Room decision/save dialogs yield check
+presentation without passing it or automatically bringing it back afterward.
 
 The take boundary is the scheduled **Take Marker** instant (`triggerAtMs`
 corrected by clock offset), not WebSocket receipt. Never truncate or

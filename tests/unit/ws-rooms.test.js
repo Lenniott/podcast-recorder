@@ -400,26 +400,35 @@ describe('setupWss — connection handling', () => {
     expect(afterResync.peers.find(p => p.name === 'Host').checking).toBe(true)
   })
 
-  it('recording_check.turn is stored on the room presence as checkTurn', () => {
-    const ws1 = mockWs()
-    const ws2 = mockWs()
-    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+  it('correlated check actions advance authoritative turns and replay cannot roll them backwards', () => {
+    const ws1 = mockWs(), ws2 = mockWs()
+    wss.connect(ws1, 'room1', { asHost: true }); join(ws1, 'Host', 'c1')
     wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
-    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: true, turn: 'host' }))
+    ws1.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+    const snapshot = ws => ws.sent.filter(m => m.type === 'recording_session').at(-1).check
+    const initial = snapshot(ws1)
+    expect(initial.turn).toBe('host')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', ...initial, action: 'confirm', open: false }))
+    expect(snapshot(ws2).turn).toBe('guest')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', ...initial, action: 'reject', open: true }))
+    expect(snapshot(ws1).turn).toBe('guest')
+    ws2.emit('message', JSON.stringify({ type: 'recording_check', ...snapshot(ws2), action: 'confirm', open: false }))
+    expect(snapshot(ws1).turn).toBe('passed')
+    expect(ws1.sent.filter(m => m.type === 'presence').at(-1).check.turn).toBe('passed')
+  })
 
-    for (const ws of [ws1, ws2]) {
-      const presence = ws.sent.filter(m => m.type === 'presence').at(-1)
-      expect(presence.checkTurn).toBe('host')
-    }
-
-    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: false, turn: 'guest' }))
-    expect(ws2.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('guest')
-
-    ws2.emit('message', JSON.stringify({ type: 'recording_check', open: false, turn: 'passed' }))
-    expect(ws1.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('passed')
-
-    ws1.emit('message', JSON.stringify({ type: 'recording_check', open: true, turn: 'mic' }))
-    expect(ws2.sent.filter(m => m.type === 'presence').at(-1).checkTurn).toBe('passed')
+  it('old-session and unfinished-round marker requests cannot schedule a new take', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1', { asHost: true }); join(ws, 'Host', 'c1')
+    ws.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+    const current = ws.sent.filter(m => m.type === 'recording_session').at(-1).check
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: 'old', roundId: current.roundId }))
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: current.sessionId, roundId: current.roundId }))
+    expect(ws.sent.filter(m => m.type === 'take_marker')).toHaveLength(0)
+    ws.emit('message', JSON.stringify({ type: 'recording_check', ...current, action: 'confirm' }))
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: current.sessionId, roundId: current.roundId }))
+    expect(ws.sent.filter(m => m.type === 'take_marker')).toHaveLength(1)
+    expect(ws.sent.find(m => m.type === 'take_marker').sessionId).toBe(current.sessionId)
   })
 
   it('recording_check_preview is relayed to the other peer with the sender clientId and is not stored', () => {
@@ -744,4 +753,22 @@ describe('setupWss — authoritative room recording', () => {
     command(host, { type: 'recording_session_sync', phase: 'idle' })
     expect(state(guest)).toMatchObject({ phase: 'idle', initialized: true })
   })
+})
+
+it('the same recording session and round survive all sockets briefly disconnecting', () => {
+  _resetRooms()
+  const wss = mockWss(); setupWss(wss)
+  getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+  const first = mockWs()
+  wss.connect(first, 'room1', { asHost: true }); join(first, 'Host', 'c1')
+  first.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+  const original = first.sent.filter(m => m.type === 'recording_session').at(-1)
+  first.emit('close')
+  const next = mockWs()
+  wss.connect(next, 'room1', { asHost: true }); join(next, 'Host', 'c1')
+  next.emit('message', JSON.stringify({ type: 'recording_session_sync', phase: 'recording' }))
+  const restored = next.sent.filter(m => m.type === 'recording_session').at(-1)
+  expect(restored.sessionId).toBe(original.sessionId)
+  expect(restored.check.roundId).toBe(original.check.roundId)
+  _resetRooms()
 })

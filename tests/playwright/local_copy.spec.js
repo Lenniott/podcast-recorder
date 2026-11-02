@@ -26,6 +26,16 @@ async function rejectRecordingCheck(page) {
   await rejectBtn.click()
 }
 
+async function localCopyAudio(page, name) {
+  return page.evaluate(async name => {
+    const root = await navigator.storage.getDirectory()
+    const base = await root.getDirectoryHandle('local-copy')
+    const room = await base.getDirectoryHandle(location.pathname.split('/').pop())
+    const file = await (await room.getFileHandle(name)).getFile()
+    return Array.from(new Uint8Array(await file.slice(44).arrayBuffer()))
+  }, name)
+}
+
 function readWav(path) {
   const bytes = readFileSync(path)
   return {
@@ -146,11 +156,20 @@ test('host reject mid-check: take-2 opens without a Start click, take-1 is liste
   const [firstName] = await localCopyFiles(page)
   expect(firstName).toMatch(/^host-e2e-retake-\d{4}-\d{2}-\d{2}-take-1\.wav$/)
 
+  await expect(async () => {
+    await page.getByRole('button', { name: 'Listen back' }).click()
+    await expect(page.getByRole('button', { name: 'Yes, continue' })).toBeVisible({ timeout: 500 })
+  }).toPass()
+  const originalAudio = await localCopyAudio(page, firstName)
+  expect(originalAudio.length).toBeGreaterThan(0)
   await rejectRecordingCheck(page)
 
   await expect.poll(() => localCopyFiles(page)).toHaveLength(2)
   const [, secondName] = await localCopyFiles(page)
   expect(secondName).toBe(firstName.replace('-take-1.wav', '-take-2.wav'))
+
+  const retainedAudio = await localCopyAudio(page, firstName)
+  expect(retainedAudio.slice(0, originalAudio.length)).toEqual(originalAudio)
 
   // The check restarted on the new file without another Start click.
   await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible()

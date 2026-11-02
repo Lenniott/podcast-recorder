@@ -10,7 +10,8 @@ import {
   expandPresenceTable,
   presenceRow,
   stopAsHost,
-  startViaGuestRequest
+  startViaGuestRequest,
+  localCopyFiles
 } from './helpers.js'
 
 test('host Start starts guest recording without a guest click; host Stop stops both', async ({ browser }) => {
@@ -64,6 +65,23 @@ test('guest Start with host present asks the host; accept starts both', async ({
 
   await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled()
   await startViaGuestRequest(host, guest)
+  await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeEnabled()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeEnabled()
+  // Approval starts the room: each browser writes audio before either check
+  // has been passed. Checking is not a separate guest-only recording.
+  for (const participant of [host, guest]) {
+    await expect.poll(() => localCopyFiles(participant)).toHaveLength(1)
+    await expect.poll(() => participant.evaluate(async () => {
+      const root = await navigator.storage.getDirectory()
+      const base = await root.getDirectoryHandle('local-copy')
+      const room = await base.getDirectoryHandle(location.pathname.split('/').pop())
+      let bytes = 0
+      for await (const [, handle] of room.entries()) {
+        if (handle.kind === 'file') bytes += (await handle.getFile()).size
+      }
+      return bytes
+    })).toBeGreaterThan(44)
+  }
   await expectCheckQuiet(guest, 'host')
   await expect(host.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
   await passRecordingCheck(host)
@@ -171,8 +189,11 @@ test('guest solo-passed then host returns: the room starts the host and Check Tu
   await host.context().setOffline(false)
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible({ timeout: 20_000 })
 
-  await expectCheckQuiet(guest, 'host')
+  // Solo Skip keeps the returning guest in the room through the new paired round.
+  await expect(guest.getByRole('button', { name: 'Show check' })).toBeVisible()
+  await expect(guest.getByRole('dialog')).toHaveCount(0)
   await passRecordingCheck(host)
+  await guest.getByRole('button', { name: 'Show check' }).click()
   await expect(guest.getByRole('dialog', { name: 'Test your microphone?' })).toBeVisible()
   await passRecordingCheck(guest)
   await expect(host.getByTestId('check-quiet')).toHaveCount(0)

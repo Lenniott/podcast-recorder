@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from "svelte";
   import { Check, Mic, Play, X } from "$lib/icons";
   import Model from "$lib/Model.svelte";
   import { stayQuietCopy } from "$lib/recording/recording-check-share.js";
@@ -13,8 +14,11 @@
   export let micLabel = "";
   // () => Blob | null — parent builds it from confirmed-written chunks only.
   export let onListen = () => null;
+  export let onIssue = () => {};
   export let onConfirm = () => {};
   export let onReject = () => {};
+  export let onDismiss = () => {};
+  export let retaking = false;
   // Whose Check Turn the other person is on — stay-quiet overlay instead of
   // this peer's own modal. Derived from sequence turn, never mic level.
   export let quietRole = "";
@@ -32,17 +36,52 @@
       listenError = "Nothing recorded yet — give it a second and try again.";
       return;
     }
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    cleanup();
     previewUrl = URL.createObjectURL(blob);
+    const url = previewUrl;
+    // Keep the element mounted and start directly in the click, without
+    // waiting for a render to create it or install its source.
+    audioEl.src = url;
+    audioEl.play().catch(error => {
+      // A dismissal or a newer Listen click can abort the old play request.
+      if (previewUrl !== url) return;
+      hasListened = false;
+      listenError = "Could not play the listen-back. Try the audio player’s Play button or Listen back again.";
+      onIssue({ code: 'check-playback-failed', severity: 'warning', destination: 'playback',
+        message: 'Could not start microphone check playback.', error });
+    });
+  }
+
+  function handlePlaying() {
+    if (!previewUrl) return;
     hasListened = true;
-    // audioEl.src is bound reactively below; play once it updates
-    queueMicrotask(() => audioEl?.play().catch(() => {}));
+    listenError = "";
   }
 
   function handleConfirm() {
     cleanup();
     onConfirm();
   }
+
+  function handleDismiss() {
+    cleanup();
+    onDismiss();
+  }
+
+  function focusControl(node) {
+    const previous = document.activeElement;
+    node.focus();
+    return { destroy() { if (previous?.isConnected) previous.focus(); } };
+  }
+
+  function handleKey(event) {
+    if (event.key === 'Escape' && (open || quietRole || retaking)) {
+      event.preventDefault();
+      handleDismiss();
+    }
+  }
+
+  $: if (!open) cleanup();
 
   function handleReject() {
     cleanup();
@@ -62,12 +101,23 @@
   // state (the object URL, the audio element) never leaks into the next
   // take's check.
   function cleanup() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    // Invalidate pending play promises before pausing/releasing the source.
+    const url = previewUrl;
     previewUrl = null;
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.removeAttribute('src');
+      audioEl.load();
+    }
+    if (url) URL.revokeObjectURL(url);
     hasListened = false;
     listenError = "";
   }
+
+  onDestroy(cleanup);
 </script>
+
+<svelte:window on:keydown={handleKey} />
 
 <Model
   {open}
@@ -80,7 +130,8 @@
     class="btn-ghost btn-icon check-close"
     aria-label="Skip microphone check"
     title="Skip check, recording keeps going"
-    on:click={handleConfirm}
+    on:click={handleDismiss}
+    use:focusControl
   >
     <X />
   </button>
@@ -98,9 +149,7 @@
     <button type="button" class="btn-secondary" on:click={handleListen}>
       <Play /> Listen back
     </button>
-    {#if hasListened}
-      <audio bind:this={audioEl} src={previewUrl} controls></audio>
-    {/if}
+    <audio bind:this={audioEl} hidden={!previewUrl} on:playing={handlePlaying} controls></audio>
   </div>
 
   {#if listenError}
@@ -108,38 +157,14 @@
   {/if}
 </Model>
 
-{#if !open && quietRole}
-  <div class="check-quiet" role="status">
-    <div class="check-card">
-      <div class="check-badge">● Recording</div>
-      <h2>Stay quiet for a moment</h2>
-      <p class="check-hint" data-testid="check-quiet">{stayQuietCopy(quietRole)}</p>
-    </div>
-  </div>
-{/if}
+<Model open={!open && (!!quietRole || retaking)} labelledBy="check-wait-title">
+  <div class="check-badge">● Recording</div>
+  <h2 id="check-wait-title">{retaking ? 'Preparing a fresh check' : 'Stay quiet for a moment'}</h2>
+  {#if quietRole}<p class="check-hint" data-testid="check-quiet">{stayQuietCopy(quietRole)}</p>{/if}
+  <button type="button" class="btn-secondary" on:click={handleDismiss} use:focusControl>Back to room</button>
+</Model>
 
 <style>
-  .check-quiet {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 20px;
-  }
-
-  .check-card {
-    position: relative;
-    background: var(--bg-elevated, #18181b);
-    border: 1px solid var(--border, #2a2a2e);
-    border-radius: 14px;
-    max-width: 440px;
-    width: 100%;
-    padding: 28px;
-  }
-
   .check-close {
     position: absolute;
     top: 10px;

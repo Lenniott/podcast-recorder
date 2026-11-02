@@ -51,8 +51,7 @@
     HOST_DECLINED_STOP,
     createRecordingSession,
     guestWantsStartCopy,
-    guestWantsStopCopy,
-    usesSyncedRecordingSession
+    guestWantsStopCopy
   } from '$lib/recording/synced-recording-session.js'
   import ServerCopyWaitModal from '$lib/server-copy/ServerCopyWaitModal.svelte'
   import { createRoomConnection } from '$lib/room/room-connection.js'
@@ -64,12 +63,10 @@
     TAKE_MARKER_EDGE_END,
     TAKE_MARKER_TYPE
   } from '$lib/recording/take-marker.js'
-  import { createRecordingCheck, createCheckTurnSequence } from '$lib/recording/recording-check.js'
+  import { createCheckTurnCoordinator } from '$lib/recording/check-turn-coordinator.js'
   import {
     encodeInt16PcmBase64,
     decodeInt16PcmBase64,
-    recordingCheckMessage,
-    isCheckTurn,
     CHECK_TURN
   } from '$lib/recording/recording-check-share.js'
   import { createWaveformRenderer } from '$lib/recording/waveform-renderer.js'
@@ -195,17 +192,33 @@
   let checkTurn = CHECK_TURN.idle
   let bothTurnsPassed = false
   let stayQuietRole = null
-  const recordingCheck = createRecordingCheck()
-  const checkSequence = createCheckTurnSequence()
-  checkSequence.onBothTurnsPassed(() => {
-    bothTurnsPassed = true
-    checkTurn = checkSequence.turn
-    stayQuietRole = recordingState === 'recording'
-      ? checkSequence.stayQuietRole({ isHost: data.isHostClaim })
-      : null
-    takeMarker.requestStart({ synced: checkSequence.synced })
-    if (takeMarker.scheduledTriggerAtMs != null) flashClap(getJoinName())
-    startTakeCountdownTick()
+  let checkView = {}
+  const checkCoordinator = createCheckTurnCoordinator({
+    getContext: () => ({ participantId: clientId, role: data.isHostClaim ? 'host' : 'guest',
+      peers, connected: wsStatus === 'connected', recording: recordingState === 'recording',
+      attemptId: captureTakeName, activeDialog: stopConfirmOpen || guestRequestOpen || awaitingHostAction || savePromptName }),
+    send: message => room.send(message),
+    rotateAttempt: rotateCheckAttempt,
+    requestTakeStart: ({ synced }) => {
+      takeMarker.requestStart({ synced })
+      if (takeMarker.scheduledTriggerAtMs != null) flashClap(getJoinName())
+      startTakeCountdownTick()
+    },
+    resetTakeMarker: () => resetTakeMarker(),
+    onPreviewReady: ({ pcm, sessionId, roundId, attemptId }) => room.send({
+      type: 'recording_check_preview', sessionId, roundId, attemptId,
+      sampleRate: recordingSampleRate, pcm: encodeInt16PcmBase64(pcm)
+    }),
+    onChange: view => {
+      if (view.sessionId !== checkView.sessionId || view.roundId !== checkView.roundId) clearAllCheckPreviews()
+      checkView = view
+      checkModalOpen = view.ownCheckVisible
+      checkSentence = view.sentence || ''
+      checkTurn = view.turn
+      bothTurnsPassed = view.complete
+      stayQuietRole = view.stayQuietRole
+    },
+    onIssue: handleRecordingIssue
   })
   // Host-side object URLs of the other peer's listen-back clip, keyed by
   // that peer's clientId. Rebuilt from relayed PCM; never a server-copy file.
@@ -724,10 +737,9 @@
    * local write (see capture-writer.js's onWritten). Feeds the waveform and,
    * while a check is open, the listen-back buffer.
    */
-  function handleWritten(i16) {
+  function handleWritten(i16, attemptId) {
     writtenRing?.push(i16)
-    recordingCheck.handleWritten(i16)
-    if (recordingCheck.consumeAutoShare()) sendRecordingCheckPreview()
+    checkCoordinator.handleWritten(i16, { attemptId })
   }
 
   /**
@@ -774,52 +786,8 @@
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
   }
 
-  function usesSequencedCheck() {
-    const otherPresent = peers.some((p) => p.clientId && p.clientId !== clientId)
-    if (data.isHostClaim) {
-      return usesSyncedRecordingSession({ wsStatus, isHost: true }) && otherPresent
-    }
-    return wsStatus === 'connected' && hostIsPresent()
-  }
-
-  function syncCheckTurnUi() {
-    const isHost = !!data.isHostClaim
-    const wantOpen = recordingState === 'recording' && checkSequence.shouldOpenOwnCheck({ isHost })
-    if (wantOpen && !recordingCheck.open) recordingCheck.start()
-    if (!wantOpen && recordingCheck.open) recordingCheck.close()
-    checkModalOpen = recordingCheck.open
-    checkSentence = recordingCheck.sentence
-    checkTurn = checkSequence.turn
-    bothTurnsPassed = checkSequence.bothTurnsPassed
-    stayQuietRole = recordingState === 'recording'
-      ? checkSequence.stayQuietRole({ isHost })
-      : null
-  }
-
-  function startRecordingCheck() {
-    checkSequence.start({ synced: usesSequencedCheck() })
-    syncCheckTurnUi()
-    sendRecordingCheck(recordingCheck.open)
-  }
-
-  function sendRecordingCheck(open, { includeTurn = true } = {}) {
-    room.send(recordingCheckMessage({
-      open: !!open,
-      turn: includeTurn ? checkSequence.turn : undefined
-    }))
-  }
-
-  function sendRecordingCheckPreview() {
-    const pcm = recordingCheck.sharePcm()
-    if (pcm.length === 0) return
-    room.send({
-      type: 'recording_check_preview',
-      sampleRate: recordingSampleRate,
-      pcm: encodeInt16PcmBase64(pcm)
-    })
-  }
-
   function applyCheckPreview(msg) {
+    if (!checkCoordinator.acceptsPreview(msg)) return
     const pcm = decodeInt16PcmBase64(msg.pcm)
     const id = String(msg.clientId || '')
     const sampleRate = Number(msg.sampleRate)
@@ -851,27 +819,9 @@
     checkPreviewByClientId = {}
   }
 
-  function buildCheckPreview() {
-    sendRecordingCheckPreview()
-    return recordingCheck.buildPreview(recordingSampleRate)
-  }
-
-  function confirmRecordingCheck() {
-    recordingCheck.confirm()
-    checkSequence.confirm({ isHost: !!data.isHostClaim })
-    syncCheckTurnUi()
-    sendRecordingCheck(recordingCheck.open)
-  }
-
-  async function rejectRecordingCheck() {
-    recordingCheck.reject()
-    checkSequence.reject({ isHost: !!data.isHostClaim })
-    checkModalOpen = false
-    if (!(await restartOnNextAttempt())) {
-      syncCheckTurnUi()
-      sendRecordingCheck(recordingCheck.open)
-    }
-  }
+  function buildCheckPreview() { return checkCoordinator.buildPreview(recordingSampleRate) }
+  function confirmRecordingCheck() { checkCoordinator.confirm() }
+  function rejectRecordingCheck() { checkCoordinator.reject() }
 
   // Serialises a retake roll with stopRecording so Stop never finalizes a
   // writer the roll is already closing.
@@ -883,35 +833,42 @@
    * sequence starts again on that file. Recording state stays 'recording'
    * throughout, so peers never see a stop/start flicker.
    */
-  async function restartOnNextAttempt() {
-    if (recordingState !== 'recording' || !captureSession) return false
-    const session = captureSession
-    rollingAttempt = true
-    attemptRoll = (async () => {
-      const pending = session.stop({ capture: false })
+  async function rotateCheckAttempt({ signal }) {
+    const previousRoll = attemptRoll
+    const roll = (async () => {
+      await previousRoll.catch(() => {})
+      if (signal.aborted || recordingState !== 'recording') return false
+      const session = captureSession
+      rollingAttempt = true
+      const pending = session?.stop({ capture: false })
       try {
-        await session.whenLocalFinished
-        if (captureSession === session) {
-          captureSession = null
-          captureTakeName = null
+        if (session) {
+          await session.whenLocalFinished
+          if (captureSession === session) {
+            captureSession = null
+            captureTakeName = null
+          }
         }
-        return openNextAttempt()
+        if (signal.aborted) return false
+        return await openNextAttempt({ signal })
       } finally {
         rollingAttempt = false
-        void pending.catch(error => handleRecordingIssue({
+        void pending?.catch(error => handleRecordingIssue({
           code: 'save-failed', severity: 'error', destination: 'server',
           message: 'Server recording could not be saved.', error
         }))
       }
     })()
-    if (!(await attemptRoll)) {
+    attemptRoll = roll
+    const ready = await roll
+    if (signal.aborted) return { status: 'cancelled' }
+    if (!ready) {
       await recordingSession.onLocalFailure()
-      return true
+      return { status: 'failed', error: new Error('Could not open the next attempt') }
     }
-    if (recordingState !== 'recording') return true
+    if (recordingState !== 'recording') return { status: 'cancelled' }
     wsNotifyState('recording')
-    startRecordingCheck()
-    return true
+    return { status: 'ready', attemptId: captureTakeName }
   }
 
   // UI can consume this same issue object later. Saving never depends on it.
@@ -946,7 +903,7 @@
     } else await audioEngine.ensureRunning()
     if (signal?.aborted) return
 
-    if (!(await openNextAttempt())) return
+    if (!(await openNextAttempt({ signal }))) return
     if (signal?.aborted) {
       // Keep the newly opened attempt, even when it contains only its header.
       const session = captureSession
@@ -971,7 +928,7 @@
     recordingState = 'recording'
     recordingTimer = setInterval(() => recordingSeconds++, 1000)
     wsNotifyState('recording')
-    startRecordingCheck()
+    checkCoordinator.start()
     // Last: purely additive, and transcriptCapture never throws (see its
     // own doc comment) — placed after every write-path-critical step above
     // has already completed.
@@ -983,7 +940,7 @@
    * the capture writer, server copy, and Take Marker at it. Shared by
    * startRecording and a retake roll so both write through one path.
    */
-  async function openNextAttempt() {
+  async function openNextAttempt({ signal } = {}) {
     let attempt
     try {
       attempt = await localCopy.openNext({
@@ -996,7 +953,13 @@
       await attempt.file.write(buildWavHeader(0, recordingSampleRate))
     } catch (e) {
       if (attempt) void Promise.resolve(attempt.file.abort()).catch(() => {})
-      alert(`Could not start the recording in this browser: ${e.message}`)
+      handleRecordingIssue({ code: 'local-open-failed', severity: 'error', destination: 'local',
+        message: 'Could not open the local recording attempt.', error: e })
+      return false
+    }
+    if (signal?.aborted || sessionDestroyed) {
+      await attempt.file.close()
+      void refreshLocalCopies()
       return false
     }
     const writable = attempt.file
@@ -1037,9 +1000,10 @@
       file: writable,
       upload,
       stopCapture: () => audioEngine.stopCapture(),
-      onWritten: handleWritten,
+      onWritten: i16 => handleWritten(i16, takeName),
       onIssue: handleRecordingIssue,
       onLocalFinished: result => {
+        if (sessionDestroyed) return
         // Saved or not, whatever reached the file is now listed for Save.
         if (activeLocalCopyName === takeName) activeLocalCopyName = null
         void refreshLocalCopies()
@@ -1047,7 +1011,7 @@
         if (!rollingAttempt) recordingState = 'idle'
       },
       onStopRequested: () => {
-        if (rollingAttempt || captureSession !== session) return
+        if (sessionDestroyed || rollingAttempt || captureSession !== session) return
         void recordingSession.onLocalFailure()
       },
       onMicrophoneNeeded: () => switchToBestMic({ excludeCurrent: true })
@@ -1060,6 +1024,7 @@
   }
 
   async function stopRecording() {
+    checkCoordinator.stop()
     if (rollingAttempt) await attemptRoll
     if (recordingState !== 'recording') return
     recordingState = 'stopping'
@@ -1071,24 +1036,16 @@
     // throws — see $lib/room/transcript-capture.js's doc comment.
     transcriptCapture.stop()
 
-    // Stopping via the regular Stop button while the listen-back check is
-    // still up (not via its own "something's wrong" path) should still
-    // close it cleanly rather than leave it showing over an idle room.
-    if (checkModalOpen || checkSequence.turn !== CHECK_TURN.idle) {
-      const hostClearsTurn = !!data.isHostClaim && checkSequence.synced
-      recordingCheck.close()
-      checkSequence.close()
-      syncCheckTurnUi()
-      sendRecordingCheck(false, { includeTurn: hostClearsTurn })
-    }
-
     // stopCapture waits for the worklet's final chunk before the file closes.
+    // Local finalize must never wait on the server copy — Save / the wait
+    // modal own that gap (ticket 07). session.stop() still finishes both;
+    // we only await the local half before asking to save.
     await attemptRoll
     const session = captureSession
     if (session) {
       const takeName = captureTakeName
-      const result = await session.stop()
-      console.info('[recording] Save result', result)
+      const stopPromise = session.stop()
+      await session.whenLocalFinished
       if (captureSession === session) {
         captureSession = null
         captureTakeName = null
@@ -1099,7 +1056,18 @@
       lastStoppedName = takeName
       savePromptName = takeName
       await refreshLocalCopies()
+      void stopPromise.then(result => {
+        console.info('[recording] Save result', result)
+      }).catch(error => handleRecordingIssue({
+        code: 'save-failed', severity: 'error', destination: 'capture',
+        message: 'Could not finish the recording after Stop.', error
+      }))
     } else {
+      // A cancelled roll can seal its old file without attaching a new one.
+      // The worklet still needs a real Stop even though there is no writer.
+      try { await audioEngine.stopCapture() }
+      catch (error) { handleRecordingIssue({ code: 'capture-stop-failed', severity: 'error', destination: 'capture',
+        message: 'Audio capture did not acknowledge Stop.', error }) }
       recordingState = 'idle'
       resetTakeMarker()
     }
@@ -1132,6 +1100,7 @@
     guestRequestOpen = !!pending && !stopConfirmOpen
     guestRequestAction = pending?.action || null
     guestRequestFrom = pending?.from || ''
+    checkCoordinator.contextChanged()
   }
 
   function showHostDeclinedToast(message) {
@@ -1243,25 +1212,10 @@
       if (msg.type === 'presence') {
         peers = msg.peers
         pruneCheckPreviews(msg.peers)
-        if (isCheckTurn(msg.checkTurn) && msg.checkTurn !== checkSequence.turn) {
-          const wasOpen = recordingCheck.open
-          const rejectedOnGuestTurn = checkSequence.turn === CHECK_TURN.guest
-            && msg.checkTurn === CHECK_TURN.host
-            && recordingState === 'recording'
-          if (!checkSequence.synced && msg.checkTurn === CHECK_TURN.host && recordingState === 'recording') {
-            // A returning host starts a paired check; replace the solo marker,
-            // while leaving every sample already written in its file.
-            resetTakeMarker()
-          }
-          checkSequence.applyRemote(msg.checkTurn)
-          if (rejectedOnGuestTurn) {
-            void restartOnNextAttempt()
-          } else {
-            syncCheckTurnUi()
-            if (recordingCheck.open && !wasOpen) sendRecordingCheck(true)
-          }
-        }
+        checkCoordinator.receive(msg)
+        checkCoordinator.contextChanged()
       }
+      if (msg.type === 'recording_session') checkCoordinator.receive(msg)
       // Exclusive reply to our own 'join' — see ws-rooms.js's doc comment.
       // Guard on clientId anyway: never let a stale/mismatched token from
       // a previous identity get applied to this one.
@@ -1285,6 +1239,7 @@
       // fallback) has nothing left to stop.
       if (
         msg.type === TAKE_MARKER_TYPE
+        && checkCoordinator.acceptsPreview(msg)
         && (msg.edge !== TAKE_MARKER_EDGE_END || recordingState === 'recording')
       ) {
         flashClap(msg.from)
@@ -1397,7 +1352,7 @@
     onIssue: handleRecordingIssue
   })
   takeMarker = createTakeMarker({
-    send: (msg) => room.send(msg),
+    send: (msg) => room.send({ ...msg, sessionId: checkView.sessionId, roundId: checkView.roundId }),
     isHost: () => !!data.isHostClaim,
     getWsStatus: () => wsStatus,
     getEngineReady: () => audioEngineReady,
@@ -1439,11 +1394,7 @@
   room.registerResync(() => {
     sendMicInfo(true)
   })
-  room.registerResync(() => {
-    if (checkSequence.turn === CHECK_TURN.idle && !recordingCheck.open) return
-    sendRecordingCheck(!!recordingCheck.open)
-    if (recordingCheck.open) sendRecordingCheckPreview()
-  })
+  room.registerResync(() => checkCoordinator.resync())
   room.registerResync(() => {
     // A Comment submitted into a dropped socket is real, local, unsaved
     // state the server has never heard of — room.send() drops it silently
@@ -1575,6 +1526,7 @@
   onDestroy(() => {
     if (!browser) return
     sessionDestroyed = true
+    checkCoordinator.dispose()
     waveformRenderer.stop()
     transcriptCapture.stop()
     clearInterval(recordingTimer)
@@ -1587,7 +1539,19 @@
     document.removeEventListener('keydown', wakeAudio, { capture: true })
     window.removeEventListener('themechange', refreshWaveformColors)
     room.disconnect()
-    audioEngine.close()
+    // Stop flushes the worklet before closing its AudioContext. Keep any file
+    // already opened by a cancelled roll; its capture owner seals it here.
+    void (async () => {
+      await attemptRoll.catch(() => {})
+      const session = captureSession
+      if (session) {
+        void session.stop().catch(error => handleRecordingIssue({ code: 'save-failed', severity: 'error', destination: 'capture',
+          message: 'Could not finish the recording while leaving the room.', error }))
+        await session.whenLocalFinished
+      }
+    })().catch(error => handleRecordingIssue({ code: 'save-failed', severity: 'error', destination: 'local',
+      message: 'Could not finish the recording while leaving the room.', error }))
+      .finally(() => audioEngine.close())
     clearAllCheckPreviews()
     navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange)
   })
@@ -1679,12 +1643,21 @@
 <RecordingCheckModal
   open={checkModalOpen}
   sentence={checkSentence}
-  quietRole={stayQuietRole || ''}
+  quietRole={checkView.presentation === 'waiting' ? stayQuietRole || '' : ''}
+  retaking={checkView.presentation === 'retaking'}
+  onDismiss={() => checkCoordinator.dismiss()}
   {micLabel}
   onListen={buildCheckPreview}
+  onIssue={handleRecordingIssue}
   onConfirm={confirmRecordingCheck}
   onReject={rejectRecordingCheck}
 />
+{#if checkView.canShow}
+  <div class="check-pending" role="status">
+    Microphone check pending.
+    <button type="button" class="btn-secondary" on:click={() => checkCoordinator.show()}>Show check</button>
+  </div>
+{/if}
 <div
   hidden
   data-testid="check-turn"

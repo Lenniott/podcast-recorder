@@ -163,6 +163,9 @@ test('an interim result shows a room-shared "transcript incoming" pulse to every
 
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await passRecordingCheck(host)
+  // Synced Check Turn: host stay-quiet blocks Stop until the guest finishes
+  // (or dismisses). Complete both turns before exercising transcript stop.
+  await passRecordingCheck(guest)
   await expect.poll(() => host.evaluate(() => window.__srStartCount || 0)).toBeGreaterThan(0)
 
   // The pulse rides the panel's Transcript facet button since ticket 06 —

@@ -57,18 +57,14 @@
  *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
  *                                          and included in presence. Re-announce on
  *                                          registerResync after reconnect (server forgets it).
- *   { type: 'recording_check', open, turn? }
+ *   { type: 'recording_check', open, sessionId, roundId, revision, action? }
  *                                        — listen-back modal is up for this peer
- *                                          (`open` → presence `checking`). Optional
- *                                          `turn` is the room Check Turn
- *                                          (`idle` | `host` | `guest` | `passed`),
- *                                          stored on the room (like recording_session)
- *                                          and included on presence as `checkTurn`
- *                                          so the other peer can stay quiet vs open
- *                                          their own modal. Ephemeral: forgotten
- *                                          when the last peer leaves; a live turn
- *                                          must be re-announced on registerResync.
- *                                          Not the audio itself.
+ *                                          (`open` → presence `checking`). The room
+ *                                          recording state validates confirm/reject
+ *                                          against the current session/round/revision.
+ *                                          Presence replays `check` and `checkTurn`;
+ *                                          registerResync re-announces visibility and
+ *                                          confirmed preview without starting a round.
  *   { type: 'recording_check_preview', sampleRate, pcm }
  *                                        — one-shot Int16 PCM (base64) from confirmed
  *                                          writes during the listen-back check. Relayed
@@ -322,7 +318,7 @@
  *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}],
  *                              checkTurn? }
  *                                        — `checkTurn` is the room Check Turn from
- *                                          the latest valid recording_check.turn.
+ *                                          the authoritative recording-session check (also included as `check`).
  *   { type: 'recording_check_preview', clientId, sampleRate, pcm }
  *                                        — relay of the sender's listen-back clip;
  *                                          `clientId` is the recorder, not the listener.
@@ -527,7 +523,7 @@ import { getHostClaim, verifySessionToken, makeServerCopyToken } from './auth.js
 import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js'
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
-import { decodeInt16PcmBase64, isCheckTurn } from '../recording/recording-check-share.js'
+import { decodeInt16PcmBase64 } from '../recording/recording-check-share.js'
 import {
   RECORDING_SESSION_REQUEST_TYPE,
   RECORDING_SESSION_TYPE,
@@ -555,11 +551,11 @@ const rooms = new Map()
 
 // slug -> 'idle' | 'recording'. Room-level Synced Recording Session, set
 // only by a host-originated recording_session message. Forgotten when the
-// room's last peer leaves (the Map entry goes with the live room).
+// reconnect grace expires after the last peer leaves.
 const recordingSessions = new Map()
-
-// slug -> Check Turn. Set by recording_check.turn; forgotten with the room.
-const checkTurns = new Map()
+// Keep authoritative identities across the room socket reconnect backoff.
+const recordingSessionEvictions = new Map()
+const RECORDING_RECONNECT_GRACE_MS = 60_000
 
 // A room's tabs/text/video, Transcript (ticket 01), per-tab Research
 // Assistant entries (ticket 04), and per-tab Annotations (ADR-0008) — all
@@ -593,7 +589,6 @@ function send(ws, msg) {
 function roomRecording(slug) {
   if (!recordingSessions.has(slug)) recordingSessions.set(slug, createRoomRecordingState({
     publish: message => broadcast(slug, message),
-    onCheckReset: () => checkTurns.delete(slug),
     reply: (clientId, message) => {
       const peer = rooms.get(slug)?.get(clientId)
       if (peer) send(peer.ws, message)
@@ -623,7 +618,8 @@ function sendPresence(slug) {
     checking: !!p.checking
   }))
   const msg = { type: 'presence', peers }
-  if (checkTurns.has(slug)) msg.checkTurn = checkTurns.get(slug)
+  const check = roomRecording(slug).check
+  if (check) { msg.check = check; msg.checkTurn = check.turn }
   for (const peer of room.values()) send(peer.ws, msg)
   if (recording) broadcast(slug, recording)
 }
@@ -903,7 +899,8 @@ function replayAnnotationsTo(ws, content) {
 export function _resetRooms() {
   rooms.clear()
   recordingSessions.clear()
-  checkTurns.clear()
+  for (const timer of recordingSessionEvictions.values()) clearTimeout(timer)
+  recordingSessionEvictions.clear()
   roomStateStore._resetForTests()
 }
 
@@ -1011,6 +1008,8 @@ export function setupWss(wss) {
           peer.name     = incomingName
           peer.joinedAt = Date.now()
           room.set(clientId, peer)
+          clearTimeout(recordingSessionEvictions.get(slug))
+          recordingSessionEvictions.delete(slug)
         } else if (clientId) {
           // Subsequent join = name update
           peer.name = incomingName
@@ -1042,6 +1041,11 @@ export function setupWss(wss) {
 
       if ((msg.type === 'clap' || msg.type === TAKE_MARKER_TYPE) && clientId) {
         if (msg.type === TAKE_MARKER_TYPE && !roomRecording(slug).controls(clientId)) return
+        if (msg.type === TAKE_MARKER_TYPE && msg.sessionId) {
+          const check = roomRecording(slug).check
+          if (!check || msg.sessionId !== check.sessionId || msg.roundId !== check.roundId
+            || (msg.edge !== TAKE_MARKER_EDGE_END && check.turn !== 'passed')) return
+        }
         // Broadcast a shared future trigger time to reduce per-client WS jitter.
         const isTail = msg.type === TAKE_MARKER_TYPE && msg.edge === TAKE_MARKER_EDGE_END
         const leadMs = isTail
@@ -1049,6 +1053,7 @@ export function setupWss(wss) {
           : msg.type === TAKE_MARKER_TYPE ? TAKE_MARKER_LEAD_MS : CLAP_LEAD_MS
         const event = {
           type: msg.type,
+          ...(msg.sessionId ? { sessionId: msg.sessionId, roundId: msg.roundId } : {}),
           timestamp: new Date().toISOString(),
           triggerAtMs: Date.now() + leadMs,
           from: peer.name
@@ -1099,8 +1104,11 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'recording_check' && clientId) {
+        if (room.get(clientId)?.ws !== ws) return
+        const current = roomRecording(slug).check
+        if (msg.sessionId && (!current || msg.sessionId !== current.sessionId || msg.roundId !== current.roundId || msg.revision !== current.revision)) return
         peer.checking = !!msg.open
-        if (isCheckTurn(msg.turn)) checkTurns.set(slug, msg.turn)
+        if (msg.sessionId) roomRecording(slug).receive(clientId, msg)
         sendPresence(slug)
       }
 
@@ -1109,7 +1117,10 @@ export function setupWss(wss) {
         if (!Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 96000) return
         const pcm = decodeInt16PcmBase64(msg.pcm)
         if (!pcm) return
+        const check = roomRecording(slug).check
+        if (msg.sessionId && (!check || msg.sessionId !== check.sessionId || msg.roundId !== check.roundId)) return
         broadcast(slug, {
+          ...(msg.sessionId ? { sessionId: msg.sessionId, roundId: msg.roundId, attemptId: msg.attemptId } : {}),
           type: 'recording_check_preview',
           clientId,
           sampleRate,
@@ -1450,8 +1461,12 @@ export function setupWss(wss) {
       room.delete(clientId)
       if (room.size === 0) {
         rooms.delete(slug)
-        recordingSessions.delete(slug)
-        checkTurns.delete(slug)
+        const timer = setTimeout(() => {
+          recordingSessions.delete(slug)
+          recordingSessionEvictions.delete(slug)
+        }, RECORDING_RECONNECT_GRACE_MS)
+        timer.unref?.()
+        recordingSessionEvictions.set(slug, timer)
         roomStateStore.onParticipantLeft(slug)
       } else {
         recomputeRoles(room)

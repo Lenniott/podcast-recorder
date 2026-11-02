@@ -89,30 +89,68 @@ export function createRoomRecordingState({ publish, reply, onCheckReset = () => 
   let peers = []
   let request = null
   let membership = ''
+  let sessionId = null
+  let check = null
+  let round = 0
+  const passed = new Set()
+  const participants = new Set()
+  const paired = () => peers.some(p => p.role === 'host') && peers.some(p => p.role !== 'host')
+  function newCheck({ retake = false } = {}) {
+    passed.clear()
+    const synced = paired()
+    check = { sessionId, roundId: ++round, revision: 0, synced, retake,
+      turn: synced ? 'host' : 'idle' }
+  }
   const host = () => peers.find(peer => peer.role === 'host')
   const controls = id => !host() || host().clientId === id
   const snapshot = () => ({ type: RECORDING_SESSION_TYPE, phase, initialized,
-    hostClientId: host()?.clientId ?? null, request })
+    hostClientId: host()?.clientId ?? null, request, sessionId, check })
   function setPhase(next) {
-    if (next === RECORDING_SESSION_PHASE.recording && phase !== next) onCheckReset()
+    if (next === RECORDING_SESSION_PHASE.recording && phase !== next) {
+      sessionId = globalThis.crypto.randomUUID()
+      round = 0
+      participants.clear()
+      for (const p of peers) participants.add(p.clientId)
+      newCheck()
+      onCheckReset()
+    }
+    if (next === RECORDING_SESSION_PHASE.idle) check = null
     phase = next
     initialized = true
     request = null
     publish(snapshot())
   }
   function presence(nextPeers) {
-    const previousHost = host()?.clientId
+    const previousPaired = paired()
     const samePeers = peers.length === nextPeers.length && peers.every(peer => nextPeers.includes(peer))
     peers = nextPeers
     const nextMembership = peers.map(peer => `${peer.clientId}:${peer.role}`).sort().join(',')
     if (membership === nextMembership && samePeers) return null
     membership = nextMembership
-    if (!previousHost && host() && phase === RECORDING_SESSION_PHASE.recording) onCheckReset()
+    if (phase === RECORDING_SESSION_PHASE.recording && previousPaired !== paired()) {
+      const newcomer = peers.some(p => !participants.has(p.clientId))
+      if (paired() && newcomer) newCheck()
+      else if (check) {
+        const complete = peers.length > 0 && peers.every(p => passed.has(p.clientId))
+        check = { ...check, synced: paired(), revision: check.revision + 1,
+          turn: complete ? 'passed' : paired() ? passed.has(host().clientId) ? 'guest' : 'host' : 'idle' }
+      }
+      for (const p of peers) participants.add(p.clientId)
+      onCheckReset()
+    }
     if (request && !peers.some(peer => peer.clientId === request.clientId)) request = null
     // Approval is no longer needed once the host leaves.
     if (request && !host()) {
       const next = request.action === 'start' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle
-      if (next === RECORDING_SESSION_PHASE.recording && phase !== next) onCheckReset()
+      if (next === RECORDING_SESSION_PHASE.recording && phase !== next) {
+        sessionId = globalThis.crypto.randomUUID()
+        round = 0
+        participants.clear()
+        for (const p of peers) participants.add(p.clientId)
+        newCheck()
+        onCheckReset()
+      }
+      if (next === RECORDING_SESSION_PHASE.idle) check = null
       phase = next
       initialized = true
       request = null
@@ -122,7 +160,20 @@ export function createRoomRecordingState({ publish, reply, onCheckReset = () => 
   function receive(clientId, message) {
     const peer = peers.find(peer => peer.clientId === clientId)
     if (!peer) return
-    if (message.type === RECORDING_SESSION_SYNC_TYPE) {
+    if (message.type === 'recording_check') {
+      if (!check || phase !== 'recording' || message.sessionId !== sessionId
+        || message.roundId !== check.roundId || message.revision !== check.revision) {
+        reply(clientId, snapshot())
+        return
+      }
+      const own = check.turn !== 'passed' && (!check.synced || check.turn === peer.role)
+      if (message.action === 'confirm' && own) {
+        passed.add(clientId)
+        check = { ...check, revision: check.revision + 1,
+          turn: check.synced && peer.role === 'host' ? 'guest' : 'passed' }
+      } else if (message.action === 'reject' && own) newCheck({ retake: true })
+      publish(snapshot())
+    } else if (message.type === RECORDING_SESSION_SYNC_TYPE) {
       // Recover after an empty room/server restart, but never let an old
       // browser overwrite an already-known room state during reconnect.
       if (!initialized && controls(clientId) && isRecordingSessionPhase(message.phase)) setPhase(message.phase)
@@ -154,7 +205,7 @@ export function createRoomRecordingState({ publish, reply, onCheckReset = () => 
       } else reply(clientId, snapshot())
     }
   }
-  return { presence, receive, controls }
+  return { presence, receive, controls, get check() { return check } }
 }
 
 export function createRecordingSession({
