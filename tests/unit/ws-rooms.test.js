@@ -760,7 +760,7 @@ describe('setupWss — authoritative room recording', () => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
-    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
     host = mockWs(); guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
     wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
@@ -877,7 +877,7 @@ describe('setupWss — authoritative room recording', () => {
 it('the same recording session and round survive all sockets briefly disconnecting', () => {
   _resetRooms()
   const wss = mockWss(); setupWss(wss)
-  getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+  getRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
   const first = mockWs()
   wss.connect(first, 'room1', { asHost: true }); join(first, 'Host', 'c1')
   first.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
