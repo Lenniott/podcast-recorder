@@ -7,6 +7,10 @@ const rooms = [
 ]
 
 describe('filterRooms', () => {
+  it('matches a name case-insensitively even when the slug does not match', () => {
+    const input = [{ name: 'PODCAST', slug: 'abc123' }, { name: 'Other', slug: 'def456' }]
+    expect(filterRooms(input, 'pod')).toEqual([input[0]])
+  })
   it('substring of name shows only that room', () => {
     const input = rooms.map((room) => ({ ...room }))
     expect(filterRooms(input, 'aLpH')).toEqual([input[0]])

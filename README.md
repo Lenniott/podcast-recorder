@@ -54,6 +54,7 @@ npm test                 # unit tests (Vitest)
 npm run test:coverage    # same, plus a coverage/ HTML report
 npm run test:mutation    # mutate capture-writer.js and check whether tests fail
 npm run test:mutation:recording # recording, upload/storage, reconnect, and worklet
+npm run test:mutation:dashboard # room management, guest locks, and action authorization
 npm run test:e2e         # Playwright (needs .env with SECRET)
 ```
 
@@ -73,6 +74,13 @@ retested; incremental reuse is disabled because the pinned runner can reuse stal
 results after tests change. `summary.json` in the recording report directory lists completed modules.
 Related-test discovery keeps each module focused on the tests importing it. The
 worklet runs separately because its tests read source into a VM rather than import it.
+
+The dashboard command writes `reports/mutation/dashboard/mutation.html` and
+`mutation.json`. It includes guest admission, room actions, selection/search,
+guest-access cleanup, and reconnect behavior. Review survivors alongside the
+behavioral tests; the score alone does not show whether an authorization or
+recording-preservation rule is protected.
+The dashboard command fails below an 80% mutation score.
 
 The dashboard lists each room's join password under **Room code**. Older rooms
 whose plaintext password was not stored show **Unavailable**. Set `SITE_PASSWORD`

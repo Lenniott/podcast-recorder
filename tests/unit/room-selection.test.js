@@ -13,6 +13,9 @@ const ROOMS = [
 ]
 
 describe('room selection', () => {
+  it('deselects one room without losing the other selected rooms', () => {
+    expect(toggleSlug(['room-a', 'room-b', 'room-c'], 'room-b')).toEqual(['room-a', 'room-c'])
+  })
   it('toggles one slug on, then off, without mutating the input', () => {
     const start = []
     const on = toggleSlug(start, ROOMS[0].slug)

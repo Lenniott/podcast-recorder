@@ -62,6 +62,22 @@ describe('+page.server', () => {
     _resetDb()
   })
 
+  it('keeps dashboard data and all room actions behind the gate for a malformed site cookie', async () => {
+    process.env.SITE_PASSWORD = SITE_PASSWORD
+    createRoom({ slug: 'badcookie01', name: 'Protected', passwordHash: 'hash', passwordPlain: 'private-code' })
+    const before = getRoomBySlug('badcookie01')
+    const { actions, load } = await loadPage()
+    const cookies = makeCookies({ pr_site_auth: 'aa' })
+    const data = await load({ cookies, url: new URL('http://test/') })
+    expect(data.siteAuthed).toBe(false)
+    expect(data.usageDashboard).toBeNull()
+    for (const action of ['unlock_room', 'delete_room', 'unlock_rooms', 'delete_rooms']) {
+      const result = await actions[action]({ request: formRequestSlugs(['badcookie01']), cookies })
+      expect(result.status).toBe(403)
+      expect(getRoomBySlug('badcookie01')).toEqual(before)
+    }
+  })
+
   describe('load', () => {
     it('reports open access when SITE_PASSWORD is unset', async () => {
       const { load } = await loadPage()

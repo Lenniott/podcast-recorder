@@ -2,8 +2,8 @@ import { closeSync, ftruncateSync, mkdirSync, openSync, rmSync, writeFileSync } 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createRoom, getGuestLastAccess, getRoomBySlug, setGuestLockAt, _resetDb } from '../../src/lib/server/db.js'
-import { getServerCopyRoomDir } from '../../src/lib/server/server-copy-storage.js'
+import { createRoom, getGuestLastAccess, getRoomBySlug, recordResearchUsage, saveRoomContent, setGuestLockAt, _resetDb } from '../../src/lib/server/db.js'
+import { appendServerCopyChunk, getServerCopyRoomDir, writeServerCopyMetadata } from '../../src/lib/server/server-copy-storage.js'
 import { getUsageDashboard, hideTestRoomsInDashboard } from '../../src/lib/server/usage-dashboard.js'
 
 const SLUG_REAL = 'realroom01'
@@ -38,6 +38,34 @@ describe('getUsageDashboard', () => {
     const { rooms } = getUsageDashboard({})
     expect(rooms.find(room => room.slug === 'codedroom1').roomCode).toBe('episode-42')
     expect(rooms.find(room => room.slug === SLUG_REAL).roomCode).toBeNull()
+  })
+
+  it('reports nonzero usage, content counts, and the sum of copies at their own sample rates', () => {
+    const slug = 'statsroom1'
+    const copyRoot = join(tmpdir(), `usage-stats-${process.pid}-${Date.now()}`)
+    process.env.SERVER_COPY_DIR = copyRoot
+    createRoom({ slug, name: 'Stats', passwordHash: 'hash' })
+    saveRoomContent(slug, {
+      tabs: { list: [{ id: 't1' }, { id: 't2' }], activeTabId: 't1' },
+      research: { t1: [{ id: 'one' }, { id: 'two' }], t2: [{ id: 'three' }] },
+      transcript: { lines: [{ text: '  three   spoken words  ' }, { text: 'and two' }, { text: '' }] }
+    })
+    recordResearchUsage({ roomSlug: slug, mode: 'test', tokens: 100, cost: 0.25 })
+    recordResearchUsage({ roomSlug: slug, mode: 'test', tokens: 50, cost: 0.5 })
+    appendServerCopyChunk(slug, 'guest-a', Buffer.alloc(192000), 0)
+    writeServerCopyMetadata(slug, 'guest-a', { sampleRate: 48000 })
+    appendServerCopyChunk(slug, 'guest-b', Buffer.alloc(96000), 0)
+    writeServerCopyMetadata(slug, 'guest-b', { sampleRate: 16000 })
+    try {
+      const dashboard = getUsageDashboard({})
+      expect(dashboard.totals).toEqual({ calls: 2, tokens: 150, cost: 0.75 })
+      expect(dashboard.rooms.find(room => room.slug === slug)).toMatchObject({
+        calls: 2, tokens: 150, cost: 0.75, recordingSeconds: 5,
+        transcriptWords: 5, tabCount: 2, researchCardCount: 3
+      })
+    } finally {
+      rmSync(copyRoot, { recursive: true, force: true })
+    }
   })
 
   it('lists every room, e2e included, when the flag is off', () => {

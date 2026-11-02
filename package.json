@@ -17,6 +17,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:mutation": "stryker run",
+    "test:mutation:dashboard": "stryker run stryker.dashboard.config.js",
     "test:mutation:recording": "node scripts/run-recording-mutations.mjs",
     "test:e2e": "./scripts/run-e2e.sh",
     "test:e2e:ui": "./scripts/run-e2e.sh --ui"

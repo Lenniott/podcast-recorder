@@ -103,6 +103,11 @@ describe('guest join', () => {
   })
 
   describe('guestJoinDecision', () => {
+    it('does not report a room open when its server-copy directory cannot be read', () => {
+      mkdirSync(serverCopyDir, { recursive: true })
+      writeFileSync(getServerCopyRoomDir(SLUG), 'not a directory')
+      expect(() => guestJoinDecision(roomAt(NOW - HOUR), { now: NOW, env: ENV })).toThrow(/ENOTDIR/)
+    })
     it('refuses a missing room', () => {
       expect(guestJoinDecision(null, { isHost: true, now: NOW, env: ENV })).toEqual({
         allowed: false,
@@ -282,6 +287,14 @@ describe('guest join', () => {
   })
 
   describe('unlockRoom', () => {
+    it('shows an open dashboard row after unlocking a long recording', () => {
+      createRoom({ slug: SLUG, name: 'Keep Me', passwordHash: 'hash-value' })
+      plantWav('guest-a.wav', wavBytes(601))
+      expect(anyGuestLocked(getRoomBySlug(SLUG), { now: NOW, env: ENV })).toBe(true)
+      unlockRoom(SLUG, NOW)
+      expect(anyGuestLocked(getRoomBySlug(SLUG), { now: NOW, env: ENV })).toBe(false)
+      expect(anyGuestLocked(null, { now: NOW, env: ENV })).toBe(false)
+    })
     it('moves guest_lock_at to the passed now and leaves created_at, name, and password', () => {
       const createdAt = 1_600_000_000_000
       const oldLock = NOW - 13 * HOUR
