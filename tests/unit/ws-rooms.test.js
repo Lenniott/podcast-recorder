@@ -18,6 +18,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
+import { createRecordingSession as createRoomRecordingClient } from '../../src/lib/recording/synced-recording-session.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 import {
   encodeInt16PcmBase64,
@@ -623,87 +624,124 @@ describe('setupWss — transcript_activity (interim-speech "something\'s coming"
   })
 })
 
-describe('setupWss — recording_session (synced recording session)', () => {
+describe('setupWss — authoritative room recording', () => {
   let wss, host, guest
-
-  function session(ws, phase) {
-    ws.emit('message', JSON.stringify({ type: 'recording_session', phase }))
-  }
-
+  const command = (socket, message) => socket.emit('message', JSON.stringify(message))
+  const state = socket => socket.sent.filter(message => message.type === 'recording_session').at(-1)
   beforeEach(() => {
     _resetRooms()
     wss = mockWss()
     setupWss(wss)
     getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
-    host = mockWs()
-    guest = mockWs()
+    host = mockWs(); guest = mockWs()
     wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
     wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
-    host.sent.length = 0
-    guest.sent.length = 0
+    host.sent.length = 0; guest.sent.length = 0
   })
 
-  it('relays host start to the other peer as recording_session recording', () => {
-    session(host, 'recording')
-    expect(guest.sent.filter((m) => m.type === 'recording_session')).toEqual([
-      { type: 'recording_session', phase: 'recording' }
-    ])
-    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  it('a guest starts the room while alone, and a host joining that room starts the same session', async () => {
+    _resetRooms()
+    const server = mockWss()
+    setupWss(server)
+    function participant(name, id, asHost = false) {
+      const socket = mockWs()
+      let state = 'idle'
+      let peers = []
+      const client = createRoomRecordingClient({
+        send: message => socket.emit('message', JSON.stringify(message)),
+        startLocal: async () => { state = 'recording' },
+        stopLocal: async () => { state = 'idle' },
+        getRecordingState: () => state,
+        isHost: () => asHost,
+        getWsStatus: () => 'connected',
+        isHostPresent: () => peers.some(peer => peer.isHost && peer.clientId !== id)
+      })
+      socket.send = data => {
+        const message = JSON.parse(data)
+        socket.sent.push(message)
+        if (message.type === 'presence') peers = message.peers
+        void client.onMessage(message)
+      }
+      server.connect(socket, 'room1', { asHost })
+      join(socket, name, id)
+      return { client, socket, get state() { return state } }
+    }
+    const guest = participant('Guest', 'guest')
+    await guest.client.onToggle()
+    const host = participant('Host', 'host', true)
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(guest.state).toBe('recording')
+    expect(host.state).toBe('recording')
+    expect(host.client.phase()).toBe('recording')
   })
 
-  it('relays host stop to the other peer as recording_session idle', () => {
-    session(host, 'recording')
-    host.sent.length = 0
-    guest.sent.length = 0
-    session(host, 'idle')
-    expect(guest.sent.filter((m) => m.type === 'recording_session')).toEqual([
-      { type: 'recording_session', phase: 'idle' }
-    ])
+
+  it('acknowledges host start and stop to both browsers from the same room state', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    expect(state(host)).toEqual(state(guest))
+    expect(state(host)).toMatchObject({ phase: 'recording', initialized: true, hostClientId: 'c1', request: null })
+    command(host, { type: 'recording_session', phase: 'idle' })
+    expect(state(host)).toEqual(state(guest))
+    expect(state(host).phase).toBe('idle')
   })
 
-  it('refuses a guest start — error to the guest, no session message to the host', () => {
-    session(guest, 'recording')
-    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
-    expect(guest.sent.find((m) => m.type === 'error').message).toBe(
-      'Only the host can control the recording session.'
-    )
-    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
-    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  it('a guest cannot bypass a present host with a direct room-state command', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    command(guest, { type: 'recording_session', phase: 'idle' })
+    expect(guest.sent).toContainEqual({ type: 'error', message: 'Only the host can control the recording session.' })
+    expect(state(guest).phase).toBe('recording')
   })
 
-  it('a guest stop after a real host start does not desync the session', () => {
-    session(host, 'recording')
-    host.sent.length = 0
-    guest.sent.length = 0
-    session(guest, 'idle')
-    expect(guest.sent.some((m) => m.type === 'error')).toBe(true)
-    expect(host.sent.some((m) => m.type === 'recording_session')).toBe(false)
-    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  it('a guest cannot bypass host approval by sending an end marker directly', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    command(guest, { type: 'take_marker', edge: 'end' })
+    expect(host.sent.filter(message => message.type === 'take_marker')).toEqual([])
+    expect(state(guest).phase).toBe('recording')
+  })
 
+  it('stores a guest request without starting capture and replays it on reconnect', () => {
+    command(guest, { type: 'recording_session_request', action: 'start' })
+    expect(state(host)).toMatchObject({ phase: 'idle', request: { action: 'start', clientId: 'c2', from: 'Guest' } })
+    expect(state(guest)).toEqual(state(host))
     const rejoining = mockWs()
-    wss.connect(rejoining, 'room1')
-    join(rejoining, 'Guest', 'c2')
-    expect(rejoining.sent.filter((m) => m.type === 'recording_session')).toEqual([
-      { type: 'recording_session', phase: 'recording' }
-    ])
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    expect(state(rejoining)).toEqual(state(guest))
+    command(rejoining, { type: 'recording_session_request', action: 'dismissed' })
+    expect(state(guest).request).toBeNull()
+    expect(state(guest).phase).toBe('idle')
+    expect(guest.sent).toContainEqual({ type: 'recording_session_request', action: 'dismissed', from: 'Host', clientId: 'c1' })
   })
 
-  it('replays the current session phase to a peer that rejoins', () => {
-    session(host, 'recording')
-    const rejoining = mockWs()
-    wss.connect(rejoining, 'room1')
-    join(rejoining, 'Guest', 'c2')
-    expect(rejoining.sent.filter((m) => m.type === 'recording_session')).toEqual([
-      { type: 'recording_session', phase: 'recording' }
-    ])
+  it.each(['close', 'error'])('host %s transfers control and applies the pending start', event => {
+    command(guest, { type: 'recording_session_request', action: 'start' })
+    host.emit(event)
+    expect(state(guest)).toMatchObject({ phase: 'recording', hostClientId: null, request: null })
+    command(guest, { type: 'recording_session', phase: 'idle' })
+    expect(state(guest).phase).toBe('idle')
   })
 
-  it('ignores an unknown session phase from the host — no relay, no stored phase', () => {
-    session(host, 'paused')
-    expect(guest.sent.some((m) => m.type === 'recording_session')).toBe(false)
+  it('ignores recording commands from a socket replaced during reconnect', () => {
     const rejoining = mockWs()
-    wss.connect(rejoining, 'room1')
-    join(rejoining, 'Guest', 'c2')
-    expect(rejoining.sent.some((m) => m.type === 'recording_session')).toBe(false)
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    command(rejoining, { type: 'recording_session', phase: 'recording' })
+    command(host, { type: 'recording_session', phase: 'idle' })
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('a stale reconnect phase cannot overwrite the current room phase', () => {
+    host.emit('close')
+    command(guest, { type: 'recording_session', phase: 'recording' })
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    command(rejoining, { type: 'recording_session_sync', phase: 'idle' })
+    expect(state(rejoining).phase).toBe('recording')
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('ignores invalid phases without initializing a room recording', () => {
+    command(host, { type: 'recording_session', phase: 'paused' })
+    expect(state(guest)).toBeUndefined()
+    command(host, { type: 'recording_session_sync', phase: 'idle' })
+    expect(state(guest)).toMatchObject({ phase: 'idle', initialized: true })
   })
 })

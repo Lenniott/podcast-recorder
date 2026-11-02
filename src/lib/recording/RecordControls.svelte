@@ -1,9 +1,15 @@
 <script>
   import { AlertTriangle, Clap } from "$lib/icons";
+  import {
+    REQUEST_START_LABEL,
+    REQUEST_STOP_LABEL,
+    WAITING_FOR_HOST_LABEL,
+  } from "./synced-recording-session.js";
 
   // Presentational extraction of the room page's old .controls + .stats-bar
   // blocks. Recording state itself stays owned by the room page.
-  export let recordingState = "idle"; // idle | recording | stopping
+  export let recordingState = "idle"; // actual local capture
+  export let roomRecording = false; // desired room state
   export let canRecord = false;
   export let micPermission = "prompt";
   export let wsStatus = "disconnected";
@@ -17,9 +23,31 @@
   // Collapsed-sidebar mode: same click handlers, icon-only buttons — Record/
   // Stop and Clap must stay reachable without expanding the sidebar.
   export let compact = false;
+  // When the host is in the room, guest Start/Stop become a request instead
+  // of a local write: 'request-start' | 'waiting-start' | 'request-stop' |
+  // 'waiting-stop' | null.
+  export let hostRequestMode = null;
+
+  $: waitingForHost =
+    hostRequestMode === "waiting-start" || hostRequestMode === "waiting-stop";
+
+  $: controlState = recordingState === "stopping" ? "stopping" : roomRecording ? "recording" : "idle";
 
   $: recordTitle =
-    recordingState === "recording" ? "Stop Recording" : "Start Recording";
+    hostRequestMode === "waiting-start" || hostRequestMode === "waiting-stop"
+      ? WAITING_FOR_HOST_LABEL
+      : hostRequestMode === "request-start"
+        ? REQUEST_START_LABEL
+        : hostRequestMode === "request-stop"
+          ? REQUEST_STOP_LABEL
+          : controlState === "stopping"
+            ? "Finishing…"
+          : controlState === "recording"
+            ? "Stop Recording"
+            : "Start Recording";
+
+  $: recordDisabled =
+    !canRecord || (micPermission === "denied" && !roomRecording) || waitingForHost;
 </script>
 
 {#if compact}
@@ -27,13 +55,19 @@
     <button
       type="button"
       class="btn-primary btn-icon"
-      class:is-recording={recordingState === "recording"}
+      class:is-recording={recordingState === "recording" && !waitingForHost}
+      class:is-waiting={waitingForHost}
       on:click={onToggleRecording}
-      disabled={!canRecord || micPermission === "denied"}
+      disabled={recordDisabled}
       title={recordTitle}
       aria-label={recordTitle}
+      aria-busy={waitingForHost}
+      data-testid="record-control"
+      data-host-request={hostRequestMode || undefined}
     >
-      {#if recordingState === "recording"}
+      {#if waitingForHost}
+        <span class="wait-dots" aria-hidden="true"></span>
+      {:else if controlState === "recording"}
         <span class="stop-square"></span>
       {:else}
         <span class="rec-circle"></span>
@@ -56,14 +90,25 @@
       <button
         type="button"
         class="btn-primary rec-btn"
-        class:is-recording={recordingState === "recording"}
+        class:is-recording={recordingState === "recording" && !waitingForHost}
+        class:is-waiting={waitingForHost}
         on:click={onToggleRecording}
-        disabled={!canRecord || micPermission === "denied"}
-        title={micPermission === "denied" ? "Mic access required" : ""}
+        disabled={recordDisabled}
+        title={micPermission === "denied" && !roomRecording ? "Mic access required" : recordTitle}
+        aria-label={recordTitle}
+        aria-busy={waitingForHost}
+        data-testid="record-control"
+        data-host-request={hostRequestMode || undefined}
       >
-        {#if recordingState === "idle"}
+        {#if waitingForHost}
+          {WAITING_FOR_HOST_LABEL}
+        {:else if hostRequestMode === "request-start"}
+          <span class="rec-circle"></span> {REQUEST_START_LABEL}
+        {:else if hostRequestMode === "request-stop"}
+          <span class="stop-square"></span> {REQUEST_STOP_LABEL}
+        {:else if controlState === "idle"}
           <span class="rec-circle"></span> Start Recording
-        {:else if recordingState === "recording"}
+        {:else if controlState === "recording"}
           <span class="stop-square"></span> Stop Recording
         {:else}
           Finishing…
@@ -143,7 +188,17 @@
     background: currentColor;
   }
 
-  .btn-icon.is-recording {
+  .wait-dots {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .btn-icon.is-recording,
+  .rec-btn.is-recording {
     animation: pulse-ring 1.2s infinite;
   }
 
@@ -199,6 +254,12 @@
     }
     50% {
       box-shadow: 0 0 0 4px rgba(239, 68, 68, 0);
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 

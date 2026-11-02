@@ -29,18 +29,17 @@
  *                                          edge: 'end'. Any other edge is
  *                                          treated as a start.
  *   { type: 'recording_session', phase }
- *                                        — host-only Synced Recording Session.
- *                                          phase is 'recording' | 'idle'. The
- *                                          server relays to every *other* peer
- *                                          in the room and remembers the phase
- *                                          so a reconnecting peer is replayed
- *                                          the current session (same class of
- *                                          join replay as yt_duck). A non-host
- *                                          origin is refused with `error` and
- *                                          must not change stored phase — a
- *                                          guest Start is local-only. This is
- *                                          not recording_state (that's one
- *                                          peer's own write flag).
+ *                                        — change desired room recording state.
+ *                                          The host controls it while present;
+ *                                          otherwise the guest controls it.
+ *                                          Accepted state is echoed to everyone.
+ *   { type: 'recording_session_sync', phase }
+ *                                        — read current state after reconnect.
+ *                                          phase seeds only an uninitialized room.
+ *   { type: 'recording_session_request', action }
+ *                                        — request start/stop, or host refusal
+ *                                          (`dismissed`). The request belongs to
+ *                                          the room and survives reconnects.
  *   { type: 'recording_state', state, startedAt? }
  *                                        — 'recording' | 'stopped'. startedAt is the
  *                                          recorder's Date.now() when this take began
@@ -345,17 +344,13 @@
  *                                        — same clock-offset scheduling as clap;
  *                                          longer lead for a visible countdown.
  *                                          edge is 'end' only for the tail.
- *   { type: 'recording_session', phase }
- *                                        — relay/replay of the host's Synced
- *                                          Recording Session. Sent to peers
- *                                          other than the host who just
- *                                          authored it, and replayed on join
- *                                          while a phase is stored for the
- *                                          slug. Clients drive their existing
- *                                          local start/stop path from this;
- *                                          they must not flip UI to recording
- *                                          unless that path actually began
- *                                          writing.
+ *   { type: 'recording_session', phase, initialized, hostClientId, request }
+ *                                        — authoritative room snapshot, including
+ *                                          the pending guest request. Capture
+ *                                          status still comes from each browser's
+ *                                          real recording_state, never this flag.
+ *   { type: 'recording_session_request', action: 'dismissed', from, clientId }
+ *                                        — refusal notification for the requester.
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'transcript_activity', active }
@@ -534,10 +529,10 @@ import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from 
 import { parseResearchCard } from '../research/research-card.js'
 import { decodeInt16PcmBase64, isCheckTurn } from '../recording/recording-check-share.js'
 import {
-  RECORDING_SESSION_HOST_ONLY,
+  RECORDING_SESSION_REQUEST_TYPE,
   RECORDING_SESSION_TYPE,
-  isRecordingSessionPhase,
-  recordingSessionMessage
+  RECORDING_SESSION_SYNC_TYPE,
+  createRoomRecordingState
 } from '../recording/synced-recording-session.js'
 import {
   TAKE_MARKER_EDGE_END,
@@ -595,9 +590,22 @@ function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg))
 }
 
+function roomRecording(slug) {
+  if (!recordingSessions.has(slug)) recordingSessions.set(slug, createRoomRecordingState({
+    publish: message => broadcast(slug, message),
+    onCheckReset: () => checkTurns.delete(slug),
+    reply: (clientId, message) => {
+      const peer = rooms.get(slug)?.get(clientId)
+      if (peer) send(peer.ws, message)
+    }
+  }))
+  return recordingSessions.get(slug)
+}
+
 function sendPresence(slug) {
   const room = rooms.get(slug)
   if (!room) return
+  const recording = roomRecording(slug).presence(Array.from(room.values()))
   const peers = Array.from(room.values()).map((p) => ({
     clientId: p.clientId,
     name: p.name,
@@ -617,6 +625,7 @@ function sendPresence(slug) {
   const msg = { type: 'presence', peers }
   if (checkTurns.has(slug)) msg.checkTurn = checkTurns.get(slug)
   for (const peer of room.values()) send(peer.ws, msg)
+  if (recording) broadcast(slug, recording)
 }
 
 function parseCookies(header = '') {
@@ -1014,9 +1023,6 @@ export function setupWss(wss) {
           replayTabsTo(ws, roomStateStore.onParticipantJoined(slug))
           send(ws, { type: 'yt_duck', talking: anyoneTalking(slug) })
           send(ws, { type: 'transcript_activity', active: anyoneTranscribing(slug) })
-          if (recordingSessions.has(slug)) {
-            send(ws, recordingSessionMessage(recordingSessions.get(slug)))
-          }
           // Exclusive to this connection — never broadcast (see the
           // 'server_copy_token' protocol doc above and ticket 11). This is
           // the one channel that can prove "this connection owns
@@ -1035,6 +1041,7 @@ export function setupWss(wss) {
       }
 
       if ((msg.type === 'clap' || msg.type === TAKE_MARKER_TYPE) && clientId) {
+        if (msg.type === TAKE_MARKER_TYPE && !roomRecording(slug).controls(clientId)) return
         // Broadcast a shared future trigger time to reduce per-client WS jitter.
         const isTail = msg.type === TAKE_MARKER_TYPE && msg.edge === TAKE_MARKER_EDGE_END
         const leadMs = isTail
@@ -1050,14 +1057,10 @@ export function setupWss(wss) {
         for (const p of room.values()) send(p.ws, event)
       }
 
-      if (msg.type === RECORDING_SESSION_TYPE && clientId) {
-        if (peer.role !== 'host') {
-          send(ws, { type: 'error', message: RECORDING_SESSION_HOST_ONLY })
-          return
-        }
-        if (!isRecordingSessionPhase(msg.phase)) return
-        recordingSessions.set(slug, msg.phase)
-        broadcast(slug, recordingSessionMessage(msg.phase), clientId)
+      if (clientId && [RECORDING_SESSION_TYPE, RECORDING_SESSION_REQUEST_TYPE, RECORDING_SESSION_SYNC_TYPE].includes(msg.type)) {
+        // A replaced socket must not author room state after reconnect.
+        if (room.get(clientId)?.ws !== ws) return
+        roomRecording(slug).receive(clientId, msg)
       }
 
       if (msg.type === 'recording_state' && clientId) {
@@ -1442,13 +1445,8 @@ export function setupWss(wss) {
       }
     })
 
-    ws.on('close', () => {
-      if (!clientId) return
-      // A reconnect with the same clientId already replaced this socket —
-      // do not delete the new peer (or we'd empty the room and, previously,
-      // wipe tab memory while the user was still connected).
-      const current = room.get(clientId)
-      if (current && current.ws !== ws) return
+    function leave() {
+      if (!clientId || room.get(clientId)?.ws !== ws) return
       room.delete(clientId)
       if (room.size === 0) {
         rooms.delete(slug)
@@ -1461,18 +1459,9 @@ export function setupWss(wss) {
         sendDuck(slug)
         sendTranscriptActivity(slug)
       }
-    })
+    }
+    ws.on('close', leave)
+    ws.on('error', leave)
 
-    ws.on('error', () => {
-      if (!clientId) return
-      const current = room.get(clientId)
-      if (current && current.ws !== ws) return
-      room.delete(clientId)
-      // Note: unlike 'close' below, an 'error' disconnect doesn't trigger
-      // onParticipantLeft (nor rooms.delete/sendPresence) even when this
-      // was the last peer — matching this handler's pre-existing, narrower
-      // cleanup scope. A subsequent 'close' for the same socket (which a
-      // real ws library still fires after 'error') covers it from there.
-    })
   })
 }

@@ -1,15 +1,21 @@
-/**
- * Room-level Synced Recording Session: one host-authored WebSocket message
- * starts or stops every peer's *existing* local recording path. The session
- * is optional dressing over local recording — with the room socket down,
- * Start/Stop still writes a real file and never waits on a round-trip.
- */
+/** Room recording control. The server owns the desired phase and pending
+ * request; each browser reconciles its recorder with those snapshots. Local
+ * capture and destination finalization remain in recording-session.js. */
 
 export const RECORDING_SESSION_TYPE = 'recording_session'
+export const RECORDING_SESSION_SYNC_TYPE = 'recording_session_sync'
+
+export const RECORDING_SESSION_REQUEST_TYPE = 'recording_session_request'
 
 export const RECORDING_SESSION_PHASE = {
   idle: 'idle',
   recording: 'recording'
+}
+
+export const RECORDING_SESSION_REQUEST_ACTION = {
+  start: 'start',
+  stop: 'stop',
+  dismissed: 'dismissed'
 }
 
 export const RECORDING_SESSION_HOST_ONLY =
@@ -21,8 +27,44 @@ export const STOP_BOTH_CONFIRM =
 export const OTHER_SIDE_UNCERTAIN =
   'The other side may still be recording.'
 
+export const REQUEST_START_LABEL = 'Request to start recording'
+export const REQUEST_STOP_LABEL = 'Request to stop recording'
+export const WAITING_FOR_HOST_LABEL = 'Waiting for host…'
+
+export const GUEST_WANTS_START_TITLE = 'Start recording?'
+export const GUEST_WANTS_STOP_TITLE = 'Stop recording?'
+
+export const HOST_DECLINED_START =
+  "The host isn't ready to start yet."
+export const HOST_DECLINED_STOP =
+  'The host wants to keep recording.'
+
+export function guestWantsStartCopy(name) {
+  const who = String(name || 'Your guest').trim() || 'Your guest'
+  return `${who} wants to start recording.`
+}
+
+export function guestWantsStopCopy(name) {
+  const who = String(name || 'Your guest').trim() || 'Your guest'
+  return `${who} wants to stop recording.`
+}
+
+/** Guest record-button mode when the host is in the room. */
+export function guestRecordButtonMode({ hostPresent, awaitingHost, recordingState }) {
+  if (!hostPresent) return null
+  if (awaitingHost === RECORDING_SESSION_REQUEST_ACTION.start) return 'waiting-start'
+  if (awaitingHost === RECORDING_SESSION_REQUEST_ACTION.stop) return 'waiting-stop'
+  if (recordingState === 'recording') return 'request-stop'
+  if (recordingState === 'idle') return 'request-start'
+  return null
+}
+
 export function recordingSessionMessage(phase) {
   return { type: RECORDING_SESSION_TYPE, phase }
+}
+
+export function recordingSessionRequestMessage(action) {
+  return { type: RECORDING_SESSION_REQUEST_TYPE, action }
 }
 
 export function usesSyncedRecordingSession({ wsStatus, isHost }) {
@@ -33,112 +75,255 @@ export function isRecordingSessionPhase(phase) {
   return phase === RECORDING_SESSION_PHASE.idle || phase === RECORDING_SESSION_PHASE.recording
 }
 
+export function isRecordingSessionRequestAction(action) {
+  return action === RECORDING_SESSION_REQUEST_ACTION.start
+    || action === RECORDING_SESSION_REQUEST_ACTION.stop
+    || action === RECORDING_SESSION_REQUEST_ACTION.dismissed
+}
+
+/** Server half of the same recording-control module. Transport and peer identity
+ * are supplied by ws-rooms; browsers cannot grant themselves host authority. */
+export function createRoomRecordingState({ publish, reply, onCheckReset = () => {} }) {
+  let phase = RECORDING_SESSION_PHASE.idle
+  let initialized = false
+  let peers = []
+  let request = null
+  let membership = ''
+  const host = () => peers.find(peer => peer.role === 'host')
+  const controls = id => !host() || host().clientId === id
+  const snapshot = () => ({ type: RECORDING_SESSION_TYPE, phase, initialized,
+    hostClientId: host()?.clientId ?? null, request })
+  function setPhase(next) {
+    if (next === RECORDING_SESSION_PHASE.recording && phase !== next) onCheckReset()
+    phase = next
+    initialized = true
+    request = null
+    publish(snapshot())
+  }
+  function presence(nextPeers) {
+    const previousHost = host()?.clientId
+    const samePeers = peers.length === nextPeers.length && peers.every(peer => nextPeers.includes(peer))
+    peers = nextPeers
+    const nextMembership = peers.map(peer => `${peer.clientId}:${peer.role}`).sort().join(',')
+    if (membership === nextMembership && samePeers) return null
+    membership = nextMembership
+    if (!previousHost && host() && phase === RECORDING_SESSION_PHASE.recording) onCheckReset()
+    if (request && !peers.some(peer => peer.clientId === request.clientId)) request = null
+    // Approval is no longer needed once the host leaves.
+    if (request && !host()) {
+      const next = request.action === 'start' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle
+      if (next === RECORDING_SESSION_PHASE.recording && phase !== next) onCheckReset()
+      phase = next
+      initialized = true
+      request = null
+    }
+    return snapshot()
+  }
+  function receive(clientId, message) {
+    const peer = peers.find(peer => peer.clientId === clientId)
+    if (!peer) return
+    if (message.type === RECORDING_SESSION_SYNC_TYPE) {
+      // Recover after an empty room/server restart, but never let an old
+      // browser overwrite an already-known room state during reconnect.
+      if (!initialized && controls(clientId) && isRecordingSessionPhase(message.phase)) setPhase(message.phase)
+      else reply(clientId, snapshot())
+    } else if (message.type === RECORDING_SESSION_TYPE && isRecordingSessionPhase(message.phase)) {
+      if (controls(clientId)) setPhase(message.phase)
+      else {
+        reply(clientId, { type: 'error', message: RECORDING_SESSION_HOST_ONLY })
+        reply(clientId, snapshot())
+      }
+    } else if (message.type === RECORDING_SESSION_REQUEST_TYPE && isRecordingSessionRequestAction(message.action)) {
+      if (message.action === 'dismissed') {
+        if (controls(clientId) || request?.clientId === clientId) {
+          const declined = request
+          request = null
+          if (declined && controls(clientId)) reply(declined.clientId, {
+            type: RECORDING_SESSION_REQUEST_TYPE, action: 'dismissed', from: peer.name, clientId
+          })
+          publish(snapshot())
+        }
+      } else if (initialized && phase === (message.action === 'start' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle)) {
+        // A request overtaken by the host's decision is already satisfied.
+        reply(clientId, snapshot())
+      } else if (controls(clientId)) {
+        setPhase(message.action === 'start' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle)
+      } else if (!request) {
+        request = { action: message.action, from: peer.name, clientId }
+        publish(snapshot())
+      } else reply(clientId, snapshot())
+    }
+  }
+  return { presence, receive, controls }
+}
+
 export function createRecordingSession({
-  send,
-  startLocal,
-  stopLocal,
-  getRecordingState,
-  isHost,
-  getWsStatus,
-  requestTail
+  send, startLocal, stopLocal, getRecordingState, isHost, getWsStatus,
+  isHostPresent = () => false, requestTail, onChange = () => {}, onIssue = () => {}
 }) {
   let phase = RECORDING_SESSION_PHASE.idle
   let known = false
   let awaitingConfirm = false
   let otherSideUncertain = false
+  let awaitingHost = null
+  let pendingGuestRequest = null
+  let changing = false
+  let localIntent = null
+  let reconciling = null
+  let generation = 0
+  let attempted = -1
+  let starting = null
+  const controls = () => isHost() || !isHostPresent()
+  const connected = () => getWsStatus() === 'connected'
+  function notify() { onChange() }
 
-  function phaseFn() {
-    return phase
+  function reconcile() {
+    if (reconciling) return reconciling
+    reconciling = Promise.resolve().then(async () => {
+      while (true) {
+        const state = getRecordingState()
+        if (phase === RECORDING_SESSION_PHASE.recording && state === 'idle' && attempted !== generation) {
+          attempted = generation
+          const controller = new AbortController()
+          starting = controller
+          try { await startLocal({ signal: controller.signal }) } catch (error) {
+            if (!controller.signal.aborted) onIssue({ code: 'capture-start-failed', severity: 'error', destination: 'capture',
+              message: 'Could not start local recording for the room session.', error })
+          } finally { starting = null }
+          continue
+        }
+        if (phase === RECORDING_SESSION_PHASE.idle && state === 'recording') {
+          await stopLocal()
+          continue
+        }
+        break
+      }
+    }).finally(() => { reconciling = null; notify() })
+    notify()
+    return reconciling
   }
-
-  async function applyRemote(nextPhase) {
-    if (!isRecordingSessionPhase(nextPhase)) return
+  function applyPhase(next) {
+    if (next !== phase) { generation++; otherSideUncertain = false }
+    phase = next
+    if (next === RECORDING_SESSION_PHASE.idle) starting?.abort()
     known = true
-    phase = nextPhase
-    const state = getRecordingState()
-    if (nextPhase === RECORDING_SESSION_PHASE.recording && state === 'idle') {
-      await startLocal()
-      if (getRecordingState() !== 'recording') phase = RECORDING_SESSION_PHASE.idle
-      return
-    }
-    if (nextPhase === RECORDING_SESSION_PHASE.idle && state === 'recording') {
-      await stopLocal()
+    changing = false
+    if (next === RECORDING_SESSION_PHASE.idle) awaitingConfirm = false
+    notify()
+    return reconcile()
+  }
+  async function change(next) {
+    pendingGuestRequest = null
+    if (connected()) {
+      changing = true
+      notify()
+      send(recordingSessionMessage(next))
+    } else {
+      localIntent = next
+      await applyPhase(next)
     }
   }
-
   async function onToggle() {
-    const state = getRecordingState()
-    const synced = usesSyncedRecordingSession({
-      wsStatus: getWsStatus(),
-      isHost: isHost()
-    })
-
-    if (state === 'idle') {
-      await startLocal()
-      if (getRecordingState() !== 'recording') return
-      otherSideUncertain = false
-      if (synced) {
-        known = true
-        phase = RECORDING_SESSION_PHASE.recording
-        send(recordingSessionMessage(RECORDING_SESSION_PHASE.recording))
-      }
-      return
-    }
-
-    if (state === 'recording') {
-      if (synced) {
-        awaitingConfirm = true
-        return
-      }
-      if (known) {
-        phase = RECORDING_SESSION_PHASE.idle
-      }
-      await stopLocal()
-    }
+    if ((connected() && changing) || reconciling || (connected() && awaitingHost) || awaitingConfirm || getRecordingState() === 'stopping') return
+    const active = known ? phase === RECORDING_SESSION_PHASE.recording : getRecordingState() === 'recording'
+    if (connected() && !controls()) {
+      awaitingHost = active ? 'stop' : 'start'
+      notify()
+      send(recordingSessionRequestMessage(awaitingHost))
+    } else if (active && connected() && isHost()) {
+      awaitingConfirm = true
+      notify()
+    } else await change(active ? RECORDING_SESSION_PHASE.idle : RECORDING_SESSION_PHASE.recording)
   }
-
   function confirmStop() {
     if (!awaitingConfirm) return
     awaitingConfirm = false
+    pendingGuestRequest = null
     requestTail?.()
+    notify()
   }
-
-  function cancelStop() {
-    awaitingConfirm = false
-  }
-
+  function cancelStop() { awaitingConfirm = false; notify() }
   async function onTail({ uncertain = false } = {}) {
+    otherSideUncertain = uncertain
+    // Finalize independently of the socket/other participant, exactly once.
     phase = RECORDING_SESSION_PHASE.idle
-    if (uncertain) otherSideUncertain = true
-    try {
-      await stopLocal()
-    } finally {
-      if (isHost()) {
-        known = true
-        send(recordingSessionMessage(RECORDING_SESSION_PHASE.idle))
-      }
+    starting?.abort()
+    try { if (getRecordingState() === 'recording') await stopLocal() }
+    finally {
+      if (connected() && controls()) send(recordingSessionMessage(RECORDING_SESSION_PHASE.idle))
+      else if (!connected()) localIntent = RECORDING_SESSION_PHASE.idle
+      notify()
     }
   }
-
-  async function onMessage(msg) {
-    if (!msg || msg.type !== RECORDING_SESSION_TYPE) return
-    await applyRemote(msg.phase)
+  async function acceptGuestRequest() {
+    if (!isHost() || !pendingGuestRequest) return
+    const action = pendingGuestRequest.action
+    pendingGuestRequest = null
+    if (action === 'stop' && getRecordingState() === 'recording') {
+      // Accepting the guest's request is already confirmation.
+      awaitingConfirm = true
+      confirmStop()
+    } else await change(action === 'start' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle)
   }
-
+  async function onLocalFailure() {
+    // Stop this recorder immediately; a socket round-trip must never gate
+    // finalization after a permanent save failure.
+    if (connected()) {
+      if (controls()) send(recordingSessionMessage(RECORDING_SESSION_PHASE.idle))
+      else {
+        awaitingHost = 'stop'
+        send(recordingSessionRequestMessage('stop'))
+      }
+    } else {
+      localIntent = RECORDING_SESSION_PHASE.idle
+      phase = RECORDING_SESSION_PHASE.idle
+      known = true
+    }
+    starting?.abort()
+    notify()
+    await stopLocal()
+    notify()
+  }
+  function dismissGuestRequest() {
+    if (!isHost() || !pendingGuestRequest) return
+    pendingGuestRequest = null
+    send(recordingSessionRequestMessage('dismissed'))
+    notify()
+  }
+  async function onMessage(message) {
+    if (!message) return
+    if (message.type === RECORDING_SESSION_REQUEST_TYPE) {
+      if (!isRecordingSessionRequestAction(message.action)) return
+      if (message.action === 'dismissed') { awaitingHost = null; pendingGuestRequest = null }
+      else if (isHost()) pendingGuestRequest = { action: message.action, from: message.from || '', clientId: message.clientId || '' }
+      notify()
+      return
+    }
+    if (message.type !== RECORDING_SESSION_TYPE || !isRecordingSessionPhase(message.phase)) return
+    if (Object.hasOwn(message, 'request')) {
+      pendingGuestRequest = isHost() ? message.request : null
+      awaitingHost = !isHost() ? message.request?.action ?? null : null
+    } else awaitingHost = null
+    if (message.initialized === false) { notify(); return }
+    await applyPhase(message.phase)
+    notify()
+  }
   function resync() {
-    if (!isHost() || !known) return
-    send(recordingSessionMessage(phase))
+    const intent = localIntent
+    localIntent = null
+    if (intent && controls()) {
+      send(recordingSessionMessage(intent))
+    } else send({ type: RECORDING_SESSION_SYNC_TYPE,
+      phase: known ? phase : getRecordingState() === 'recording' ? RECORDING_SESSION_PHASE.recording : RECORDING_SESSION_PHASE.idle })
   }
-
-  return {
-    onToggle,
-    confirmStop,
-    cancelStop,
-    onTail,
-    onMessage,
-    resync,
-    phase: phaseFn,
+  return { onToggle, confirmStop, cancelStop, onTail, onLocalFailure, onMessage, acceptGuestRequest,
+    dismissGuestRequest, resync, phase: () => phase,
     get awaitingConfirm() { return awaitingConfirm },
-    get otherSideUncertain() { return otherSideUncertain }
+    get otherSideUncertain() { return otherSideUncertain },
+    get awaitingHost() { return awaitingHost },
+    get pendingGuestRequest() { return pendingGuestRequest },
+    get changing() { return (connected() && changing) || !!reconciling },
+    get buttonMode() { return guestRecordButtonMode({ hostPresent: connected() && !controls(), awaitingHost,
+      recordingState: known ? phase : getRecordingState() }) }
   }
 }
