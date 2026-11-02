@@ -20,6 +20,26 @@
  *   { type: 'join', name, clientId }     — announce on connect
  *   { type: 'ping', seq, sentAt }        — clock sync probe
  *   { type: 'clap' }                     — broadcast sync clap
+ *   { type: 'take_marker' }              — same as clap (timestamp, from,
+ *                                          triggerAtMs) with a longer lead so
+ *                                          both peers can show a countdown.
+ *                                          Take start after both Check Turns
+ *                                          pass (3000ms lead).
+ *   { type: 'take_marker', edge: 'end' } — the tail: 2000ms lead, echoed with
+ *                                          edge: 'end'. Any other edge is
+ *                                          treated as a start.
+ *   { type: 'recording_session', phase }
+ *                                        — change desired room recording state.
+ *                                          The host controls it while present;
+ *                                          otherwise the guest controls it.
+ *                                          Accepted state is echoed to everyone.
+ *   { type: 'recording_session_sync', phase }
+ *                                        — read current state after reconnect.
+ *                                          phase seeds only an uninitialized room.
+ *   { type: 'recording_session_request', action }
+ *                                        — request start/stop, or host refusal
+ *                                          (`dismissed`). The request belongs to
+ *                                          the room and survives reconnects.
  *   { type: 'recording_state', state, startedAt? }
  *                                        — 'recording' | 'stopped'. startedAt is the
  *                                          recorder's Date.now() when this take began
@@ -37,10 +57,14 @@
  *   { type: 'mic_info',        label }   — selected mic display name; stored on the peer
  *                                          and included in presence. Re-announce on
  *                                          registerResync after reconnect (server forgets it).
- *   { type: 'recording_check', open }    — listen-back modal is up for this peer.
- *                                          Stored as presence `checking` (ephemeral,
- *                                          same as mic_info: forgotten on reconnect
- *                                          until registerResync). Not the audio itself.
+ *   { type: 'recording_check', open, sessionId, roundId, revision, action? }
+ *                                        — listen-back modal is up for this peer
+ *                                          (`open` → presence `checking`). The room
+ *                                          recording state validates confirm/reject
+ *                                          against the current session/round/revision.
+ *                                          Presence replays `check` and `checkTurn`;
+ *                                          registerResync re-announces visibility and
+ *                                          confirmed preview without starting a round.
  *   { type: 'recording_check_preview', sampleRate, pcm }
  *                                        — one-shot Int16 PCM (base64) from confirmed
  *                                          writes during the listen-back check. Relayed
@@ -291,7 +315,10 @@
  *                                          spend a second lookup.
  *
  * Protocol (server → client):
- *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}] }
+ *   { type: 'presence',        peers: [{name, recording, checking, serverCopyState, serverCopyPercent, micLabel}],
+ *                              checkTurn? }
+ *                                        — `checkTurn` is the room Check Turn from
+ *                                          the authoritative recording-session check (also included as `check`).
  *   { type: 'recording_check_preview', clientId, sampleRate, pcm }
  *                                        — relay of the sender's listen-back clip;
  *                                          `clientId` is the recorder, not the listener.
@@ -308,7 +335,18 @@
  *                                          and the room's session cookie is identical for
  *                                          every participant.
  *   { type: 'pong',            seq, clientSentAt, serverReceivedAt }
- *   { type: 'clap',            timestamp, from }
+ *   { type: 'clap',            timestamp, from, triggerAtMs }
+ *   { type: 'take_marker',     timestamp, from, triggerAtMs, edge? }
+ *                                        — same clock-offset scheduling as clap;
+ *                                          longer lead for a visible countdown.
+ *                                          edge is 'end' only for the tail.
+ *   { type: 'recording_session', phase, initialized, hostClientId, request }
+ *                                        — authoritative room snapshot, including
+ *                                          the pending guest request. Capture
+ *                                          status still comes from each browser's
+ *                                          real recording_state, never this flag.
+ *   { type: 'recording_session_request', action: 'dismissed', from, clientId }
+ *                                        — refusal notification for the requester.
  *   { type: 'recording_state', name, state }
  *   { type: 'yt_duck',         talking } — true while any peer is holding Talk
  *   { type: 'transcript_activity', active }
@@ -486,6 +524,18 @@ import { createRoomStateStore, getRoomStateGraceMs } from './room-state-store.js
 import { askResearchAssistant, buildAskRequest, buildCustomPromptRequest } from './research-assistant.js'
 import { parseResearchCard } from '../research/research-card.js'
 import { decodeInt16PcmBase64 } from '../recording/recording-check-share.js'
+import {
+  RECORDING_SESSION_REQUEST_TYPE,
+  RECORDING_SESSION_TYPE,
+  RECORDING_SESSION_SYNC_TYPE,
+  createRoomRecordingState
+} from '../recording/synced-recording-session.js'
+import {
+  TAKE_MARKER_EDGE_END,
+  TAKE_MARKER_LEAD_MS,
+  TAKE_MARKER_TAIL_LEAD_MS,
+  TAKE_MARKER_TYPE
+} from '../recording/take-marker.js'
 
 const MAX_PEERS = 2
 const CLAP_LEAD_MS = 250 // shared future trigger — absorbs per-client WS jitter
@@ -498,6 +548,14 @@ const SERVER_COPY_STATES = new Set(['unavailable', 'in_progress', 'complete', 'f
 //         joinedAt, talking, transcribing, serverCopyState, serverCopyPercent,
 //         serverCopyTakeId, micLabel, checking }
 const rooms = new Map()
+
+// slug -> 'idle' | 'recording'. Room-level Synced Recording Session, set
+// only by a host-originated recording_session message. Forgotten when the
+// reconnect grace expires after the last peer leaves.
+const recordingSessions = new Map()
+// Keep authoritative identities across the room socket reconnect backoff.
+const recordingSessionEvictions = new Map()
+const RECORDING_RECONNECT_GRACE_MS = 60_000
 
 // A room's tabs/text/video, Transcript (ticket 01), per-tab Research
 // Assistant entries (ticket 04), and per-tab Annotations (ADR-0008) — all
@@ -528,9 +586,21 @@ function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg))
 }
 
+function roomRecording(slug) {
+  if (!recordingSessions.has(slug)) recordingSessions.set(slug, createRoomRecordingState({
+    publish: message => broadcast(slug, message),
+    reply: (clientId, message) => {
+      const peer = rooms.get(slug)?.get(clientId)
+      if (peer) send(peer.ws, message)
+    }
+  }))
+  return recordingSessions.get(slug)
+}
+
 function sendPresence(slug) {
   const room = rooms.get(slug)
   if (!room) return
+  const recording = roomRecording(slug).presence(Array.from(room.values()))
   const peers = Array.from(room.values()).map((p) => ({
     clientId: p.clientId,
     name: p.name,
@@ -548,7 +618,10 @@ function sendPresence(slug) {
     checking: !!p.checking
   }))
   const msg = { type: 'presence', peers }
+  const check = roomRecording(slug).check
+  if (check) { msg.check = check; msg.checkTurn = check.turn }
   for (const peer of room.values()) send(peer.ws, msg)
+  if (recording) broadcast(slug, recording)
 }
 
 function parseCookies(header = '') {
@@ -825,6 +898,9 @@ function replayAnnotationsTo(ws, content) {
 /** For tests only — wipes all rooms so each test starts clean */
 export function _resetRooms() {
   rooms.clear()
+  recordingSessions.clear()
+  for (const timer of recordingSessionEvictions.values()) clearTimeout(timer)
+  recordingSessionEvictions.clear()
   roomStateStore._resetForTests()
 }
 
@@ -932,6 +1008,8 @@ export function setupWss(wss) {
           peer.name     = incomingName
           peer.joinedAt = Date.now()
           room.set(clientId, peer)
+          clearTimeout(recordingSessionEvictions.get(slug))
+          recordingSessionEvictions.delete(slug)
         } else if (clientId) {
           // Subsequent join = name update
           peer.name = incomingName
@@ -961,15 +1039,33 @@ export function setupWss(wss) {
         send(ws, { type: 'pong', seq: msg.seq, clientSentAt: msg.sentAt, serverReceivedAt: Date.now() })
       }
 
-      if (msg.type === 'clap' && clientId) {
+      if ((msg.type === 'clap' || msg.type === TAKE_MARKER_TYPE) && clientId) {
+        if (msg.type === TAKE_MARKER_TYPE && !roomRecording(slug).controls(clientId)) return
+        if (msg.type === TAKE_MARKER_TYPE && msg.sessionId) {
+          const check = roomRecording(slug).check
+          if (!check || msg.sessionId !== check.sessionId || msg.roundId !== check.roundId
+            || (msg.edge !== TAKE_MARKER_EDGE_END && check.turn !== 'passed')) return
+        }
         // Broadcast a shared future trigger time to reduce per-client WS jitter.
+        const isTail = msg.type === TAKE_MARKER_TYPE && msg.edge === TAKE_MARKER_EDGE_END
+        const leadMs = isTail
+          ? TAKE_MARKER_TAIL_LEAD_MS
+          : msg.type === TAKE_MARKER_TYPE ? TAKE_MARKER_LEAD_MS : CLAP_LEAD_MS
         const event = {
-          type: 'clap',
+          type: msg.type,
+          ...(msg.sessionId ? { sessionId: msg.sessionId, roundId: msg.roundId } : {}),
           timestamp: new Date().toISOString(),
-          triggerAtMs: Date.now() + CLAP_LEAD_MS,
+          triggerAtMs: Date.now() + leadMs,
           from: peer.name
         }
+        if (isTail) event.edge = TAKE_MARKER_EDGE_END
         for (const p of room.values()) send(p.ws, event)
+      }
+
+      if (clientId && [RECORDING_SESSION_TYPE, RECORDING_SESSION_REQUEST_TYPE, RECORDING_SESSION_SYNC_TYPE].includes(msg.type)) {
+        // A replaced socket must not author room state after reconnect.
+        if (room.get(clientId)?.ws !== ws) return
+        roomRecording(slug).receive(clientId, msg)
       }
 
       if (msg.type === 'recording_state' && clientId) {
@@ -1008,7 +1104,11 @@ export function setupWss(wss) {
       }
 
       if (msg.type === 'recording_check' && clientId) {
+        if (room.get(clientId)?.ws !== ws) return
+        const current = roomRecording(slug).check
+        if (msg.sessionId && (!current || msg.sessionId !== current.sessionId || msg.roundId !== current.roundId || msg.revision !== current.revision)) return
         peer.checking = !!msg.open
+        if (msg.sessionId) roomRecording(slug).receive(clientId, msg)
         sendPresence(slug)
       }
 
@@ -1017,7 +1117,10 @@ export function setupWss(wss) {
         if (!Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 96000) return
         const pcm = decodeInt16PcmBase64(msg.pcm)
         if (!pcm) return
+        const check = roomRecording(slug).check
+        if (msg.sessionId && (!check || msg.sessionId !== check.sessionId || msg.roundId !== check.roundId)) return
         broadcast(slug, {
+          ...(msg.sessionId ? { sessionId: msg.sessionId, roundId: msg.roundId, attemptId: msg.attemptId } : {}),
           type: 'recording_check_preview',
           clientId,
           sampleRate,
@@ -1353,16 +1456,17 @@ export function setupWss(wss) {
       }
     })
 
-    ws.on('close', () => {
-      if (!clientId) return
-      // A reconnect with the same clientId already replaced this socket —
-      // do not delete the new peer (or we'd empty the room and, previously,
-      // wipe tab memory while the user was still connected).
-      const current = room.get(clientId)
-      if (current && current.ws !== ws) return
+    function leave() {
+      if (!clientId || room.get(clientId)?.ws !== ws) return
       room.delete(clientId)
       if (room.size === 0) {
         rooms.delete(slug)
+        const timer = setTimeout(() => {
+          recordingSessions.delete(slug)
+          recordingSessionEvictions.delete(slug)
+        }, RECORDING_RECONNECT_GRACE_MS)
+        timer.unref?.()
+        recordingSessionEvictions.set(slug, timer)
         roomStateStore.onParticipantLeft(slug)
       } else {
         recomputeRoles(room)
@@ -1370,18 +1474,9 @@ export function setupWss(wss) {
         sendDuck(slug)
         sendTranscriptActivity(slug)
       }
-    })
+    }
+    ws.on('close', leave)
+    ws.on('error', leave)
 
-    ws.on('error', () => {
-      if (!clientId) return
-      const current = room.get(clientId)
-      if (current && current.ws !== ws) return
-      room.delete(clientId)
-      // Note: unlike 'close' below, an 'error' disconnect doesn't trigger
-      // onParticipantLeft (nor rooms.delete/sendPresence) even when this
-      // was the last peer — matching this handler's pre-existing, narrower
-      // cleanup scope. A subsequent 'close' for the same socket (which a
-      // real ws library still fires after 'error') covers it from there.
-    })
   })
 }

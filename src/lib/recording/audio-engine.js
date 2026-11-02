@@ -16,6 +16,7 @@ export function createAudioEngine({
   onIssue,
   onMicConnected,
   onMicRanking,
+  onAudioState,
   loadDevices,
   getDevices,
   getSelectedDeviceId,
@@ -129,9 +130,8 @@ export function createAudioEngine({
 
   async function init() {
     audioCtx = new AudioContext({ sampleRate: 48000 })
-    if (audioCtx.state === 'suspended') {
-      try { await audioCtx.resume() } catch {}
-    }
+    // Safari leaves resume() pending until a click, so init must not wait on it.
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
 
     await audioCtx.audioWorklet.addModule('/worklet/recorder-processor.js')
 
@@ -148,8 +148,10 @@ export function createAudioEngine({
     silentSink.connect(audioCtx.destination)
 
     audioCtx.onstatechange = () => {
+      onAudioState?.(audioCtx.state)
       if (recording && audioCtx.state !== 'running') report('audio-suspended', 'Audio processing stopped; no samples are being captured.')
     }
+    onAudioState?.(audioCtx.state)
     workletNode.onprocessorerror = (error) => report('processor-failed', 'Audio processor failed.', error)
     workletNode.port.onmessage = (e) => {
       if (e.data.type === 'level') onLevel?.(e.data.rms, e.data.peak)
@@ -162,11 +164,16 @@ export function createAudioEngine({
     await switchMic(getSelectedDeviceId())
   }
 
-  async function ensureRunning() {
-    if (!audioCtx) return
-    if (audioCtx.state !== 'running') {
-      try { await audioCtx.resume() } catch {}
-    }
+  // Call from a click so Safari allows it. Without one, resume() never
+  // settles there, so give up after a moment; startCapture then refuses.
+  async function ensureRunning(timeoutMs = 1000) {
+    if (!audioCtx || audioCtx.state === 'running' || audioCtx.state === 'closed') return
+    let timer
+    await Promise.race([
+      audioCtx.resume().catch(() => {}),
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
+    ])
+    clearTimeout(timer)
   }
 
   function setGain(value) {

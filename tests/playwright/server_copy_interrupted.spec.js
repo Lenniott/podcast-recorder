@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, expandPresenceTable, presenceRow, startGuestTakeWithHost, closeSavePrompt } from './helpers.js'
 
 // Exhausted upload retries stop capture while the local destination finishes.
 
@@ -23,17 +23,12 @@ test('exhausted upload retries stop capture and finish the local recording', asy
   const guest = await browser.newPage()
   await stubYouTubeApi(guest)
   await guest.addInitScript(() => {
-    window.__localSaved = false
     window.__recordingIssues = []
     const log = console.error
     console.error = (...args) => {
       if (args[0] === '[recording]') window.__recordingIssues.push(args[1])
       log(...args)
     }
-    window.showSaveFilePicker = async () => ({ createWritable: async () => ({
-      write: async () => {}, seek: async () => {},
-      close: async () => { window.__localSaved = true }
-    }) })
   })
   await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
   await expandPresenceTable(host)
@@ -45,10 +40,7 @@ test('exhausted upload retries stop capture and finish the local recording', asy
   // the session is accepted normally and only chunk delivery breaks.
   await guest.route('**/server-copy/chunks*', (route) => route.abort())
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest) // clears .check-overlay so Stop Recording is clickable later
+  await startGuestTakeWithHost(host, guest)
 
   // Failure is broadcast to both participants.
   await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
@@ -62,15 +54,26 @@ test('exhausted upload retries stop capture and finish the local recording', asy
     { timeout: 30_000 }
   )
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
-  expect(await guest.evaluate(() => window.__localSaved)).toBe(true)
+  // Permanent save failure stops this peer immediately and asks the host to
+  // end the room take — guest must not wait on that round-trip to finalize
+  // locally, but the Start button only returns once the host accepts.
+  await expect(guest.getByRole('button', { name: 'Waiting for host…' })).toBeDisabled()
+  await expect(host.getByTestId('guest-stop-request')).toBeVisible()
+  // Local destination finished on its own: the ask-to-save lists the take.
+  await expect(guest.getByTestId('local-copy-save-prompt')).toBeVisible({ timeout: 20_000 })
+  await host.getByRole('button', { name: 'Yes, stop' }).click()
+  await closeSavePrompt(guest)
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('listitem').filter({ hasText: 'Take 1' })).toBeVisible()
   expect(await guest.evaluate(() => window.__recordingIssues)).toEqual(
     expect.arrayContaining([expect.objectContaining({ code: 'save-failed', destination: 'server' })])
   )
 
-  // No download control for a failed copy, on either browser — checked
-  // while both are still in the room, before the exit navigation below.
-  await expect(host.locator('[data-testid="server-copy-download"]')).toHaveCount(0)
+  // No download control for the failed guest copy — the host's own
+  // completed take may still offer one. Checked while both are still in
+  // the room, before the exit navigation below.
+  await expect(guestPeerRow(host).locator('[data-testid="server-copy-download"]')).toHaveCount(0)
+  await expect(guestPeerRow(guest).locator('[data-testid="server-copy-download"]')).toHaveCount(0)
   await expect(guest.locator('[data-testid="server-copy-download"]')).toHaveCount(0)
 
   // `failed` is deliberately excluded from isIncompleteServerCopyUpload

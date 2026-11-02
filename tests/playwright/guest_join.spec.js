@@ -13,7 +13,7 @@ test('guest joins with the room password and lands on Tab 1', async ({ browser }
 
   await expect(guest).toHaveURL(/\/rec\//)
   await expect(guest.getByRole('button', { name: 'Tab 1' })).toBeVisible()
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeVisible()
   await expect(guest.getByText('Password:')).toHaveCount(0)
 
   await guest.close()

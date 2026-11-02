@@ -3,7 +3,7 @@
     formatServerCopyLine,
     canShowServerCopyDownload,
   } from "../server-copy/server-copy-status.js";
-  import { canPlayRecordingCheck } from "../recording/recording-check-share.js";
+  import { canPlayRecordingCheck, stayQuietCopy } from "../recording/recording-check-share.js";
   import { participantPresence } from "./participant-display.js";
   import { ChevronDown, ChevronUp, Download02, Headphones, Microphone02 } from "../icons";
 
@@ -15,6 +15,7 @@
   export let bytesWritten = 0;
   export let formatBytes = (b) => String(b);
   export let checkPreviewByClientId = {};
+  export let stayQuietRole = "";
 
   let open = false;
   let checkAudio;
@@ -99,6 +100,9 @@
       {/if}
       <!-- <span class="fold-hint">{open ? "Hide details" : "Show details"}</span> -->
     </button>
+    {#if stayQuietRole}
+      <p class="check-quiet-line">{stayQuietCopy(stayQuietRole)}</p>
+    {/if}
     <slot />
   </div>
   {#if open}
@@ -242,6 +246,12 @@
     flex-direction: row;
     justify-content: space-between;
     width: 100%;
+  }
+  .check-quiet-line {
+    margin: 0;
+    padding: 4px 12px 8px;
+    color: var(--muted, #a1a1aa);
+    font-size: 13px;
   }
   .fold {
     display: flex;

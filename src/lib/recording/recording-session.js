@@ -94,24 +94,36 @@ export function createRecordingSession({ sampleRate, file, upload, stopCapture, 
     }
   }
 
-  async function finish() {
+  let resolveLocalFinished
+  // Resolves when this take's local file is closed, even if the server
+  // copy is still finishing. A retake waits on this and opens the next
+  // file; it does not wait on the upload.
+  const whenLocalFinished = new Promise(resolve => { resolveLocalFinished = resolve })
+
+  async function finish({ capture = true } = {}) {
     let captureError = null
-    try { await stopCapture() } catch (error) {
-      captureError = error
-      reportIssue({ code: 'capture-stop-failed', severity: 'error', destination: 'capture', message: 'Capture stopped without confirming the final audio chunk.', error })
+    if (capture) {
+      try { await stopCapture() } catch (error) {
+        captureError = error
+        reportIssue({ code: 'capture-stop-failed', severity: 'error', destination: 'capture', message: 'Capture stopped without confirming the final audio chunk.', error })
+      }
     }
     accepting = false
     const localDone = completeLocal().then(result => {
       try { onLocalFinished?.(result) } catch { /* observers cannot block the other destination */ }
+      resolveLocalFinished(result)
       return result
     })
     const [local, server] = await Promise.all([localDone, completeServer()])
     return { local, server, captureError }
   }
 
-  function stop() {
-    if (!stopPromise) stopPromise = Promise.resolve().then(finish)
+  function stop(options) {
+    if (!stopPromise) stopPromise = Promise.resolve().then(() => finish(options))
     return stopPromise
   }
-  return { writeChunk, stop, reportIssue }
+  return {
+    writeChunk, stop, reportIssue, whenLocalFinished,
+    get samplesWritten() { return writer.samplesWritten }
+  }
 }

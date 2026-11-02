@@ -224,8 +224,97 @@ confirmed-written chunks (same invariant as the live waveform). That clip
 is also relayed to the **Host** (auto after a few seconds of written
 audio, and again if they click Listen back) so it can be played from the
 presence table without downloading a server copy or stopping the take.
-The server forwards the PCM and forgets it. Not live monitoring.
+The server forwards the PCM and forgets it. Not live monitoring. Not the
+guest's "send the file" path either: leave/exit copy is reassurance-first
+(see **Server copy**; Local Copy framing) unless that convenience upload
+is still incomplete.
 _Avoid_: talk, WebRTC, server copy download (that's a different file)
+
+**Server copy**:
+The convenience mirror of a participant's local WAV, uploaded to the
+server so the host can collect takes from `ServerCopyFilesModal`. It is
+not the recording itself (that's the Local Copy — a resilience file, not
+guest homework). Guest-facing leave/exit copy is therefore
+reassurance-first: backed up automatically, nothing to send — except
+while a take is still being written, and while the upload is still
+incomplete (`uploading` / `catching_up`). The upload warning tells them
+to save the Local Copy first if they will need to send it, and they can
+still leave. A permanent upload failure is a separate one-time alert,
+not that leave warning and not reassurance.
+_Avoid_: treating the local WAV as something the guest must deliver in
+the normal case
+
+**Local Copy**:
+The WAV this browser writes on this device while the take is running —
+insurance if the server or internet drops out, not something the guest
+must personally deliver. The person cannot open it until the take has
+stopped and they save it out; that save works in any browser and does not
+wait for the server copy. They are asked to save when a take stops for real. A rejected Check
+Turn is not that ask: the short file stays listed, with its length,
+until they remove it.
+A Local Copy stays on this device through a refresh and through leaving the
+room, saved or not, until they remove it and confirm (saving alone never
+deletes it), and the room lists it again the next time this
+browser opens the room. A take that stopped before it closed is still a
+Local Copy: it is marked as ended early, and it can be saved the same
+way. Each recording attempt is its own file (`…-take-1.wav`,
+`…-take-2.wav`, numbered per browser visit, never overwritten by a later
+attempt); a rejected Check Turn leaves that attempt and the check
+restarts on the next file. In the normal case the host uses the automatic **server copy**
+upload (`ServerCopyFilesModal`); the guest does not normally send this
+file anywhere unless that upload failed. The server-copy modal's "Take N"
+is a display index over files the server actually has — it is not this
+`-take-N` suffix, and the two can disagree (a missing upload shifts the
+index).
+_Avoid_: the backup (as busywork the guest must deliver), only copy, silent
+about the server copy, a folder chosen at join
+
+**Synced Recording Session**:
+The room's desired recording state, followed by each participant's own
+recorder and mic-check flow. The host has priority control; while the host
+is absent, the guest controls that same room state, and a joining host
+inherits an active recording.
+_Avoid_: a host's local recording flag; a separate guest-only session
+
+**Recording Request**:
+A guest's pending request to start or stop the room while the host controls
+it. The guest waits for approval or refusal; if the host leaves, the guest
+gains control and the pending request takes effect.
+_Avoid_: recording immediately while waiting for approval
+
+**Check Turn**:
+Whose turn it currently is in the host-then-guest mic-check sequence after
+a **Synced Recording Session** start (`idle` | `host` | `guest` | `passed`).
+The host's existing single-person listen-back runs first; the guest sees
+stay-quiet copy instead of their own modal, then the pair swaps after the
+host confirms. Relayed on the existing `recording_check` WebSocket message
+(`turn`) and presence `checkTurn`. Solo / offline Start still uses the
+single-person check — there is no guest turn to wait on. Both turns
+passing is the signal that fires the **Take Marker**; it is not itself
+the take boundary.
+_Avoid_: inferring stay-quiet from live mic level; opening both check
+modals at once; treating both-turns-passed as "the take has started"
+
+**Take Marker**:
+The synced clap tone + countdown that flips a session from "checking" to
+"the real take," used at take start (after **Check Turn** both-turns-passed)
+and again at take stop. Same mechanism as the manual **Clap**
+("Sync Tone Marker") and Watch Together: the server stamps `triggerAtMs`,
+each browser corrects it with `clock-sync.js`'s `offset` into local time,
+and `audioEngine.scheduleClapTone(delayMs)` lands the tone at one physical
+instant. "Is this a real take yet" becomes true at that scheduled instant,
+not when the WebSocket message arrives. Pre-marker audio stays on disk;
+the boundary is a `startSample` offset (`captureSession.samplesWritten` at
+the instant) stored with the session, never a truncate/rewrite of confirmed
+writes. Host sends `take_marker` once; guests schedule off the broadcast.
+With no synced session (solo / offline), the marker is local and does not
+wait on the room. The manual Clap button stays for its general-purpose use.
+It is also the tail (`take_marker` with `edge: 'end'`): 2 seconds after the
+host confirms Stop, both files close at that one instant, on the same
+`triggerAtMs` path as the start marker. The tail never touches
+`startSample` or "is this a real take."
+_Avoid_: a second timing scheme; claiming the take has started on message
+receipt; deleting bytes already written to make the take "start."
 
 **Card** _(renamed from **Research Card** — see ADR-0008)_:
 An Annotation authored by a Custom Prompt: the glanceable result of a

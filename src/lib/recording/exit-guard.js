@@ -10,35 +10,58 @@
  *     artifact (see AGENTS.md's "one rule everything else serves") and the
  *     warning must say so plainly.
  *   - an INCOMPLETE SERVER COPY *after* the local recording has already
- *     stopped — the WAV is already safe on disk; only the convenience
+ *     stopped — the take is kept in this browser; only the convenience
  *     mirror to the server hasn't finished uploading/finalizing yet.
- *     Leaving costs a manual re-send later, never the recording itself,
- *     and the warning must not read as if it does.
+ *     Leaving costs a manual send later, never the recording itself, and
+ *     the warning must not read as if it does. Until the person saves the
+ *     take there is no file they can send, so the warning says to save
+ *     first rather than claiming a file is already on disk.
+ *
+ * Everything else is the *normal* case (idle / no recording yet, or the
+ * server copy already complete): the leave message is reassurance, not a
+ * send-it-yourself threat. The guest's Local Copy is a resilience file,
+ * not homework. Permanent `failed` uploads are a different notice (the
+ * one-time failure alert) and must not be rewritten as either that
+ * incomplete-upload warning or false "you're backed up" reassurance.
  *
  * Every route into leaving the page (native beforeunload, in-app link
  * clicks, SvelteKit navigation) asks this single function which situation
  * currently applies, so the two warnings can never disagree or double-fire
- * — at most one ever applies at a time, and active-recording always wins
- * when both are true, because it is strictly the worse of the two.
+ * — at most one blocking warning ever applies at a time, and
+ * active-recording always wins when both are true, because it is strictly
+ * the worse of the two. Callers still only *prompt* when `blocking` is
+ * true; `message` is always the copy that belongs to the current state
+ * (including non-blocking reassurance), so +page never forks strings.
  */
 
-/** @typedef {'recording' | 'upload' | null} ExitGuardSeverity */
+/** @typedef {'recording' | 'upload' | 'reassurance' | null} ExitGuardSeverity */
 
 const RECORDING_MESSAGE =
   'Your local recording is still in progress. Leaving now could stop it before the WAV is finalized. Leave anyway?'
 
 const UPLOAD_MESSAGE =
-  "Your recording is already saved on this device. The server copy hasn't finished uploading yet — " +
-  "if you leave now, you'll need to send the local file to the host another way. Leave anyway?"
+  "The server copy of your recording hasn't finished uploading yet. If you'll need to send the recording " +
+  'to the host another way, save it from this page before you leave. Leave anyway?'
 
-export function deriveExitGuard({ hasActiveLocalRecording, hasIncompleteServerCopyUpload }) {
+const REASSURANCE_MESSAGE =
+  "Your recording is backed up automatically — you don't need to send the local file to the host."
+
+export function deriveExitGuard({
+  hasActiveLocalRecording,
+  hasIncompleteServerCopyUpload,
+  serverCopyUploadState
+}) {
   if (hasActiveLocalRecording) {
     return { blocking: true, severity: 'recording', message: RECORDING_MESSAGE }
   }
   if (hasIncompleteServerCopyUpload) {
     return { blocking: true, severity: 'upload', message: UPLOAD_MESSAGE }
   }
-  return { blocking: false, severity: null, message: '' }
+  // Failed copies already got the one-time alert; don't contradict it on leave.
+  if (serverCopyUploadState === 'failed') {
+    return { blocking: false, severity: null, message: '' }
+  }
+  return { blocking: false, severity: 'reassurance', message: REASSURANCE_MESSAGE }
 }
 
 const INCOMPLETE_UPLOAD_STATES = new Set(['uploading', 'catching_up'])

@@ -1,63 +1,51 @@
 # 01: Search, enter, and original created date
 
-**Read first:** `.scratch/dashboard-room-management/README.md` (product
-locks + definition of done) and CONTEXT.md **Usage Dashboard**.
+**Read first:** `.scratch/dashboard-room-management/README.md` and
+CONTEXT.md **Usage Dashboard**.
 
-**What to build:** From the Usage Dashboard table, a host can **filter
-rooms by name or slug**, **open a room that still exists**, and see each
-row's **original creation date**. No delete, no unlock, no guest-lock
-behaviour in this ticket.
+**Module:** start `src/lib/home/dashboard-rooms.js`. This ticket adds
+only `filterRooms` and `formatCreatedAt`. No lock, no selection, no
+delete. `UsageDashboardStats.svelte` calls those two functions; it does
+not keep a second copy of the filter.
 
-The aggregation payload already carries `createdAt`; the table just does
-not show it and room names are plain text. Search is client-side over
-that loaded list.
+**What the host can do:** filter the loaded table by name or slug, open
+a room that still exists, and read each row's original creation date.
 
-**Where to look:** Usage Dashboard stats table and `getUsageDashboard`.
-Home Playwright helpers already create rooms and unlock the site gate.
-Existing e2e rooms are named `E2E …` and may be hidden from the table when
-`HIDE_TEST_ROOMS_IN_DASHBOARD` is on — specs for this line must still be
-able to **see the rooms they create** (name them so they show, or drive
-the flag in the test env the same way other dashboard tests would need).
+`getUsageDashboard` already returns `createdAt`. Wire it. Do not fetch
+again.
 
-**TDD seams (write the failing test first, then the code):**
+**Seams (one failing test, then the code that passes it):**
 
-1. Dashboard payload: every room row includes a numeric `createdAt` that
-   matches the room's insert time (already true — lock it with an
-   assertion so later tickets cannot "fix" lock by rewriting it).
-2. Table: given a fixture list, filtering by a substring of **name** or
-   **slug** shows only matches; empty query shows all; no matches shows
-   an empty/honest state, not a broken table. Extract the filter so it
-   is unit-tested without mounting the whole page.
-3. Enter: the room name (or a dedicated control) is a real navigation to
-   that room's URL. Prefer a unit/component assertion on the href, then
-   e2e for the round trip.
+1. `filterRooms` — fixture rows, not the page. A substring of name
+   matches. A substring of slug matches. `'POD'` matches `'Podcast'`.
+   `''` and `'   '` return every row. `'zzz'` returns `[]`.
+2. `formatCreatedAt(Date.UTC(2026, 0, 15, 14, 5))` is the literal
+   `'2026-01-15 14:05 UTC'`.
+3. The room name in the table is a link to `/rec/{slug}`. Assert the
+   href. Playwright does the round trip.
 
-**Blocked by:** None (can start immediately).
+**Blocked by:** none.
 
-**Hands off to later tickets:** Keep row identity as `slug`. Do not cram
-checkboxes, lock status, or action menus into this ticket. If the table
-component starts absorbing search + formatting, split formatting/filter
-into a small module now — later tickets will attach unlock, delete, and
-status to the same rows.
+**Leaves for later:** row identity stays `slug`. No checkboxes, lock
+status, or action menus. `filterRooms` returns the same room objects it
+was given, so a later ticket can select by slug without a new filter.
 
 **Status:** ready-for-agent
 
-- [ ] Created date column shows the original insert time (human-readable,
-      unambiguous), sourced from `createdAt` / `created_at`, not "last
-      seen" or "last activity".
-- [ ] Search filters the table by room name and slug; clearing it restores
-      the full list.
-- [ ] A room that exists is enterable from its row and lands on the
-      existing room password/session flow (no new auth).
-- [ ] Filter logic lives in a tested module, not an anonymous inline in
-      the Svelte file.
-- [ ] TDD: red → green on the seams above; no tests of CSS class names or
-      private function names.
-- [ ] Coverage: new filter/empty-query branches covered; `npm run test:coverage`
-      does not drop as a shipping tactic.
-- [ ] E2E: Playwright — create at least two rooms, search down to one,
-      click enter, assert URL `/rec/{slug}`; assert created date is visible
-      on the row. Also: search with no hits shows the empty state.
-- [ ] Docs: CONTEXT.md **Usage Dashboard** mentions search, enter, and
-      created date on the per-room table. README of this scratch folder
-      stays the source of locked decisions.
+- [ ] Created date column is `formatCreatedAt(room.createdAt)`.
+- [ ] Search uses `filterRooms`. Clearing it shows the full list.
+- [ ] No matches shows "No rooms match". A dashboard with no rooms still
+      shows "No rooms yet".
+- [ ] Entering a row lands on `/rec/{slug}` and the existing password
+      flow. No new auth.
+- [ ] TDD on the three seams above.
+- [ ] Coverage includes empty query, whitespace query, name hit, slug
+      hit, and no hit.
+- [ ] E2E: create two rooms whose names are not prefixed `E2E ` (so
+      `HIDE_TEST_ROOMS_IN_DASHBOARD` does not hide them), search down to
+      one, follow the link, assert `/rec/{slug}`, assert the UTC created
+      date on the row. Search with no hits shows "No rooms match".
+- [ ] Docs: CONTEXT.md **Usage Dashboard** gains one sentence: the
+      per-room table can be filtered by name or slug, each row links to
+      its room, and each row shows the room's original creation date in
+      UTC.

@@ -1,8 +1,9 @@
 <script>
   // Post-stop, this-participant-only blocking modal (ticket 07). Shown once
-  // *this* participant's own local recording has fully stopped (the WAV is
-  // already saved to disk) but their own server-copy convenience upload
-  // hasn't finished uploading/finalizing yet. This is not the sidebar's
+  // *this* participant's own local recording has fully stopped (the take
+  // is kept in this browser) but their own server-copy convenience upload
+  // hasn't finished uploading/finalizing yet. It covers the room, so it
+  // carries its own Save for that take. This is not the sidebar's
   // all-participants view (ticket 06) — it only ever watches the upload the
   // page just started for its own recording.
   //
@@ -12,6 +13,8 @@
   // there is no explicit close() to call here.
   export let open = false;
   export let percent = 0;
+  export let take = null; // the unsaved take that just stopped, if still kept here
+  export let onSave = () => {};
 </script>
 
 {#if open}
@@ -19,9 +22,8 @@
     <div class="wait-card">
       <h2 id="wait-title">Finishing your server copy&hellip;</h2>
       <p class="wait-hint">
-        Your recording is already saved on this device — that file is safe no
-        matter what happens next. This is just the convenience copy still
-        making its way to the server.
+        Your recording is kept in this browser. This is just the convenience
+        copy still making its way to the server.
       </p>
 
       <div class="wait-progress" role="progressbar" aria-valuenow={percent} aria-valuemin="0" aria-valuemax="100">
@@ -30,9 +32,11 @@
       <div class="wait-percent">{percent}%</div>
 
       <p class="wait-note">
-        If you need to leave before this finishes, you can still send the
-        local file to the host another way — leaving won't lose your
-        recording.
+        If you need to leave before this finishes, save your recording first
+        so you can send it to the host another way.
+        {#if take}
+          <a class="wait-save" href={take.url} download={take.name} on:click={() => onSave(take)}>Save recording</a>
+        {/if}
       </p>
     </div>
   </div>
@@ -99,5 +103,11 @@
     margin: 20px 0 0;
     padding-top: 16px;
     border-top: 1px solid var(--border, #2a2a2e);
+  }
+
+  .wait-save {
+    display: block;
+    margin-top: 10px;
+    font-weight: 600;
   }
 </style>

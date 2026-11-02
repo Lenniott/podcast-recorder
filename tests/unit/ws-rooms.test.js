@@ -18,6 +18,7 @@ vi.mock('../../src/lib/server/auth.js', () => ({
 
 import { getActiveRoomBySlug } from '../../src/lib/server/db.js'
 import { setupWss, _resetRooms } from '../../src/lib/server/ws-rooms.js'
+import { createRecordingSession as createRoomRecordingClient } from '../../src/lib/recording/synced-recording-session.js'
 import { mockWs, mockWss, join } from './ws-test-helpers.js'
 import {
   encodeInt16PcmBase64,
@@ -174,6 +175,51 @@ describe('setupWss — connection handling', () => {
     expect(clap.timestamp).toMatch(/^\d{4}-/)
     expect(typeof clap.triggerAtMs).toBe('number')
     expect(clap.triggerAtMs).toBeGreaterThan(1000)
+    nowSpy.mockRestore()
+  })
+
+  it('take_marker is a clap-shaped broadcast with a 3000ms lead', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'take_marker' }))
+    const hostEv = ws1.sent.find(m => m.type === 'take_marker')
+    const guestEv = ws2.sent.find(m => m.type === 'take_marker')
+    expect(hostEv.from).toBe('Host')
+    expect(hostEv.triggerAtMs).toBe(4000)
+    expect(guestEv.triggerAtMs).toBe(4000)
+    nowSpy.mockRestore()
+  })
+
+  it('an end-edge take_marker is broadcast as the tail with a 2000ms lead; no edge stays the 3000ms start', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    const ws1 = mockWs()
+    const ws2 = mockWs()
+    wss.connect(ws1, 'room1'); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+
+    ws1.emit('message', JSON.stringify({ type: 'take_marker', edge: 'end' }))
+    const hostTail = ws1.sent.find(m => m.type === 'take_marker')
+    const guestTail = ws2.sent.find(m => m.type === 'take_marker')
+    expect(hostTail.edge).toBe('end')
+    expect(hostTail.triggerAtMs).toBe(3000)
+    expect(guestTail.edge).toBe('end')
+    expect(guestTail.triggerAtMs).toBe(3000)
+
+    ws1.sent.length = 0
+    ws2.sent.length = 0
+    ws1.emit('message', JSON.stringify({ type: 'take_marker' }))
+    const guestStart = ws2.sent.find(m => m.type === 'take_marker')
+    expect(guestStart.edge).toBeUndefined()
+    expect(guestStart.triggerAtMs).toBe(4000)
+
+    ws2.sent.length = 0
+    ws1.emit('message', JSON.stringify({ type: 'take_marker', edge: 'start' }))
+    const labeledStart = ws2.sent.find(m => m.type === 'take_marker')
+    expect(labeledStart.edge).toBeUndefined()
+    expect(labeledStart.triggerAtMs).toBe(4000)
     nowSpy.mockRestore()
   })
 
@@ -352,6 +398,37 @@ describe('setupWss — connection handling', () => {
     ws2.emit('message', JSON.stringify({ type: 'recording_check', open: true }))
     const afterResync = guest.sent.filter(m => m.type === 'presence').at(-1)
     expect(afterResync.peers.find(p => p.name === 'Host').checking).toBe(true)
+  })
+
+  it('correlated check actions advance authoritative turns and replay cannot roll them backwards', () => {
+    const ws1 = mockWs(), ws2 = mockWs()
+    wss.connect(ws1, 'room1', { asHost: true }); join(ws1, 'Host', 'c1')
+    wss.connect(ws2, 'room1'); join(ws2, 'Guest', 'c2')
+    ws1.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+    const snapshot = ws => ws.sent.filter(m => m.type === 'recording_session').at(-1).check
+    const initial = snapshot(ws1)
+    expect(initial.turn).toBe('host')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', ...initial, action: 'confirm', open: false }))
+    expect(snapshot(ws2).turn).toBe('guest')
+    ws1.emit('message', JSON.stringify({ type: 'recording_check', ...initial, action: 'reject', open: true }))
+    expect(snapshot(ws1).turn).toBe('guest')
+    ws2.emit('message', JSON.stringify({ type: 'recording_check', ...snapshot(ws2), action: 'confirm', open: false }))
+    expect(snapshot(ws1).turn).toBe('passed')
+    expect(ws1.sent.filter(m => m.type === 'presence').at(-1).check.turn).toBe('passed')
+  })
+
+  it('old-session and unfinished-round marker requests cannot schedule a new take', () => {
+    const ws = mockWs()
+    wss.connect(ws, 'room1', { asHost: true }); join(ws, 'Host', 'c1')
+    ws.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+    const current = ws.sent.filter(m => m.type === 'recording_session').at(-1).check
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: 'old', roundId: current.roundId }))
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: current.sessionId, roundId: current.roundId }))
+    expect(ws.sent.filter(m => m.type === 'take_marker')).toHaveLength(0)
+    ws.emit('message', JSON.stringify({ type: 'recording_check', ...current, action: 'confirm' }))
+    ws.emit('message', JSON.stringify({ type: 'take_marker', sessionId: current.sessionId, roundId: current.roundId }))
+    expect(ws.sent.filter(m => m.type === 'take_marker')).toHaveLength(1)
+    expect(ws.sent.find(m => m.type === 'take_marker').sessionId).toBe(current.sessionId)
   })
 
   it('recording_check_preview is relayed to the other peer with the sender clientId and is not stored', () => {
@@ -554,4 +631,144 @@ describe('setupWss — transcript_activity (interim-speech "something\'s coming"
       active: true
     })
   })
+})
+
+describe('setupWss — authoritative room recording', () => {
+  let wss, host, guest
+  const command = (socket, message) => socket.emit('message', JSON.stringify(message))
+  const state = socket => socket.sent.filter(message => message.type === 'recording_session').at(-1)
+  beforeEach(() => {
+    _resetRooms()
+    wss = mockWss()
+    setupWss(wss)
+    getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+    host = mockWs(); guest = mockWs()
+    wss.connect(host, 'room1', { asHost: true }); join(host, 'Host', 'c1')
+    wss.connect(guest, 'room1'); join(guest, 'Guest', 'c2')
+    host.sent.length = 0; guest.sent.length = 0
+  })
+
+  it('a guest starts the room while alone, and a host joining that room starts the same session', async () => {
+    _resetRooms()
+    const server = mockWss()
+    setupWss(server)
+    function participant(name, id, asHost = false) {
+      const socket = mockWs()
+      let state = 'idle'
+      let peers = []
+      const client = createRoomRecordingClient({
+        send: message => socket.emit('message', JSON.stringify(message)),
+        startLocal: async () => { state = 'recording' },
+        stopLocal: async () => { state = 'idle' },
+        getRecordingState: () => state,
+        isHost: () => asHost,
+        getWsStatus: () => 'connected',
+        isHostPresent: () => peers.some(peer => peer.isHost && peer.clientId !== id)
+      })
+      socket.send = data => {
+        const message = JSON.parse(data)
+        socket.sent.push(message)
+        if (message.type === 'presence') peers = message.peers
+        void client.onMessage(message)
+      }
+      server.connect(socket, 'room1', { asHost })
+      join(socket, name, id)
+      return { client, socket, get state() { return state } }
+    }
+    const guest = participant('Guest', 'guest')
+    await guest.client.onToggle()
+    const host = participant('Host', 'host', true)
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(guest.state).toBe('recording')
+    expect(host.state).toBe('recording')
+    expect(host.client.phase()).toBe('recording')
+  })
+
+
+  it('acknowledges host start and stop to both browsers from the same room state', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    expect(state(host)).toEqual(state(guest))
+    expect(state(host)).toMatchObject({ phase: 'recording', initialized: true, hostClientId: 'c1', request: null })
+    command(host, { type: 'recording_session', phase: 'idle' })
+    expect(state(host)).toEqual(state(guest))
+    expect(state(host).phase).toBe('idle')
+  })
+
+  it('a guest cannot bypass a present host with a direct room-state command', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    command(guest, { type: 'recording_session', phase: 'idle' })
+    expect(guest.sent).toContainEqual({ type: 'error', message: 'Only the host can control the recording session.' })
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('a guest cannot bypass host approval by sending an end marker directly', () => {
+    command(host, { type: 'recording_session', phase: 'recording' })
+    command(guest, { type: 'take_marker', edge: 'end' })
+    expect(host.sent.filter(message => message.type === 'take_marker')).toEqual([])
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('stores a guest request without starting capture and replays it on reconnect', () => {
+    command(guest, { type: 'recording_session_request', action: 'start' })
+    expect(state(host)).toMatchObject({ phase: 'idle', request: { action: 'start', clientId: 'c2', from: 'Guest' } })
+    expect(state(guest)).toEqual(state(host))
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    expect(state(rejoining)).toEqual(state(guest))
+    command(rejoining, { type: 'recording_session_request', action: 'dismissed' })
+    expect(state(guest).request).toBeNull()
+    expect(state(guest).phase).toBe('idle')
+    expect(guest.sent).toContainEqual({ type: 'recording_session_request', action: 'dismissed', from: 'Host', clientId: 'c1' })
+  })
+
+  it.each(['close', 'error'])('host %s transfers control and applies the pending start', event => {
+    command(guest, { type: 'recording_session_request', action: 'start' })
+    host.emit(event)
+    expect(state(guest)).toMatchObject({ phase: 'recording', hostClientId: null, request: null })
+    command(guest, { type: 'recording_session', phase: 'idle' })
+    expect(state(guest).phase).toBe('idle')
+  })
+
+  it('ignores recording commands from a socket replaced during reconnect', () => {
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    command(rejoining, { type: 'recording_session', phase: 'recording' })
+    command(host, { type: 'recording_session', phase: 'idle' })
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('a stale reconnect phase cannot overwrite the current room phase', () => {
+    host.emit('close')
+    command(guest, { type: 'recording_session', phase: 'recording' })
+    const rejoining = mockWs()
+    wss.connect(rejoining, 'room1', { asHost: true }); join(rejoining, 'Host', 'c1')
+    command(rejoining, { type: 'recording_session_sync', phase: 'idle' })
+    expect(state(rejoining).phase).toBe('recording')
+    expect(state(guest).phase).toBe('recording')
+  })
+
+  it('ignores invalid phases without initializing a room recording', () => {
+    command(host, { type: 'recording_session', phase: 'paused' })
+    expect(state(guest)).toBeUndefined()
+    command(host, { type: 'recording_session_sync', phase: 'idle' })
+    expect(state(guest)).toMatchObject({ phase: 'idle', initialized: true })
+  })
+})
+
+it('the same recording session and round survive all sockets briefly disconnecting', () => {
+  _resetRooms()
+  const wss = mockWss(); setupWss(wss)
+  getActiveRoomBySlug.mockReturnValue({ slug: 'room1', password_hash: 'mock-hash' })
+  const first = mockWs()
+  wss.connect(first, 'room1', { asHost: true }); join(first, 'Host', 'c1')
+  first.emit('message', JSON.stringify({ type: 'recording_session', phase: 'recording' }))
+  const original = first.sent.filter(m => m.type === 'recording_session').at(-1)
+  first.emit('close')
+  const next = mockWs()
+  wss.connect(next, 'room1', { asHost: true }); join(next, 'Host', 'c1')
+  next.emit('message', JSON.stringify({ type: 'recording_session_sync', phase: 'recording' }))
+  const restored = next.sent.filter(m => m.type === 'recording_session').at(-1)
+  expect(restored.sessionId).toBe(original.sessionId)
+  expect(restored.check.roundId).toBe(original.check.roundId)
+  _resetRooms()
 })

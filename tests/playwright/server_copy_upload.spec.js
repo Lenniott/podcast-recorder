@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFileSync, statSync } from 'fs'
-import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow } from './helpers.js'
+import { stubYouTubeApi, createRoom, joinAsGuest, passRecordingCheck, expandPresenceTable, presenceRow, stopAsHost, closeSavePrompt, startGuestTakeWithHost, stopViaGuestRequest } from './helpers.js'
 
 /**
  * Server-copy upload/download, end to end (ticket 13). The unit tests
@@ -152,10 +152,7 @@ test('server copy percent pill progresses on both browsers and reaches complete 
   // progress" assertion below nearly impossible to actually observe.
   await slowServerCopyChunks(guest, 220)
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest) // clears .check-overlay so Stop Recording is clickable later
+  await startGuestTakeWithHost(host, guest)
 
   // Real (fake-device) audio capture writes an 8192-sample chunk roughly
   // every ~170ms (see static/worklet/recorder-processor.js's BUFFER_SIZE).
@@ -184,12 +181,12 @@ test('server copy percent pill progresses on both browsers and reaches complete 
   expect(samplesHost.some((p) => p !== null && p < 100)).toBe(true)
   expect(samplesGuest.some((p) => p !== null && p < 100)).toBe(true)
 
-  await guest.getByRole('button', { name: 'Stop Recording' }).click()
-  // Generous timeout: stopRecording() drains captureWriter's queued writes
+  await stopViaGuestRequest(host, guest)
+  // Generous timeout: stopRecording() drains the capture session's queued writes
   // and patches the WAV header before recordingState flips back to idle —
   // on this machine that's comfortably under a second, but a loaded/cold
   // sandbox can push it well past Playwright's 5s default (observed).
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
 
   await expect(guestPeerRow(host).locator('[data-testid="server-copy-line"]')).toHaveAttribute(
     'data-copy-state',
@@ -225,18 +222,20 @@ test('post-stop wait modal shows a percentage and auto-closes once the copy comp
   // ends in `complete`, not `failed`.
   await slowServerCopyChunks(guest, 350)
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest)
+  await startGuestTakeWithHost(host, guest)
   await guest.waitForTimeout(1500) // let a handful of chunks queue up behind the slow route
-  await guest.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopViaGuestRequest(host, guest)
 
   const waitModal = guest.locator('.wait-overlay')
+  // The ask to save comes first and the wait modal never sits in front of it.
+  await expect(guest.getByTestId('local-copy-save-prompt')).toContainText('server copy is still uploading', { timeout: 20_000 })
+  await expect(waitModal).toBeHidden()
+  await closeSavePrompt(guest)
   // Generous timeout: the modal only renders once recordingState flips to
   // 'idle', which happens after stopRecording()'s writer-drain + WAV-header
   // patch settle (same sandbox-timing note as the happy-path spec above).
   await expect(waitModal).toBeVisible({ timeout: 20_000 })
+  await expect(waitModal.getByRole('link', { name: 'Save recording' })).toBeVisible()
   await expect(waitModal.locator('.wait-percent')).toHaveText(/\d+%/)
 
   // Auto-close: the modal has no explicit close button (see
@@ -271,12 +270,10 @@ test('incomplete-upload exit warning is softer than the active-recording warning
   // "upload" severity (see $lib/recording/exit-guard.js).
   await slowServerCopyChunks(guest, 350)
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest)
+  await startGuestTakeWithHost(host, guest)
   await guest.waitForTimeout(1500)
-  await guest.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopViaGuestRequest(host, guest)
+  await closeSavePrompt(guest)
   // Generous timeout — see the wait-modal spec's identical note above.
   await expect(guest.locator('.wait-overlay')).toBeVisible({ timeout: 20_000 })
 
@@ -304,8 +301,8 @@ test('incomplete-upload exit warning is softer than the active-recording warning
 
   await guest.getByTestId('leave-room-link').click()
 
-  expect(message).toContain("recording is already saved on this device")
-  expect(message).toContain('send the local file to the host another way')
+  expect(message).toContain('save it from this page before you leave')
+  expect(message).toContain('send the recording to the host another way')
   expect(message).not.toContain('WAV is finalized')
   await expect(guest).toHaveURL(roomUrl)
 
@@ -326,14 +323,15 @@ test('host can download a completed server copy; a guest cannot see the control'
   await expandPresenceTable(host)
   await expandPresenceTable(guest)
 
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
-  await passRecordingCheck(guest)
+  await startGuestTakeWithHost(host, guest)
   await guest.waitForTimeout(2000) // a few real seconds of audio to make a non-trivial WAV
-  await guest.getByRole('button', { name: 'Stop Recording' }).click()
+  await stopViaGuestRequest(host, guest)
   // Generous timeout — see the happy-path spec's identical note above.
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
+  // Both peers get the ask-to-save; the host's overlay would intercept the
+  // download link click if left up.
+  await closeSavePrompt(host)
+  await closeSavePrompt(guest)
 
   const guestClientId = await guest.evaluate(() => sessionStorage.getItem('pr_clientId'))
 
@@ -393,10 +391,6 @@ test('host and guest completed server copies contain every clap marker from the 
   await host.getByRole('button', { name: 'Start Recording' }).click()
   await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(host)
-
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
-  await guest.getByRole('button', { name: 'Start Recording' }).click()
-  await expect(guest.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
   await passRecordingCheck(guest)
 
   await expect(peerRow(host, 'Host')).toHaveAttribute('data-recording', 'true', { timeout: 15_000 })
@@ -413,12 +407,10 @@ test('host and guest completed server copies contain every clap marker from the 
   // Stop both while the last marker is still recent. This specifically
   // protects the final worklet chunk: stopRecording() must keep accepting
   // chunks during its short "stopping" grace window before finalize.
-  await Promise.all([
-    host.getByRole('button', { name: 'Stop Recording' }).click(),
-    guest.getByRole('button', { name: 'Stop Recording' }).click()
-  ])
+  await stopAsHost(host)
   await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
-  await expect(guest.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+  await expect(guest.getByRole('button', { name: 'Request to start recording' })).toBeEnabled({ timeout: 20_000 })
+  await closeSavePrompt(host)
 
   await expect(peerRow(host, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
     'data-copy-state',
@@ -460,8 +452,9 @@ test('host files modal keeps older takes downloadable after a second recording',
     await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
     await passRecordingCheck(host)
     await host.waitForTimeout(durationMs)
-    await host.getByRole('button', { name: 'Stop Recording' }).click()
+    await stopAsHost(host)
     await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled({ timeout: 20_000 })
+    await closeSavePrompt(host)
     await expect(peerRow(host, 'Host').locator('[data-testid="server-copy-line"]')).toHaveAttribute(
       'data-copy-state',
       'complete',

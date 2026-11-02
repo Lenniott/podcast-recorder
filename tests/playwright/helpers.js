@@ -41,23 +41,6 @@ export async function closeLiveSockets(page) {
  */
 export async function stubYouTubeApi(page) {
   await page.addInitScript(() => {
-    // Always stub — Chromium now ships File System Access, and a real picker
-    // would abort startRecording() (AbortError) so the record button never flips.
-    // `seek` matters: stopRecording() calls fileWritable.seek(0) to patch the
-    // WAV header with the real data size once recording stops. Real
-    // FileSystemWritableFileStream has it; earlier versions of this stub
-    // didn't, which went unnoticed because no spec had ever actually clicked
-    // Stop Recording via the UI button until server_copy_upload.spec.js —
-    // without it, seek() throws, stopRecording()'s promise rejects, and
-    // recordingState gets stuck at 'stopping' ("Finishing…") forever.
-    window.showSaveFilePicker = async () => ({
-      createWritable: async () => ({
-        write: async () => {},
-        seek: async () => {},
-        close: async () => {}
-      })
-    })
-
     class FakePlayer {
       constructor(_el, opts) {
         this._opts = opts
@@ -215,10 +198,14 @@ export async function openCreateRoom(page) {
  * preview — so this retries Listen until a real chunk exists rather than
  * assuming one already has, wrapped in `expect(...).toPass()` rather than
  * a fixed sleep.
+ *
+ * On a synced two-peer start the checks are sequenced: the guest overlay
+ * is not shown until the host confirms. Call this on the host first.
  */
 export async function passRecordingCheck(page) {
   const overlay = page.getByRole('dialog', { name: 'Test your microphone?' })
   await expect(overlay).toBeVisible()
+  await expect(page.getByTestId('check-quiet')).toHaveCount(0)
   const listenBtn = page.getByRole('button', { name: /Listen back/ })
   const confirmBtn = page.getByRole('button', { name: /Yes, continue/ })
   await expect(async () => {
@@ -227,6 +214,58 @@ export async function passRecordingCheck(page) {
   }).toPass({ timeout: 10_000 })
   await confirmBtn.click()
   await expect(overlay).toBeHidden()
+}
+
+/**
+ * A connected host's Stop asks "stop for both?" first, then the file closes
+ * on the tail Take Marker about two seconds later — even with no guest in
+ * the room. Callers still wait for Start Recording themselves.
+ */
+export async function stopAsHost(page) {
+  await page.getByRole('button', { name: 'Stop Recording' }).click()
+  await page.getByRole('button', { name: 'Stop for both' }).click()
+}
+
+/**
+ * Guest Start while the host is in the room asks the host. Accepting runs
+ * the host's synced start (both record).
+ */
+export async function startViaGuestRequest(host, guest) {
+  await guest.getByRole('button', { name: 'Request to start recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Waiting for host…' })).toBeDisabled()
+  const dialog = host.getByTestId('guest-record-request')
+  await expect(dialog).toBeVisible()
+  await host.getByRole('button', { name: 'Yes, start' }).click()
+  await expect(host.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
+}
+
+/** Guest asks → host accepts → both Check Turns pass. Ready to record. */
+export async function startGuestTakeWithHost(host, guest) {
+  await startViaGuestRequest(host, guest)
+  await passRecordingCheck(host)
+  await passRecordingCheck(guest)
+}
+
+/**
+ * Guest Stop while the host is present asks the host. If the host is in a
+ * synced take, accepting is confirmation and schedules the shared tail.
+ */
+export async function stopViaGuestRequest(host, guest) {
+  await guest.getByRole('button', { name: 'Request to stop recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Waiting for host…' })).toBeDisabled()
+  const dialog = host.getByTestId('guest-stop-request')
+  await expect(dialog).toBeVisible()
+  await host.getByRole('button', { name: 'Yes, stop' }).click()
+  await expect(host.getByTestId('stop-confirm')).toHaveCount(0)
+}
+
+export async function expectCheckQuiet(page, whoseTurn) {
+  const copy = whoseTurn === 'guest'
+    ? "It's the guest's turn, please stay quiet."
+    : "It's the host's turn, please stay quiet."
+  await expect(page.getByTestId('check-quiet')).toHaveText(copy)
+  await expect(page.getByRole('dialog', { name: 'Test your microphone?' })).toHaveCount(0)
 }
 
 export async function createRoom(page, { name, password, hostDisplayName = 'Host', guestAiAllowed = false }) {
@@ -459,7 +498,58 @@ export function presenceRow(page, name) {
  * responding (the two are separate processes) — the room's own 3s
  * auto-reconnect needs a couple of cycles to land in that window.
  */
+/**
+ * After display name, join shows the mic step, then the room. This walks
+ * that step when it's present so every spec lands on Start Recording.
+ */
+export async function completeJoinIfNeeded(page) {
+  const micContinue = page.getByRole('button', { name: 'Continue to room' })
+  const roomTabs = page.locator('.room-tabs')
+  await expect(micContinue.or(roomTabs)).toBeVisible({ timeout: 30_000 })
+  // After a refresh the server-rendered mic step can flash before the tab's
+  // own "mic confirmed" flag sends it straight back into the room. A click
+  // on the server-rendered button before hydration is silently dropped, so
+  // keep clicking until the step is actually gone.
+  if (await micContinue.isVisible()) {
+    await expect(async () => {
+      if (await micContinue.isVisible()) await micContinue.click({ timeout: 1_000 }).catch(() => {})
+      await expect(micContinue).toBeHidden({ timeout: 1_000 })
+    }).toPass({ timeout: 30_000 })
+  }
+}
+
+/**
+ * Every Local Copy take this page's browser context holds in its private
+ * storage, across rooms, in take order. Real storage, not a stub: each
+ * `browser.newPage()` is its own context, so pages never see each other's.
+ */
+export async function localCopyFiles(page) {
+  return page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory()
+    let base
+    try {
+      base = await root.getDirectoryHandle('local-copy')
+    } catch {
+      return []
+    }
+    const names = []
+    for await (const room of base.values()) {
+      if (room.kind !== 'directory') continue
+      for await (const file of room.values()) if (file.kind === 'file') names.push(file.name)
+    }
+    return names.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  })
+}
+
+/** A real stop asks to save the take; "Later" leaves it listed and gets the room back. */
+export async function closeSavePrompt(page) {
+  const prompt = page.getByTestId('local-copy-save-prompt')
+  await prompt.getByRole('button', { name: 'Later' }).click({ timeout: 20_000 })
+  await expect(prompt).toBeHidden()
+}
+
 export async function roomTabsReady(page) {
+  await completeJoinIfNeeded(page)
   // Wait on RoomTabs' own `data-ws-ready` flag (set the instant the first
   // tab_state WS message is applied) rather than the Notes surface's
   // rendered visibility — it can be attached-but-not-yet-laid-out
