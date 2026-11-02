@@ -507,11 +507,14 @@ export async function completeJoinIfNeeded(page) {
   const roomTabs = page.locator('.room-tabs')
   await expect(micContinue.or(roomTabs)).toBeVisible({ timeout: 30_000 })
   // After a refresh the server-rendered mic step can flash before the tab's
-  // own "mic confirmed" flag sends it straight back into the room.
+  // own "mic confirmed" flag sends it straight back into the room. A click
+  // on the server-rendered button before hydration is silently dropped, so
+  // keep clicking until the step is actually gone.
   if (await micContinue.isVisible()) {
-    await micContinue.click({ timeout: 5_000 }).catch(async (error) => {
-      if (await micContinue.isVisible()) throw error
-    })
+    await expect(async () => {
+      if (await micContinue.isVisible()) await micContinue.click({ timeout: 1_000 }).catch(() => {})
+      await expect(micContinue).toBeHidden({ timeout: 1_000 })
+    }).toPass({ timeout: 30_000 })
   }
 }
 
