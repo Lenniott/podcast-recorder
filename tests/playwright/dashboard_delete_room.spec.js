@@ -11,6 +11,10 @@ test('host can delete a room from the dashboard after confirming', async ({ page
   const roomUrl = await createRoom(page, { name, password: 'delete-pass' })
   const slug = new URL(roomUrl).pathname.split('/').pop()
 
+  // Keep the dashboard nonempty so the post-delete search proves "No rooms
+  // match", independently of rooms left behind by another scenario.
+  await createRoom(page, { name: `Dash Retained ${stamp}`, password: 'keep-pass' })
+
   await page.goto('/')
   await unlockIfNeeded(page)
 
@@ -32,6 +36,7 @@ test('host can delete a room from the dashboard after confirming', async ({ page
   await expect(dialog).toContainText(name)
 
   await page.getByRole('button', { name: 'Delete room', exact: true }).click()
+  await expect(dialog).toBeHidden()
 
   await page.getByRole('textbox', { name: 'Search rooms' }).fill(`Delete ${stamp}`)
   await expect(page.getByRole('link', { name, exact: true })).toHaveCount(0)

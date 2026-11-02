@@ -1,8 +1,18 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 // Specs inherit this process env. Playwright does not load .env on its own.
 if (existsSync('.env')) process.loadEnvFile('.env')
+
+// Rooms persist by design. Reusing a DB across runs eventually renders
+// thousands of old fixture rows and makes interaction deadlines meaningless.
+// Export one run directory so the server and fixture-writing workers agree.
+process.env.E2E_DATA_DIR ||= mkdtempSync(join(tmpdir(), 'podcast-recorder-e2e-'))
+mkdirSync(process.env.E2E_DATA_DIR, { recursive: true })
+process.env.E2E_DB_PATH = join(process.env.E2E_DATA_DIR, 'rooms.db')
+process.env.E2E_SERVER_COPY_DIR = join(process.env.E2E_DATA_DIR, 'server-copies')
 
 const PORT = Number(process.env.E2E_PORT || 5173)
 // Vite binds to IPv6 loopback on this machine (::1); 127.0.0.1 will not connect.
@@ -47,14 +57,15 @@ export default defineConfig({
       ? `npx concurrently --kill-others-on-fail "vite dev --port ${PORT} --strictPort" "node --env-file=.env server-ws-dev.js"`
       : 'npm run dev',
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI && !process.env.E2E_PORT,
+    reuseExistingServer: false,
     timeout: 120_000,
     // Open the create-room form without a site gate; isolate e2e rooms from local data.
     env: {
       ...process.env,
       SITE_PASSWORD: '',
       DEV_WS_PORT: process.env.E2E_WS_PORT || process.env.DEV_WS_PORT || '3001',
-      DB_PATH: './data/e2e-rooms.db',
+      DB_PATH: process.env.E2E_DB_PATH,
+      SERVER_COPY_DIR: process.env.E2E_SERVER_COPY_DIR,
       // A serial e2e run creates/joins many rooms in quick succession — far
       // more POSTs per minute than the production rate limiter (20/min) is
       // meant to constrain for a real user. Loosen it for this server only.

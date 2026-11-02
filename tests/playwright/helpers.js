@@ -1,5 +1,8 @@
 import { expect } from '@playwright/test'
 
+export const E2E_DB_PATH = process.env.E2E_DB_PATH
+export const E2E_SERVER_COPY_DIR = process.env.E2E_SERVER_COPY_DIR
+
 /**
  * Keep a handle on live WebSockets so a test can close the room socket
  * without waiting for the Vite proxy to idle-timeout it.
@@ -374,10 +377,8 @@ export async function createCustomPrompt(page, { title, prompt, outputFormat = '
 
 /**
  * Removes one Custom Prompt created by createCustomPrompt above, through
- * the same real UI — e2e cleanup so a repeated local `npm run test:e2e`
- * against the same gitignored e2e-rooms.db doesn't accumulate stale global
- * prompts across runs (unlike a room, a Custom Prompt has no TTL/eviction
- * of its own).
+ * the same real UI. Custom Prompts are global within a run, so cleanup
+ * keeps later scenarios independent even with fresh storage per run.
  */
 export async function deleteCustomPrompt(page, title) {
   await page.goto('/')

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import Database from 'better-sqlite3'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { createRoom, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
+import { E2E_SERVER_COPY_DIR, E2E_DB_PATH, createRoom, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
 
 // Names must not start with "E2E " — that prefix is hidden from the
 // dashboard when HIDE_TEST_ROOMS_IN_DASHBOARD is on.
@@ -36,14 +36,14 @@ test('select-all covers the search results, and bulk unlock opens those rooms', 
   await page.getByRole('checkbox', { name: 'Select all visible rooms' }).click()
   await expect(page.getByRole('link', { name: nameC, exact: true })).toHaveCount(0)
 
-  const db = new Database('./data/e2e-rooms.db')
+  const db = new Database(E2E_DB_PATH)
   try {
     const lockedAt = Date.now() - 13 * 60 * 60 * 1000
     const update = db.prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?')
     for (const slug of [slugA, slugB]) {
       expect(update.run(lockedAt, slug).changes).toBe(1)
-      mkdirSync(join('./data/server-copies', slug), { recursive: true })
-      writeFileSync(join('./data/server-copies', slug, 'hostbulk.wav'), Buffer.alloc(320))
+      mkdirSync(join(E2E_SERVER_COPY_DIR, slug), { recursive: true })
+      writeFileSync(join(E2E_SERVER_COPY_DIR, slug, 'hostbulk.wav'), Buffer.alloc(320))
     }
   } finally {
     db.close()

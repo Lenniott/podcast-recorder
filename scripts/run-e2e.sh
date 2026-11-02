@@ -41,5 +41,5 @@ free_listen_port "$vite_port"
 free_listen_port "$ws_port"
 
 export SITE_PASSWORD="${SITE_PASSWORD-}"
-export DB_PATH="${DB_PATH:-./data/e2e-rooms.db}"
+# playwright.config.js creates fresh SQLite and server-copy paths per run.
 npx playwright test "$@"

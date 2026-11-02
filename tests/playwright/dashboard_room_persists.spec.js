@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import Database from 'better-sqlite3'
-import { createRoom, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
+import { E2E_DB_PATH, createRoom, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
 
 test('an old room stays on the dashboard and can still be opened', async ({ page }) => {
   await stubYouTubeApi(page)
@@ -13,7 +13,7 @@ test('an old room stays on the dashboard and can still be opened', async ({ page
   const slug = new URL(roomUrl).pathname.split('/').filter(Boolean).pop()
 
   const old = Date.now() - 13 * 60 * 60 * 1000
-  const db = new Database('./data/e2e-rooms.db')
+  const db = new Database(E2E_DB_PATH)
   try {
     // A missing guest_lock_at column throws here — that means this server
     // does not have the persist migration yet.

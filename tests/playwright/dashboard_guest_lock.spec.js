@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import Database from 'better-sqlite3'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { createRoom, joinAsGuest, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
+import { E2E_SERVER_COPY_DIR, E2E_DB_PATH, createRoom, joinAsGuest, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
 
 test('guest lock starts after server audio, and Unlock lets a guest back in', async ({ browser }) => {
   const host = await browser.newPage()
@@ -16,7 +16,7 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
   })
   const slug = new URL(roomUrl).pathname.split('/').filter(Boolean).pop()
 
-  const db = new Database('./data/e2e-rooms.db')
+  const db = new Database(E2E_DB_PATH)
   try {
     const before = db.prepare('SELECT created_at FROM rooms WHERE slug = ?').get(slug)
     const info = db.prepare('UPDATE rooms SET guest_lock_at = ? WHERE slug = ?').run(
@@ -35,7 +35,7 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
   await stubYouTubeApi(guest)
   await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
-  mkdirSync(join('./data/server-copies', slug), { recursive: true })
+  mkdirSync(join(E2E_SERVER_COPY_DIR, slug), { recursive: true })
   writeFileSync(join('./data/server-copies', slug, 'e2e-client.wav'), Buffer.from([1, 2, 3, 4]))
 
   await guest.goto(roomUrl)

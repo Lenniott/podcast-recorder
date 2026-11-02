@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { closeSync, ftruncateSync, mkdirSync, openSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { createRoom, joinAsGuest, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
+import { E2E_SERVER_COPY_DIR, createRoom, joinAsGuest, stubYouTubeApi, unlockIfNeeded } from './helpers.js'
 
 const IDLE_CLIENT_ID = 'idleguest01'
 const SHORT_CLIENT_ID = 'shortguest1'
@@ -10,7 +10,7 @@ const SHORT_CLIENT_ID = 'shortguest1'
 const LONG_WAV_BYTES = 44 + 48000 * 2 * 601
 
 function plantServerCopy(slug, clientId, byteSize) {
-  const dir = join('./data/server-copies', slug)
+  const dir = join(E2E_SERVER_COPY_DIR, slug)
   mkdirSync(dir, { recursive: true })
   const fd = openSync(join(dir, `${clientId}.wav`), 'w')
   try {
