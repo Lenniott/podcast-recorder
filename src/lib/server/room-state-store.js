@@ -35,12 +35,11 @@ import { sanitizeBlockList } from '../research/research-blocks.js'
 const DEFAULT_GRACE_MS = 10_000
 
 /**
- * Reads the grace period from `ROOM_STATE_GRACE_MS` (milliseconds) —
- * same injectable-`env`/parse/fallback shape as `room-lifetime.js`'s
- * `getRoomMaxAgeHours`. Not exposed as a config *hours* value like room
- * expiry — this is meant to be tuned in milliseconds, and tuned way down
- * (e.g. the e2e suite sets it to 200ms — see playwright.config.js) so
- * tests never have to sleep through a real 10-second wait.
+ * Reads the grace period from `ROOM_STATE_GRACE_MS` (milliseconds).
+ * A missing or invalid value falls back to 10 seconds. Tuned in
+ * milliseconds, and tuned way down (e.g. the e2e suite sets it to 200ms
+ * — see playwright.config.js) so tests never have to sleep through a
+ * real 10-second wait.
  */
 export function getRoomStateGraceMs(env = process.env) {
   const raw = Number.parseInt(String(env.ROOM_STATE_GRACE_MS || ''), 10)

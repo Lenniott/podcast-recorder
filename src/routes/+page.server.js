@@ -10,6 +10,9 @@ import {
 } from '$lib/server/db.js'
 import { validateCustomPrompt, normalizeOutputFormat } from '$lib/home/custom-prompts.js'
 import { getUsageDashboard } from '$lib/server/usage-dashboard.js'
+import { unlockRoom } from '$lib/server/guest-join.js'
+import { deleteDashboardRoom } from '$lib/server/dashboard-room-delete.js'
+import { unlockRooms, deleteRooms } from '$lib/server/dashboard-room-batch.js'
 import { hashPassword, generateSlug, makeSessionToken, makeHostClaimToken } from '$lib/server/auth.js'
 import { createHmac, timingSafeEqual } from 'crypto'
 
@@ -43,6 +46,16 @@ function isSiteAuthed(cookies) {
   return !env.SITE_PASSWORD || verifySiteToken(cookies.get(SITE_COOKIE))
 }
 
+/**
+ * The site-password gate for dashboard mutations. Unlock and delete helpers
+ * do not take a siteAuthed flag — a caller that skipped this check would
+ * be deleting or unlocking with no password, so the check stays here.
+ */
+function requireSiteAuth(cookies) {
+  if (!isSiteAuthed(cookies)) return fail(403, { error: 'Not authorised.' })
+  return null
+}
+
 async function readCustomPromptForm(request) {
   const data = await request.formData()
   return {
@@ -63,6 +76,7 @@ export async function load({ cookies, url }) {
     siteProtected: !!env.SITE_PASSWORD,
     notFound: url.searchParams.has('notfound'),
     expired: url.searchParams.has('expired'),
+    guestLocked: url.searchParams.has('guestlocked'),
     // Usage Dashboard (see CONTEXT.md) — same page, gated by the same
     // siteAuthed check as the create form, not a separate admin secret.
     // Only computed once past that gate: it's a handful of DB/filesystem
@@ -133,6 +147,46 @@ export const actions = {
     const { id } = await readCustomPromptForm(request)
     if (!id) return fail(400, { promptError: 'Unknown Custom Prompt.' })
     deleteCustomPrompt(id)
+    throw redirect(303, '/')
+  },
+
+  unlock_room: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
+    const data = await request.formData()
+    // Missing rooms are reported on the dashboard instead of looking like
+    // a successful unlock. Delete also returns its existing 404 status.
+    const slug = String(data.get('slug') || '')
+    if (!unlockRoom(slug).ok) return { missingRooms: [slug || '(missing slug)'] }
+    throw redirect(303, '/')
+  },
+
+  delete_room: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
+    const data = await request.formData()
+    const result = deleteDashboardRoom(data.get('slug'))
+    if (!result.ok) return fail(result.status, { missingRooms: [String(data.get('slug') || '(missing slug)')] })
+    throw redirect(303, '/')
+  },
+
+  // Bulk variants of the row actions. Unknown slugs are skipped inside
+  // unlockRooms / deleteRooms and do not abort the rest of the posted set.
+  unlock_rooms: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
+    const data = await request.formData()
+    const result = unlockRooms(data.getAll('slug'))
+    if (result.skipped.length) return { missingRooms: result.skipped }
+    throw redirect(303, '/')
+  },
+
+  delete_rooms: async ({ request, cookies }) => {
+    const denied = requireSiteAuth(cookies)
+    if (denied) return denied
+    const data = await request.formData()
+    const result = deleteRooms(data.getAll('slug'))
+    if (result.skipped.length) return { missingRooms: result.skipped }
     throw redirect(303, '/')
   },
 

@@ -7,6 +7,7 @@
   export let devices = []; // MediaDeviceInfo[]
   export let selectedDeviceId = "";
   export let micPermission = "prompt"; // prompt | granted | denied
+  export let openingMic = false;
   export let audioInitError = "";
   export let micFallback = false;
   export let micFallbackName = "";
@@ -35,39 +36,47 @@
 <div class="mic-panel">
   <div class="field">
     <label for="mic-select">Mic</label>
-    <select
-      id="mic-select"
-      bind:value={selectedDeviceId}
-      on:change={onChangeMic}
-      disabled={devices.length === 0}
-    >
-      {#if devices.length === 0}
-        <option value="">No microphone found</option>
-      {:else}
-        {#each devices as d (d.deviceId)}
-          <option value={d.deviceId}
-            >{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option
+    <div class="mic-select-wrap">
+      <select
+        id="mic-select"
+        bind:value={selectedDeviceId}
+        on:change={onChangeMic}
+        disabled={devices.length === 0}
+        aria-busy={openingMic || (devices.length === 0 && micPermission === "prompt")}
+      >
+        {#if devices.length === 0}
+          <option value=""
+            >{micPermission === "prompt"
+              ? "Looking for microphones…"
+              : "No microphone found"}</option
           >
-        {/each}
+        {:else}
+          {#each devices as d (d.deviceId)}
+            <option value={d.deviceId}
+              >{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option
+            >
+          {/each}
+        {/if}
+      </select>
+      {#if openingMic && devices.length > 0}
+        <p class="muted-text">Opening microphone…</p>
       {/if}
-    </select>
-
-    {#if micPermission === "denied"}
-      <p class="perm-warn">
-        <AlertTriangle /> Mic access denied. Check browser permissions.
-      </p>
-    {/if}
-    {#if audioInitError}
-      <p class="muted-text">{audioInitError}</p>
-    {/if}
-
-    {#if micFallback}
-      <p class="fallback-warn">
-        <AlertTriangle /> Previous microphone had no signal — switched to
-        <strong>{micFallbackName}</strong>. Recording continues. Reconnect it
-        or pick another above.
-      </p>
-    {/if}
+      {#if micPermission === "denied"}
+        <p class="perm-warn">
+          <AlertTriangle /> Mic access denied. Check browser permissions.
+        </p>
+      {/if}
+      {#if audioInitError}
+        <p class="muted-text">{audioInitError}</p>
+      {/if}
+      {#if micFallback}
+        <p class="fallback-warn">
+          <AlertTriangle /> Previous microphone had no signal — switched to
+          <strong>{micFallbackName}</strong>. Recording continues. Reconnect it
+          or pick another above.
+        </p>
+      {/if}
+    </div>
   </div>
   <div class="field">
     <label for="gain-slider"
@@ -113,6 +122,15 @@
     flex-shrink: 0;
   }
 
+  .mic-select-wrap {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+  }
+
   select {
     width: 100%;
     height: 35px;
@@ -138,6 +156,8 @@
     font-size: 12px;
     color: var(--muted);
     margin: 0;
+    text-align: left;
+    line-height: 1.4;
   }
 
   .field {

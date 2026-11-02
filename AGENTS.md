@@ -120,6 +120,26 @@ echo never comes back. It does not wait on the guest. Once closed, a late
 echo must not stop again or clear "the other side may still be
 recording."
 
+## Room age does not delete
+
+There is no expiry helper and no cleanup timer. A room stays listed with
+its original `created_at` until an explicit dashboard delete. Visiting
+`/rec/{slug}` and occupancy must not call `deleteRoom` or redirect
+`/?expired=1` because of age. Do not reintroduce delete-on-age.
+
+`guest_lock_at` is a separate clock (same value as `created_at` on insert;
+a null or non-finite value is read as `created_at` by `guestLockAt`).
+Unlock is the only writer, and it never moves `created_at`.
+
+Guest refusal is only `guestJoinDecision` in `guest-join.js`. The room
+page and the WebSocket both call it. After a guest is actually in
+(authenticated page load or successful WebSocket join), call
+`noteAdmittedGuest`. A refused join, a wrong password, and a host must
+not stamp last access — that stamp clears an inactivity lock. The
+dashboard row uses `anyGuestLocked`: true when any guest decision is a
+refusal, not a hard-coded list of reasons. Server-copy length is
+`serverCopySeconds`. Hosts are never locked.
+
 ## Running things here
 
 - `npm run check:standalone` — confirms `ws-rooms.js` loads under plain Node

@@ -77,7 +77,7 @@ const panelPromptButton = (page, title) => page.locator('.panel-prompt-btn', { h
 
 // A short, unique-enough label per run — Custom Prompts are global,
 // persistent config (not room-scoped), so a fixed title would collide
-// across repeated local runs against the same gitignored e2e-rooms.db.
+// across scenarios sharing the same temporary run database.
 // Kept under CUSTOM_PROMPT_TITLE_MAX_LENGTH (40 chars).
 const suffix = () => String(Date.now()).slice(-6) + String(Math.floor(Math.random() * 1000))
 

@@ -40,23 +40,26 @@ unlock still only moves the guest-lock clock, which is already ticket 03.
 
 **Blocked by:** 03 and 05. Not by 04.
 
-**Status:** ready-for-agent
+**Status:** implemented. See [current behavior and verification](../../../docs/implementation/dashboard-room-management.md).
 
-- [ ] A checkbox per row. Select-all is the filtered list only.
-- [ ] Bulk unlock: selected rooms are open to guests; created dates
+The acceptance list below is retained as the original design; naming
+and behavioral changes are recorded in that implementation note.
+
+- A checkbox per row. Select-all is the filtered list only.
+- Bulk unlock: selected rooms are open to guests; created dates
       unchanged; a missing slug is reported.
-- [ ] Bulk delete: after confirm, selected rooms are gone; unselected
+- Bulk delete: after confirm, selected rooms are gone; unselected
       rows remain; a missing slug does not abort the others.
-- [ ] Cancel leaves every selected room intact.
-- [ ] `unlockGuests` and `deleteRoom` are the calls. No forked copy.
-- [ ] TDD on the seams above. Do not snapshot the table.
-- [ ] Coverage: mixed selection, filter then select-all, empty
+- Cancel leaves every selected room intact.
+- `unlockGuests` and `deleteRoom` are the calls. No forked copy.
+- TDD on the seams above. Do not snapshot the table.
+- Coverage: mixed selection, filter then select-all, empty
       selection, unknown slug among real ones, cancel.
-- [ ] E2E: three rooms; search so two are visible; select-all; the
+- E2E: three rooms; search so two are visible; select-all; the
       hidden room is not part of the action. One spec for bulk unlock
       (created-date text unchanged on the two). One spec for bulk
       delete (those two gone, the hidden one still listed). One spec
       for cancel on bulk delete.
-- [ ] Docs: CONTEXT.md **Usage Dashboard** says the host can select the
+- Docs: CONTEXT.md **Usage Dashboard** says the host can select the
       rooms currently shown and unlock or delete that selection.
       Select-all is the visible rows.

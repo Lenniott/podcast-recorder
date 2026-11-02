@@ -15,6 +15,24 @@ import { once } from 'events'
 import { pipeline } from 'stream/promises'
 import { buildWavHeader } from '../recording/audio-utils.js'
 
+const WAV_HEADER_BYTES = 44
+const PCM_BYTES_PER_SAMPLE = 2
+const DEFAULT_SAMPLE_RATE = 48000
+
+/**
+ * Seconds of audio in one server-copy listing entry. Partial copies already
+ * include a synthetic header in `byteSize` (see listServerCopyFiles). A
+ * missing or invalid sample rate uses 48000, matching getServerCopySampleRate.
+ * Guest lock and the dashboard Recording column both call this.
+ */
+export function serverCopySeconds(file) {
+  const sampleRate = Number.isFinite(file?.sampleRate) && file.sampleRate > 0
+    ? file.sampleRate
+    : DEFAULT_SAMPLE_RATE
+  const byteSize = Number(file?.byteSize) || 0
+  return Math.max(0, byteSize - WAV_HEADER_BYTES) / (sampleRate * PCM_BYTES_PER_SAMPLE)
+}
+
 function serverCopyRoot() {
   return resolve(process.env.SERVER_COPY_DIR || './data/server-copies')
 }

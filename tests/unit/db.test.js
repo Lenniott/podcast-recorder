@@ -3,20 +3,25 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import db, {
-  cleanupExpiredRooms,
   createRoom,
   deleteRoom,
   deleteRoomContent,
   createCustomPrompt,
-  getActiveRoomBySlug,
+  getGuestLastAccess,
   getRoomBySlug,
   listCustomPrompts,
+  listGuestAccess,
+  listRooms,
   loadRoomContent,
+  recordGuestAccess,
   roomExists,
   saveRoomContent,
+  setGuestLockAt,
   updateCustomPrompt,
   _resetDb
 } from '../../src/lib/server/db.js'
+import { guestLockAt } from '../../src/lib/server/guest-join.js'
+import { getUsageDashboard } from '../../src/lib/server/usage-dashboard.js'
 import {
   getServerCopyRoomDir,
   appendServerCopyChunk,
@@ -31,7 +36,6 @@ beforeEach(() => {
   if (serverCopyDir) rmSync(serverCopyDir, { recursive: true, force: true })
   serverCopyDir = join(tmpdir(), `podcast-recorder-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   process.env.SERVER_COPY_DIR = serverCopyDir
-  process.env.ROOM_MAX_AGE_HOURS = '12'
   _resetDb()
 })
 
@@ -71,43 +75,42 @@ describe('roomExists', () => {
     expect(roomExists('nope')).toBe(false)
   })
 
-  it('returns false for an expired room and removes its metadata and server copies', () => {
+  it('returns true for an old room and leaves its metadata and server copies in place', () => {
     createRoom(ROOM)
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(1000, 1000, ROOM.slug)
     const copyDir = getServerCopyRoomDir(ROOM.slug)
     mkdirSync(copyDir, { recursive: true })
     writeFileSync(join(copyDir, 'dummy.partial'), 'not audio')
 
-    expect(roomExists(ROOM.slug)).toBe(false)
-    expect(getRoomBySlug(ROOM.slug)).toBeNull()
-    expect(existsSync(copyDir)).toBe(false)
+    expect(roomExists(ROOM.slug)).toBe(true)
+    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug, created_at: 1000 })
+    expect(existsSync(copyDir)).toBe(true)
   })
 })
 
-describe('active room cleanup', () => {
-  it('returns active rooms without deleting them', () => {
-    createRoom(ROOM)
-    expect(getActiveRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug })
-    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug })
-  })
-
-  it('cleanupExpiredRooms deletes only expired rooms and their server copies', () => {
+describe('a room stays until deleteRoom', () => {
+  it('keeps an old room, its server copies, and its created date', () => {
     createRoom(ROOM)
     createRoom({ ...ROOM, slug: 'freshroom2' })
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
+    const createdAt = 1000
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(createdAt, createdAt, ROOM.slug)
 
-    const expiredDir = getServerCopyRoomDir(ROOM.slug)
+    const oldDir = getServerCopyRoomDir(ROOM.slug)
     const freshDir = getServerCopyRoomDir('freshroom2')
-    mkdirSync(expiredDir, { recursive: true })
+    mkdirSync(oldDir, { recursive: true })
     mkdirSync(freshDir, { recursive: true })
-    writeFileSync(join(expiredDir, 'dummy.partial'), 'not audio')
+    writeFileSync(join(oldDir, 'dummy.partial'), 'not audio')
     writeFileSync(join(freshDir, 'dummy.partial'), 'not audio')
 
-    expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
-    expect(getRoomBySlug(ROOM.slug)).toBeNull()
+    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug, created_at: createdAt })
     expect(getRoomBySlug('freshroom2')).toMatchObject({ slug: 'freshroom2' })
-    expect(existsSync(expiredDir)).toBe(false)
+    expect(roomExists(ROOM.slug)).toBe(true)
+    expect(existsSync(oldDir)).toBe(true)
     expect(existsSync(freshDir)).toBe(true)
+    expect(listRooms().some((room) => room.slug === ROOM.slug && room.created_at === createdAt)).toBe(true)
+
+    const listed = getUsageDashboard({}).rooms.find((room) => room.slug === ROOM.slug)
+    expect(listed).toMatchObject({ name: ROOM.name, createdAt })
   })
 
   it('deleteRoom removes room metadata and server copies', () => {
@@ -143,15 +146,64 @@ describe('active room cleanup', () => {
     expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(false)
   })
 
-  it('cleanupExpiredRooms removes an incomplete server copy for an expired room the same as a complete one', () => {
+  it('leaves an unfinished upload in place on an old room', () => {
     createRoom(ROOM)
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(1000, 1000, ROOM.slug)
     appendServerCopyChunk(ROOM.slug, 'guest1', Buffer.from([9, 9]), 0) // upload started, never finalized
 
-    expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
+    expect(existsSync(getServerCopyFilePath(ROOM.slug, 'guest1'))).toBe(true)
+    expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(true)
+    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug, created_at: 1000 })
+    expect(isServerCopyFinalized(ROOM.slug, 'guest1')).toBe(false)
+  })
 
-    expect(existsSync(getServerCopyFilePath(ROOM.slug, 'guest1'))).toBe(false)
-    expect(existsSync(getServerCopyRoomDir(ROOM.slug))).toBe(false)
+  it('reads a missing guest-lock clock as created_at, and setGuestLockAt moves only that clock', () => {
+    createRoom(ROOM)
+    const inserted = getRoomBySlug(ROOM.slug)
+    expect(guestLockAt(inserted)).toBe(inserted.created_at)
+    expect(guestLockAt({ created_at: 42 })).toBe(42)
+    expect(guestLockAt({ created_at: 42, guest_lock_at: null })).toBe(42)
+    expect(guestLockAt({ created_at: 42, guest_lock_at: Number.NaN })).toBe(42)
+    expect(guestLockAt({ created_at: 42, guest_lock_at: 99 })).toBe(99)
+
+    db.getDb().prepare('UPDATE rooms SET guest_lock_at = NULL WHERE slug = ?').run(ROOM.slug)
+    const legacy = getRoomBySlug(ROOM.slug)
+    expect(guestLockAt(legacy)).toBe(legacy.created_at)
+    expect(legacy.created_at).toBe(inserted.created_at)
+
+    const next = inserted.created_at + 60_000
+    expect(setGuestLockAt(ROOM.slug, next)).toBe(1)
+    const updated = getRoomBySlug(ROOM.slug)
+    expect(guestLockAt(updated)).toBe(next)
+    expect(updated.created_at).toBe(inserted.created_at)
+    expect(updated.name).toBe(inserted.name)
+    expect(updated.password_hash).toBe(inserted.password_hash)
+    expect(updated.password_plain).toBe(inserted.password_plain)
+    expect(updated.slug).toBe(inserted.slug)
+
+    expect(setGuestLockAt('missing-slug', next)).toBe(0)
+    expect(getRoomBySlug('missing-slug')).toBeNull()
+    expect(getRoomBySlug(ROOM.slug).created_at).toBe(inserted.created_at)
+  })
+
+  it('upserts guest room access per slug and clientId and ignores empty keys', () => {
+    const at = 1_700_000_000_000
+    recordGuestAccess(ROOM.slug, 'guest-a', at)
+    recordGuestAccess('', 'guest-a', at + 1)
+    recordGuestAccess(ROOM.slug, '', at + 1)
+    recordGuestAccess(null, 'guest-a', at + 1)
+    expect(getGuestLastAccess(ROOM.slug, 'guest-a')).toBe(at)
+    expect(getGuestLastAccess(ROOM.slug, 'missing')).toBeNull()
+    expect(getGuestLastAccess('', 'guest-a')).toBeNull()
+
+    recordGuestAccess(ROOM.slug, 'guest-a', at + 50)
+    recordGuestAccess(ROOM.slug, 'guest-b', at + 10)
+    expect(getGuestLastAccess(ROOM.slug, 'guest-a')).toBe(at + 50)
+    expect(listGuestAccess(ROOM.slug).sort((a, b) => a.clientId.localeCompare(b.clientId))).toEqual([
+      { clientId: 'guest-a', lastAccessAt: at + 50 },
+      { clientId: 'guest-b', lastAccessAt: at + 10 }
+    ])
+    expect(listGuestAccess('')).toEqual([])
   })
 })
 
@@ -185,7 +237,7 @@ describe('room content durable store (Room State Store\'s durable adapter)', () 
     expect(deleteRoomContent('nosuchroom')).toBe(0)
   })
 
-  it('deleteRoom also removes any durable room content for that slug — closing the gap where tab state was never pruned on room expiry', () => {
+  it('deleteRoom also removes any durable room content for that slug', () => {
     createRoom(ROOM)
     saveRoomContent(ROOM.slug, { tabs: { list: [{ id: 't1', title: 'Tab 1', video: null, text: 'notes' }], activeTabId: 't1' } })
 
@@ -194,14 +246,14 @@ describe('room content durable store (Room State Store\'s durable adapter)', () 
     expect(loadRoomContent(ROOM.slug)).toBeNull()
   })
 
-  it('cleanupExpiredRooms removes durable room content for an expired room the same as its metadata', () => {
+  it('keeps durable room content for an old room', () => {
     createRoom(ROOM)
-    db.getDb().prepare('UPDATE rooms SET created_at = ? WHERE slug = ?').run(1000, ROOM.slug)
-    saveRoomContent(ROOM.slug, { tabs: { list: [], activeTabId: null } })
+    db.getDb().prepare('UPDATE rooms SET created_at = ?, guest_lock_at = ? WHERE slug = ?').run(1000, 1000, ROOM.slug)
+    const content = { tabs: { list: [], activeTabId: null } }
+    saveRoomContent(ROOM.slug, content)
 
-    expect(cleanupExpiredRooms({ now: 13 * 60 * 60 * 1000 })).toBe(1)
-
-    expect(loadRoomContent(ROOM.slug)).toBeNull()
+    expect(loadRoomContent(ROOM.slug)).toEqual(content)
+    expect(getRoomBySlug(ROOM.slug)).toMatchObject({ slug: ROOM.slug, created_at: 1000 })
   })
 })
 

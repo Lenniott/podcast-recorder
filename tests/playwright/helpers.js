@@ -1,5 +1,8 @@
 import { expect } from '@playwright/test'
 
+export const E2E_DB_PATH = process.env.E2E_DB_PATH
+export const E2E_SERVER_COPY_DIR = process.env.E2E_SERVER_COPY_DIR
+
 /**
  * Keep a handle on live WebSockets so a test can close the room socket
  * without waiting for the Vite proxy to idle-timeout it.
@@ -167,6 +170,9 @@ export async function unlockIfNeeded(page) {
       )
     }
   }
+  // The dashboard search needs its input handler before typing or following
+  // rows during hydration. It stays disabled until the component mounts.
+  await expect(page.getByRole('textbox', { name: 'Search rooms' })).toBeEnabled({ timeout: 15_000 })
 }
 
 export async function openCreateRoom(page) {
@@ -295,12 +301,16 @@ export async function createRoom(page, { name, password, hostDisplayName = 'Host
   return page.url()
 }
 
-export async function joinAsGuest(page, roomUrl, { name, password }) {
+export async function joinAsGuest(page, roomUrl, { name, password, expectLocked = false }) {
   await page.goto(roomUrl)
   // Host cookie from createRoom won't exist in a fresh context — expect password gate.
   await fillField(page.getByLabel('Your name'), name)
   await fillField(page.locator('#room-episode-code'), password)
   await page.getByRole('button', { name: /Join Room/i }).click()
+  if (expectLocked) {
+    await expect(page).toHaveURL(/\/\?guestlocked=1/)
+    return
+  }
   await roomTabsReady(page)
 }
 
@@ -370,10 +380,8 @@ export async function createCustomPrompt(page, { title, prompt, outputFormat = '
 
 /**
  * Removes one Custom Prompt created by createCustomPrompt above, through
- * the same real UI — e2e cleanup so a repeated local `npm run test:e2e`
- * against the same gitignored e2e-rooms.db doesn't accumulate stale global
- * prompts across runs (unlike a room, a Custom Prompt has no TTL/eviction
- * of its own).
+ * the same real UI. Custom Prompts are global within a run, so cleanup
+ * keeps later scenarios independent even with fresh storage per run.
  */
 export async function deleteCustomPrompt(page, title) {
   await page.goto('/')

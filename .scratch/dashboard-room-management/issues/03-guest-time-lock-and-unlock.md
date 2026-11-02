@@ -65,29 +65,32 @@ boolean, plus an Unlock control.
 **Leaves for ticket 04:** per-guest inactivity, inside this same `admit`
 and `guestLockSummary`. No checkboxes (ticket 06).
 
-**Status:** ready-for-agent
+**Status:** implemented. See [current behavior and verification](../../../docs/implementation/dashboard-room-management.md).
 
-- [ ] `GUEST_LOCK_HOURS` documented in the repo README. Default 12.
-- [ ] Guests join a room with no server copy even when the clock is old.
-- [ ] Guests cannot join a room that has server-known audio and an old
+The acceptance list below is retained as the original design; naming
+and behavioral changes are recorded in that implementation note.
+
+- `GUEST_LOCK_HOURS` documented in the repo README. Default 12.
+- Guests join a room with no server copy even when the clock is old.
+- Guests cannot join a room that has server-known audio and an old
       clock. The room, its content, and its audio remain.
-- [ ] Host-claim holder enters that room from the dashboard. Password
+- Host-claim holder enters that room from the dashboard. Password
       without the host-claim cookie does not bypass the lock.
-- [ ] Unlock resets the clock. Created date text is unchanged. Guests
+- Unlock resets the clock. Created date text is unchanged. Guests
       can enter again.
-- [ ] Unlock of a missing slug does not crash the dashboard; the page
+- Unlock of a missing slug does not crash the dashboard; the page
       says it was missing.
-- [ ] HTTP and WebSocket both call `admit`. The socket cannot bypass a
+- HTTP and WebSocket both call `admit`. The socket cannot bypass a
       `time` refusal.
-- [ ] TDD on the seams above.
-- [ ] Coverage: the admit grid, unauthenticated unlock, missing slug,
+- TDD on the seams above.
+- Coverage: the admit grid, unauthenticated unlock, missing slug,
       unlock of an already-open room.
-- [ ] E2E: create a room, it shows "Open to guests", Unlock succeeds and
+- E2E: create a room, it shows "Open to guests", Unlock succeeds and
       the created-date text is identical. Guest lock *refusal* is the
       unit seam (injected `now`). Do not add a clock-forging endpoint.
       The locked sentence is covered by a component or page test that
       renders the `time` refusal, plus the e2e of the unlock control.
-- [ ] Docs: add CONTEXT.md entries, glossary only:
+- Docs: add CONTEXT.md entries, glossary only:
       - **Guest lock** — guests cannot join; the room stays listed; the
         host-claim holder can still enter. Not delete.
       - **Unlock** — guests may join again; the original creation date

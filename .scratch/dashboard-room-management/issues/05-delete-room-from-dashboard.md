@@ -44,19 +44,22 @@ gates the dashboard. An unauthenticated POST does not delete.
 straight call the bulk ticket can loop, not a one-off that forgets
 server copies.
 
-**Status:** ready-for-agent
+**Status:** implemented. See [current behavior and verification](../../../docs/implementation/dashboard-room-management.md).
 
-- [ ] Delete removes the room the way `deleteRoom` already does.
-- [ ] The row is gone. Searching its name does not find it.
-- [ ] `/rec/{slug}` is not-found, not a locked or expired shell.
-- [ ] Modal lists server audio, research in the room, tab content,
+The acceptance list below is retained as the original design; naming
+and behavioral changes are recorded in that implementation note.
+
+- Delete removes the room the way `deleteRoom` already does.
+- The row is gone. Searching its name does not find it.
+- `/rec/{slug}` is not-found, not a locked or expired shell.
+- Modal lists server audio, research in the room, tab content,
       transcript, annotations, the room itself, and that local WAVs
       remain. Cancel leaves the room.
-- [ ] TDD on the seams above.
-- [ ] Coverage: delete, cancel, unknown slug, unauthenticated.
-- [ ] E2E: create a room, open the modal, assert the warning text,
+- TDD on the seams above.
+- Coverage: delete, cancel, unknown slug, unauthenticated.
+- E2E: create a room, open the modal, assert the warning text,
       confirm, row gone, `/rec/{slug}` not found. Second run: open,
       cancel, row still listed and the enter link still works.
-- [ ] Docs: CONTEXT.md **Usage Dashboard** says a room disappears only
+- Docs: CONTEXT.md **Usage Dashboard** says a room disappears only
       by this explicit delete (or the existing CLI delete), and that
       guest lock leaves the room listed.

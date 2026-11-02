@@ -3,6 +3,7 @@ import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
+  serverCopySeconds,
   getServerCopyRoomDir,
   removeServerCopiesForRoom,
   getServerCopyFilePath,
@@ -23,6 +24,22 @@ beforeEach(() => {
 
 afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true })
+})
+
+describe('serverCopySeconds', () => {
+  it('subtracts the 44-byte header at 16-bit mono', () => {
+    expect(serverCopySeconds({ byteSize: 44 + 48000 * 2, sampleRate: 48000 })).toBe(1)
+  })
+
+  it('treats a missing or invalid sample rate as 48000', () => {
+    expect(serverCopySeconds({ byteSize: 44 + 48000 * 2 })).toBe(1)
+    expect(serverCopySeconds({ byteSize: 44 + 48000 * 2, sampleRate: 0 })).toBe(1)
+  })
+
+  it('does not go negative when the file is shorter than a header', () => {
+    expect(serverCopySeconds({ byteSize: 10, sampleRate: 48000 })).toBe(0)
+    expect(serverCopySeconds(null)).toBe(0)
+  })
 })
 
 describe('getServerCopyRoomDir', () => {

@@ -24,7 +24,8 @@ export function createRoomConnection({
   createSocket,
   onOpen,
   onMessage,
-  onStatusChange
+  onStatusChange,
+  onLocked
 } = {}) {
   let socket = null
   let status = 'disconnected'
@@ -74,10 +75,14 @@ export function createRoomConnection({
       onMessage?.(msg)
     }
 
-    sock.onclose = () => {
+    sock.onclose = (event) => {
       if (socket !== sock) return
       setStatus('disconnected')
       if (closedByUs) return
+      if (event?.code === 4403) {
+        onLocked?.()
+        return
+      }
       const delay = nextReconnectDelay(attempt)
       attempt += 1
       reconnectTimer = setTimeout(() => {

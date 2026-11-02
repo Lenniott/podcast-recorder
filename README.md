@@ -54,6 +54,8 @@ npm test                 # unit tests (Vitest)
 npm run test:coverage    # same, plus a coverage/ HTML report
 npm run test:mutation    # mutate capture-writer.js and check whether tests fail
 npm run test:mutation:recording # recording, upload/storage, reconnect, and worklet
+npm run test:mutation:dashboard # room management, guest locks, and action authorization
+npx svelte-check         # Svelte diagnostics (run svelte-kit sync first)
 npm run test:e2e         # Playwright (needs .env with SECRET)
 ```
 
@@ -74,6 +76,23 @@ results after tests change. `summary.json` in the recording report directory lis
 Related-test discovery keeps each module focused on the tests importing it. The
 worklet runs separately because its tests read source into a VM rather than import it.
 
+The dashboard command writes `reports/mutation/dashboard/mutation.html` and
+`mutation.json`. It includes guest admission, room actions, selection/search,
+guest-access cleanup, and reconnect behavior. Review survivors alongside the
+behavioral tests; the score alone does not show whether an authorization or
+recording-preservation rule is protected.
+The dashboard command fails below an 80% mutation score.
+
+The dashboard lists each room's join password under **Room code**. Older rooms
+whose plaintext password was not stored show **Unavailable**. Set `SITE_PASSWORD`
+to protect access to the dashboard and these codes.
+
+Playwright creates a fresh temporary database and server-copy directory for each
+run. The server and dashboard fixtures share those paths, so repeated runs do
+not accumulate room rows. Set `E2E_DATA_DIR` to choose a directory for inspection.
+The runner always starts its own server; it does not attach to a development
+server with different data paths.
+
 ---
 
 ## Production (hosting it on your own server)
@@ -87,8 +106,14 @@ cp .env.example .env
 # Set SECRET — this is required. SITE_PASSWORD is optional; set it if you
 # want to lock the "create episode" page behind a password.
 # Behind HTTPS, also set HTTPS=true (and FORCE_HTTPS=true if your reverse
-# proxy is the one handling HTTPS). ROOM_MAX_AGE_HOURS controls how long
-# rooms remain available; it defaults to 12.
+# proxy is the one handling HTTPS). A room is removed only by an explicit
+# delete. Each room stores guest_lock_at separately from its created date.
+# GUEST_LOCK_HOURS (default 12) refuses a guest join once the room has server-known audio
+# and that clock is older than the limit. GUEST_LOCK_RECORDING_MINUTES
+# (default 10) and GUEST_LOCK_INACTIVITY_HOURS (default 2) refuse a guest
+# whose own server copy is longer than that many minutes and who has not
+# accessed that room within the inactivity window. No recorded last access
+# counts as stale. Neither rule deletes the room or locks the host out.
 
 chmod +x update.sh
 docker compose up -d --build

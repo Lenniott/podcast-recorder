@@ -1,8 +1,46 @@
 <script>
+  import { onMount } from "svelte";
   // Totals + per-room breakdown half of the Usage Dashboard (see
   // CONTEXT.md) — the Research Prompt editor is the other half,
   // CustomPromptListEditor.svelte, composed alongside this by the page.
+  import {
+    filterRooms,
+    roomEnterPath,
+    formatRoomCreatedAt,
+  } from "$lib/home/room-table-filter.js";
+  import {
+    clearSelection,
+    selectVisible,
+    selectionCoversVisible,
+    toggleSlug,
+  } from "$lib/home/room-selection.js";
+  import GuestLockCell from "$lib/home/GuestLockCell.svelte";
+  import DeleteRoomButton from "$lib/home/DeleteRoomButton.svelte";
+  import DashboardBulkBar from "$lib/home/DashboardBulkBar.svelte";
+
   export let usageDashboard;
+
+  // Client-side filter of the list already loaded with the page. Clearing
+  // the box restores every room; it does not refetch. Changing the search
+  // drops the selection so a later select-all cannot include rows the
+  // search just hid.
+  let roomQuery = "";
+  let selected = [];
+  let ready = false;
+  onMount(() => { ready = true; });
+  $: visibleRooms = filterRooms(usageDashboard.rooms, roomQuery);
+  $: allVisibleSelected = selectionCoversVisible(selected, visibleRooms);
+  $: selectedLockedSlugs = visibleRooms
+    .filter((room) => room.guestLocked && selected.includes(room.slug))
+    .map((room) => room.slug);
+
+  function onSearchInput() {
+    selected = clearSelection();
+  }
+
+  function toggleVisibleSelection() {
+    selected = allVisibleSelected ? clearSelection() : selectVisible(visibleRooms);
+  }
 
   function formatCost(cost) {
     return `$${Number(cost || 0).toFixed(4)}`;
@@ -36,12 +74,37 @@
   </div>
 </div>
 
-{#if usageDashboard.rooms.length}
+<label class="room-search">
+  Search rooms
+  <input type="text" bind:value={roomQuery} on:input={onSearchInput} disabled={!ready} />
+</label>
+
+{#if usageDashboard.rooms.length > 0}
+  <DashboardBulkBar slugs={selected} unlockSlugs={selectedLockedSlugs} />
+{/if}
+
+{#if usageDashboard.rooms.length === 0}
+  <p class="sub">No rooms yet.</p>
+{:else if visibleRooms.length === 0}
+  <p class="sub">No rooms match.</p>
+{:else}
   <div class="dashboard-table-wrap">
     <table class="dashboard-table">
       <thead>
         <tr>
+          <th class="select-col">
+            <input
+              class="row-select"
+              type="checkbox"
+              aria-label="Select all visible rooms"
+              checked={allVisibleSelected}
+              on:change={toggleVisibleSelection}
+            />
+          </th>
           <th>Room</th>
+          <th>Room code</th>
+          <th>Created</th>
+          <th>Guest access</th>
           <th>Calls</th>
           <th>Tokens</th>
           <th>Cost</th>
@@ -49,12 +112,25 @@
           <th>Transcript</th>
           <th>Tabs</th>
           <th>Cards</th>
+          <th class="actions-col">Actions</th>
         </tr>
       </thead>
       <tbody>
-        {#each usageDashboard.rooms as room (room.slug)}
+        {#each visibleRooms as room (room.slug)}
           <tr>
-            <td>{room.name}</td>
+            <td class="select-col">
+              <input
+                class="row-select"
+                type="checkbox"
+                aria-label="Select {room.name}"
+                checked={selected.includes(room.slug)}
+                on:change={() => (selected = toggleSlug(selected, room.slug))}
+              />
+            </td>
+            <td><a href={roomEnterPath(room.slug)}>{room.name}</a></td>
+            <td>{room.roomCode ?? "Unavailable"}</td>
+            <td>{formatRoomCreatedAt(room.createdAt)}</td>
+            <td><GuestLockCell guestLocked={room.guestLocked} /></td>
             <td>{room.calls}</td>
             <td>{room.tokens.toLocaleString()}</td>
             <td>{formatCost(room.cost)}</td>
@@ -62,13 +138,22 @@
             <td>{room.transcriptWords.toLocaleString()} words</td>
             <td>{room.tabCount}</td>
             <td>{room.researchCardCount}</td>
+            <td class="actions-col">
+              <div class="row-actions">
+                {#if room.guestLocked}
+                  <form method="POST" action="?/unlock_room">
+                    <input type="hidden" name="slug" value={room.slug} />
+                    <button type="submit" class="btn-secondary btn-sm">Unlock</button>
+                  </form>
+                {/if}
+                <DeleteRoomButton slug={room.slug} roomName={room.name} />
+              </div>
+            </td>
           </tr>
         {/each}
       </tbody>
     </table>
   </div>
-{:else}
-  <p class="sub">No rooms yet.</p>
 {/if}
 
 <style>
@@ -84,13 +169,18 @@
     margin-bottom: 20px;
   }
 
+  .room-search {
+    max-width: 320px;
+    margin-bottom: 16px;
+  }
+
   .total-tile {
     flex: 1;
     display: flex;
     flex-direction: column;
     gap: 2px;
     padding: 12px 16px;
-    border: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+    border: 1px solid var(--border);
     border-radius: var(--radius);
   }
 
@@ -122,7 +212,17 @@
     text-align: left;
     padding: 6px 10px;
     white-space: nowrap;
-    border-bottom: 1px solid var(--border, rgba(148, 163, 184, 0.15));
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dashboard-table a {
+    color: var(--text);
+  }
+
+  .dashboard-table a:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   .dashboard-table th {
@@ -131,5 +231,59 @@
     text-transform: uppercase;
     font-size: 10px;
     letter-spacing: 0.04em;
+  }
+
+  .select-col {
+    width: 1%;
+    padding-right: 0;
+  }
+
+  .actions-col {
+    position: sticky;
+    right: 0;
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+  }
+
+  .row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .row-actions form {
+    margin: 0;
+  }
+
+  .row-select {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--muted);
+    border-radius: 4px;
+    background: var(--surface);
+    cursor: pointer;
+  }
+
+  .row-select:checked {
+    border-color: var(--accent);
+    background-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 8 3 3 6-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+
+  .row-select:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+  }
+
+  @media (forced-colors: active) {
+    .row-select,
+    .row-select:checked {
+      appearance: auto;
+      background-image: none;
+    }
   }
 </style>
