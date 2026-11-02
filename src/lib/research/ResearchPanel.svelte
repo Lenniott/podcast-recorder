@@ -93,7 +93,9 @@
   // facet open. Deliberately separate from transcriptionStatus above: that
   // is this browser's recognizer health, this is "someone in the room is
   // being processed right now", true even for a peer with no microphone.
-  let transcriptActivity = false;
+  // Bindable so the mobile bottom nav can carry the same pulse while this
+  // whole panel is off-screen.
+  export let transcriptActivity = false;
 
   // tabId -> string — RoomTabs.svelte's own true, complete, current copy
   // of every tab's text (both its own just-typed keystrokes AND every

@@ -16,8 +16,12 @@
   export let formatBytes = (b) => String(b);
   export let checkPreviewByClientId = {};
   export let stayQuietRole = "";
+  // Mobile Participants view: the table is the whole destination, so there
+  // is nothing to fold it into.
+  export let alwaysOpen = false;
 
   let open = false;
+  $: shown = open || alwaysOpen;
   let checkAudio;
 
   $: presence = participantPresence(wsStatus);
@@ -54,8 +58,9 @@
   }
 </script>
 
-<section class="presence-table-wrap" class:is-collapsed={!open}>
+<section class="presence-table-wrap" class:is-collapsed={!shown} class:always-open={alwaysOpen}>
   <div class="presence-table-wrap-inner">
+    {#if !alwaysOpen}
     <button
       type="button"
       class="fold"
@@ -100,12 +105,13 @@
       {/if}
       <!-- <span class="fold-hint">{open ? "Hide details" : "Show details"}</span> -->
     </button>
+    {/if}
     {#if stayQuietRole}
       <p class="check-quiet-line">{stayQuietCopy(stayQuietRole)}</p>
     {/if}
     <slot />
   </div>
-  {#if open}
+  {#if shown}
     <div class="table-scroll">
       <table class="presence-table">
         <colgroup>
@@ -140,7 +146,7 @@
               <td class="name">
                 <span class="clamp">{peer.name}{isSelf ? " (you)" : ""}</span>
               </td>
-              <td class="type">
+              <td class="type" data-label="Type">
                 <span
                   class="pill"
                   class:pill-host={peer.role === "host"}
@@ -149,7 +155,7 @@
                   {peer.role === "host" ? "Host" : "Guest"}
                 </span>
               </td>
-              <td class="status">
+              <td class="status" data-label="Status">
                 <span
                   class="pill"
                   class:pill-online={!peer.recording && presence === "online"}
@@ -166,17 +172,17 @@
                       : "Offline"}
                 </span>
               </td>
-              <td class="mic" title={peer.micLabel || ""}>
+              <td class="mic" data-label="Mic" title={peer.micLabel || ""}>
                 <span class="clamp">{peer.micLabel || "—"}</span>
               </td>
-              <td class="size">
+              <td class="size" data-label="Size">
                 {#if isSelf && bytesWritten > 0}
                   {formatBytes(bytesWritten)}
                 {:else}
                   —
                 {/if}
               </td>
-              <td class="copy">
+              <td class="copy" data-label="Server copy">
                 <span
                   class="clamp"
                   data-testid="server-copy-line"
@@ -441,5 +447,78 @@
     gap: 4px;
     background: color-mix(in srgb, var(--warn) 10%, transparent);
     color: var(--warn-text);
+  }
+
+  /* Same rows, restacked as one card per participant: a 52rem table can't
+     fit a phone, and sideways-scrolling hides the Recording/Server copy
+     columns that matter most. */
+  @media (max-width: 720px) {
+    .always-open .presence-table-wrap-inner {
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+    .presence-table-wrap.always-open .table-scroll {
+      overflow: visible;
+      border: none;
+      background: none;
+    }
+    .always-open .presence-table,
+    .always-open .presence-table tbody,
+    .always-open .presence-table tr,
+    .always-open .presence-table td {
+      display: block;
+      width: 100%;
+      min-width: 0;
+    }
+    .always-open .presence-table thead,
+    .always-open .presence-table colgroup {
+      display: none;
+    }
+    .always-open .presence-table tr {
+      position: relative;
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .always-open .presence-table td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 0;
+      border-bottom: none;
+    }
+    .always-open .presence-table td[data-label]::before {
+      content: attr(data-label);
+      flex-shrink: 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+    .always-open .presence-table td.name {
+      font-size: 15px;
+      padding-bottom: 8px;
+    }
+    .always-open .presence-table .clamp {
+      min-width: 0;
+      text-align: right;
+    }
+    .always-open .presence-table td.name .clamp {
+      text-align: left;
+    }
+    .always-open .presence-table td.dl-cell {
+      justify-content: flex-end;
+      padding: 0;
+    }
+    .always-open .presence-table td.dl-cell:empty {
+      display: none;
+    }
+    .always-open .dl {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--border);
+    }
   }
 </style>

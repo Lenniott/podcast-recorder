@@ -4,6 +4,10 @@
   import ResearchPanel from "$lib/research/ResearchPanel.svelte";
   import RoomPresenceTable from "$lib/room/RoomPresenceTable.svelte";
   import ThemeToggle from "$lib/ThemeToggle.svelte";
+  import { onMount } from "svelte";
+  import { BookClosed, FileSearch02, User01 } from "$lib/icons";
+  import { stayQuietCopy } from "$lib/recording/recording-check-share.js";
+  import { MOBILE_ROOM_QUERY, MOBILE_VIEWS } from "$lib/room/mobile-layout.js";
 
   export let sidebarCollapsed = false;
   // Independent of sidebarCollapsed — mirrors RoomSidebar's own local
@@ -95,6 +99,36 @@
   export let send = () => {};
   export let clockOffset = 0;
 
+  // Narrow viewports get one region at a time behind a bottom nav instead
+  // of three columns. Every region stays mounted either way (only hidden by
+  // CSS), so the waveform canvas, a playing shared video and the research
+  // feed never get torn down by switching views. Local UI only.
+  let mobile = false;
+  let mobileView = "tabs";
+  let transcriptActivity = false;
+  let desktopCollapse = null;
+
+  function setMobile(next) {
+    if (next === mobile) return;
+    if (next) {
+      desktopCollapse = { sidebar: sidebarCollapsed, research: researchCollapsed };
+      sidebarCollapsed = true;
+      researchCollapsed = false;
+    } else if (desktopCollapse) {
+      sidebarCollapsed = desktopCollapse.sidebar;
+      researchCollapsed = desktopCollapse.research;
+    }
+    mobile = next;
+  }
+
+  onMount(() => {
+    const query = window.matchMedia(MOBILE_ROOM_QUERY);
+    setMobile(query.matches);
+    const onChange = (e) => setMobile(e.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  });
+
   function roomChrome(_node) {
     document.documentElement.dataset.roomChrome = "";
     return {
@@ -109,10 +143,12 @@
   class="room"
   class:sidebar-collapsed={sidebarCollapsed}
   class:research-collapsed={researchCollapsed}
+  data-mobile-view={mobileView}
   use:roomChrome
 >
   <RoomSidebar
     bind:collapsed={sidebarCollapsed}
+    {mobile}
     {roomName}
     {slug}
     {isHostClaim}
@@ -157,6 +193,11 @@
   />
 
   <main class="room-main">
+    {#if mobile && stayQuietRole && mobileView !== "participants"}
+      <p class="mobile-quiet-line" data-testid="mobile-quiet-line">
+        {stayQuietCopy(stayQuietRole)}
+      </p>
+    {/if}
     <div class="room-main-tools">
       <RoomPresenceTable
         {peers}
@@ -168,11 +209,13 @@
         {formatBytes}
         {checkPreviewByClientId}
         {stayQuietRole}
+        alwaysOpen={mobile}
       >
       <ThemeToggle floating={false} />
       </RoomPresenceTable>
     </div>
 
+    <div class="room-main-tabs">
     <RoomTabs
       {send}
       {clockOffset}
@@ -184,6 +227,7 @@
       {customPrompts}
       canRunCustomPrompts={isHostClaim || guestCanAskResearch}
     />
+    </div>
   </main>
 
   <ResearchPanel
@@ -198,8 +242,31 @@
     bind:facet={researchFacet}
     bind:turnsEl={transcriptEl}
     bind:collapsed={researchCollapsed}
+    bind:transcriptActivity
     bind:this={researchPanel}
   />
+
+  <nav class="mobile-nav" aria-label="Room sections">
+    <div role="tablist" class="mobile-nav-list">
+      {#each MOBILE_VIEWS as view (view.id)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileView === view.id}
+          data-testid="mobile-nav-{view.id}"
+          on:click={() => (mobileView = view.id)}
+        >
+          <span class="mobile-nav-icon" aria-hidden="true">
+            {#if view.id === "tabs"}<BookClosed />{:else if view.id === "research"}<FileSearch02 />{:else}<User01 />{/if}
+            {#if view.id === "research" && transcriptActivity && mobileView !== "research"}
+              <span class="mobile-nav-pulse" title="Transcript incoming…"></span>
+            {/if}
+          </span>
+          {view.label}
+        </button>
+      {/each}
+    </div>
+  </nav>
 </div>
 
 <style>
@@ -241,13 +308,113 @@
 
   }
 
+  .room-main-tabs {
+    display: contents;
+  }
+
+  .mobile-nav,
+  .mobile-quiet-line {
+    display: none;
+  }
+
   @media (max-width: 720px) {
     .room,
     .room.sidebar-collapsed,
     .room.research-collapsed,
     .room.sidebar-collapsed.research-collapsed {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr auto;
+      height: 100dvh;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-areas: "header" "content" "nav";
+    }
+
+    .room > :global(.room-sidebar) {
+      grid-area: header;
+    }
+    .room-main,
+    .room > :global(.research-panel) {
+      grid-area: content;
+    }
+    .room-main {
+      padding: 12px;
+    }
+    .room > :global(.research-panel) {
+      border: none;
+      padding: 12px;
+    }
+    .room > :global(.research-panel .collapse-toggle) {
+      display: none;
+    }
+
+    .room[data-mobile-view="research"] .room-main,
+    .room:not([data-mobile-view="research"]) > :global(.research-panel),
+    .room[data-mobile-view="tabs"] .room-main-tools,
+    .room[data-mobile-view="participants"] .room-main-tabs {
+      display: none;
+    }
+
+    .mobile-quiet-line {
+      display: block;
+      margin: 0 0 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
+      color: var(--warn-text);
+      font-size: 13px;
+    }
+
+    .mobile-nav {
+      grid-area: nav;
+      display: block;
+      border-top: 1px solid var(--border);
+      background: var(--bg-elevated);
+      padding: 6px 8px max(8px, env(safe-area-inset-bottom));
+    }
+    .mobile-nav-list {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+    }
+    .mobile-nav button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 4px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .mobile-nav button[aria-selected="true"] {
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--text);
+      font-weight: 600;
+    }
+    .mobile-nav-icon {
+      position: relative;
+      display: inline-flex;
+    }
+    .mobile-nav-pulse {
+      position: absolute;
+      top: -2px;
+      right: -6px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: mobile-nav-pulse 1s ease-in-out infinite;
+    }
+  }
+
+  @keyframes mobile-nav-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
     }
   }
 </style>
