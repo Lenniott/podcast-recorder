@@ -55,6 +55,7 @@ npm run test:coverage    # same, plus a coverage/ HTML report
 npm run test:mutation    # mutate capture-writer.js and check whether tests fail
 npm run test:mutation:recording # recording, upload/storage, reconnect, and worklet
 npm run test:mutation:dashboard # room management, guest locks, and action authorization
+npx svelte-check         # Svelte diagnostics (run svelte-kit sync first)
 npm run test:e2e         # Playwright (needs .env with SECRET)
 ```
 
