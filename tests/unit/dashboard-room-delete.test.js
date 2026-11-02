@@ -6,6 +6,8 @@ import {
   createRoom,
   getResearchUsageTotals,
   getRoomBySlug,
+  listGuestAccess,
+  recordGuestAccess,
   loadRoomContent,
   recordResearchUsage,
   saveRoomContent,
@@ -48,6 +50,15 @@ function plantServerCopy(slug) {
 }
 
 describe('deleteDashboardRoom', () => {
+  it('removes guest access for the deleted room and retains other rooms access', () => {
+    createRoom(ROOM)
+    createRoom(OTHER)
+    recordGuestAccess(ROOM.slug, 'guest-a', 123)
+    recordGuestAccess(OTHER.slug, 'guest-a', 456)
+    deleteDashboardRoom(ROOM.slug)
+    expect(listGuestAccess(ROOM.slug)).toEqual([])
+    expect(listGuestAccess(OTHER.slug)).toEqual([{ clientId: 'guest-a', lastAccessAt: 456 }])
+  })
   it('removes the room, its server copy, and its content', () => {
     createRoom(ROOM)
     createRoom(OTHER)

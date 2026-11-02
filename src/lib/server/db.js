@@ -217,6 +217,7 @@ export function roomExists(slug) {
 export function deleteRoom(slug) {
   removeServerCopiesForRoom(slug)
   deleteRoomContent(slug)
+  getDb().prepare('DELETE FROM guest_room_access WHERE slug = ?').run(slug)
   return getDb().prepare('DELETE FROM rooms WHERE slug = ?').run(slug).changes
 }
 
