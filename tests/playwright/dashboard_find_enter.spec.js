@@ -26,6 +26,7 @@ test('host can search the dashboard, enter a room, and see its created date', as
   await unlockIfNeeded(page)
 
   const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: findName, exact: true }) })
+  await expect(row.getByRole('cell', { name: 'dash-find', exact: true })).toBeVisible()
   await expect(row.getByRole('cell', { name: /\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} UTC/ })).toBeVisible()
 
   await page.getByRole('textbox', { name: 'Search rooms' }).fill('zzz-no-such-room')

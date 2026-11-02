@@ -33,6 +33,13 @@ describe('getUsageDashboard', () => {
     createRoom({ slug: SLUG_E2E, name: 'E2E SomeSpec 12345', passwordHash: 'x' })
   })
 
+  it('includes the join code, with null for a legacy room whose code was not stored', () => {
+    createRoom({ slug: 'codedroom1', name: 'Coded episode', passwordHash: 'hash', passwordPlain: 'episode-42' })
+    const { rooms } = getUsageDashboard({})
+    expect(rooms.find(room => room.slug === 'codedroom1').roomCode).toBe('episode-42')
+    expect(rooms.find(room => room.slug === SLUG_REAL).roomCode).toBeNull()
+  })
+
   it('lists every room, e2e included, when the flag is off', () => {
     const { rooms } = getUsageDashboard({})
     expect(rooms.map((r) => r.slug).sort()).toEqual([SLUG_E2E, SLUG_REAL].sort())

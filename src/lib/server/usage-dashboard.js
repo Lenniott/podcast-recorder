@@ -69,6 +69,7 @@ export function getUsageDashboard(env = process.env) {
       return {
         slug: room.slug,
         name: room.name,
+        roomCode: room.password_plain ?? null,
         createdAt: room.created_at,
         guestLocked: anyGuestLocked(room, { env }),
         calls: usage?.calls ?? 0,

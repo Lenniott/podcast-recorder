@@ -3,12 +3,15 @@
 
   /** Slugs the host has selected. Empty disables both actions. */
   export let slugs = [];
+  /** Unlock applies only to selected rooms whose guests are locked. */
+  export let unlockSlugs = [];
 
   // The opener only reveals the dialog. The POST lives on its confirm
   // control, so one click on Delete selected cannot remove the rooms.
   let open = false;
 
   $: empty = slugs.length === 0;
+  $: unlockEmpty = unlockSlugs.length === 0;
   $: roomWord = slugs.length === 1 ? "room" : "rooms";
 
   function openDialog() {
@@ -18,16 +21,16 @@
 
   /** A disabled control can still sit in a form. An empty set must not post. */
   function blockEmpty(event) {
-    if (empty) event.preventDefault();
+    if (unlockEmpty) event.preventDefault();
   }
 </script>
 
 <div class="bulk-bar">
   <form method="POST" action="?/unlock_rooms" on:submit={blockEmpty}>
-    {#each slugs as slug (slug)}
+    {#each unlockSlugs as slug (slug)}
       <input type="hidden" name="slug" value={slug} />
     {/each}
-    <button type="submit" class="btn-secondary btn-sm" disabled={empty}>Unlock selected</button>
+    <button type="submit" class="btn-secondary btn-sm" disabled={unlockEmpty}>Unlock selected</button>
   </form>
 
   <button

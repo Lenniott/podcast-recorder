@@ -74,6 +74,10 @@ results after tests change. `summary.json` in the recording report directory lis
 Related-test discovery keeps each module focused on the tests importing it. The
 worklet runs separately because its tests read source into a VM rather than import it.
 
+The dashboard lists each room's join password under **Room code**. Older rooms
+whose plaintext password was not stored show **Unavailable**. Set `SITE_PASSWORD`
+to protect access to the dashboard and these codes.
+
 Playwright creates a fresh temporary database and server-copy directory for each
 run. The server and dashboard fixtures share those paths, so repeated runs do
 not accumulate room rows. Set `E2E_DATA_DIR` to choose a directory for inspection.

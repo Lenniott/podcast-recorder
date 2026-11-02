@@ -1,29 +1,30 @@
 <script>
-  export let slug
+  import { Lock, Check } from "$lib/icons";
   export let guestLocked = false
 </script>
 
-<div class="guest-lock-cell">
-  <span class="guest-lock-state">{guestLocked ? "Guests locked" : "Open to guests"}</span>
-  <form method="POST" action="?/unlock_room">
-    <input type="hidden" name="slug" value={slug} />
-    <button type="submit" class="btn-secondary btn-sm">Unlock</button>
-  </form>
-</div>
+<span class="guest-lock-state" class:locked={guestLocked}>
+  {#if guestLocked}<Lock size={14} />{:else}<Check size={14} />{/if}
+  {guestLocked ? "Guests locked" : "Open to guests"}
+</span>
 
 <style>
-  .guest-lock-cell {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
   .guest-lock-state {
-    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
     white-space: nowrap;
   }
 
-  form {
-    margin: 0;
+  .locked {
+    color: var(--warn-text);
+    border-color: var(--warn-text);
   }
 </style>

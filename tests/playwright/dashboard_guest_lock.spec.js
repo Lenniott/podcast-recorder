@@ -16,6 +16,12 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
   })
   const slug = new URL(roomUrl).pathname.split('/').filter(Boolean).pop()
 
+  await host.goto('/')
+  await unlockIfNeeded(host)
+  const row = host.locator('tr', { has: host.getByRole('link', { name, exact: true }) })
+  await expect(row.getByText('Open to guests', { exact: true })).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Unlock', exact: true })).toHaveCount(0)
+
   const db = new Database(E2E_DB_PATH)
   try {
     const before = db.prepare('SELECT created_at FROM rooms WHERE slug = ?').get(slug)
@@ -36,7 +42,7 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
   await joinAsGuest(guest, roomUrl, { name: 'Guest', password })
 
   mkdirSync(join(E2E_SERVER_COPY_DIR, slug), { recursive: true })
-  writeFileSync(join('./data/server-copies', slug, 'e2e-client.wav'), Buffer.from([1, 2, 3, 4]))
+  writeFileSync(join(E2E_SERVER_COPY_DIR, slug, 'e2e-client.wav'), Buffer.from([1, 2, 3, 4]))
 
   await guest.goto(roomUrl)
   await expect(guest).toHaveURL(/\/\?guestlocked=1/)
@@ -44,8 +50,10 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
 
   await host.goto('/')
   await unlockIfNeeded(host)
-  const row = host.locator('tr', { has: host.getByRole('link', { name, exact: true }) })
   await expect(row.getByText('Guests locked', { exact: true })).toBeVisible()
+  const actions = row.getByRole('cell').filter({ has: host.getByRole('button', { name: 'Delete', exact: true }) })
+  await expect(actions.getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
+  await expect(host.getByRole('columnheader', { name: 'Actions', exact: true })).toBeVisible()
   const createdText = (await row.getByText(/\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} UTC/).textContent()).trim()
 
   await row.getByRole('link', { name, exact: true }).click()
@@ -55,6 +63,7 @@ test('guest lock starts after server audio, and Unlock lets a guest back in', as
   await unlockIfNeeded(host)
   await row.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(row.getByText('Open to guests', { exact: true })).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Unlock', exact: true })).toHaveCount(0)
   await expect(row.getByText(createdText, { exact: true })).toBeVisible()
 
   // joinAsGuest fills the password gate. Clear the session from the first

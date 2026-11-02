@@ -170,6 +170,9 @@ export async function unlockIfNeeded(page) {
       )
     }
   }
+  // The dashboard search needs its input handler before typing or following
+  // rows during hydration. It stays disabled until the component mounts.
+  await expect(page.getByRole('textbox', { name: 'Search rooms' })).toBeEnabled({ timeout: 15_000 })
 }
 
 export async function openCreateRoom(page) {
