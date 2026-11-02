@@ -15,6 +15,25 @@ function setup(options = {}) {
 afterEach(() => vi.useRealTimers())
 
 describe('recording destinations', () => {
+  it('keeps the chosen microphone through silence and saves every quiet chunk', async () => {
+    const onMicrophoneNeeded = vi.fn(async () => true)
+    const ctx = setup({ sampleRate: 10, onMicrophoneNeeded })
+    const chunks = [new Int16Array(100), new Int16Array(100).fill(1),
+      new Int16Array(10).fill(1000), new Int16Array(100)]
+    for (const samples of chunks) {
+      ctx.session.writeChunk(samples)
+      await tick()
+    }
+    const result = await ctx.session.stop()
+    expect(onMicrophoneNeeded).not.toHaveBeenCalled()
+    expect(ctx.stopRequested).not.toHaveBeenCalled()
+    expect(ctx.upload.handleChunk.mock.calls.map(([samples]) => [...samples])).toEqual(chunks.map(samples => [...samples]))
+    const local = ctx.file.write.mock.calls.slice(0, -1).flatMap(([bytes]) => [...new Int16Array(bytes)])
+    expect(local).toEqual(chunks.flatMap(samples => [...samples]))
+    expect(result.local).toMatchObject({ saved: true, dataByteCount: 620 })
+    expect(result.server.saved).toBe(true)
+  })
+
   it('keeps the local chunk when server submission throws and reports the failed destination', async () => {
     const ctx = setup()
     const error = new Error('upload unavailable')
@@ -175,38 +194,7 @@ describe('recording destinations', () => {
     expect((await ctx.session.stop()).server.saved).toBe(true)
   })
 
-  it('asks for another microphone after a few seconds without signal and keeps saving', async () => {
-    const onMicrophoneNeeded = vi.fn()
-    const ctx = setup({ sampleRate: 10, noSignalSeconds: 2, onMicrophoneNeeded })
-    const quiet = new Int16Array(10)
-    const floor = new Int16Array(10).fill(1)
-    const sound = new Int16Array(10).fill(1000)
 
-    ctx.session.writeChunk(quiet)
-    expect(onMicrophoneNeeded).not.toHaveBeenCalled()
-    ctx.session.writeChunk(floor)
-    expect(onMicrophoneNeeded).toHaveBeenCalledOnce()
-    expect(ctx.upload.handleChunk).toHaveBeenCalledTimes(2)
-    expect(ctx.stopRequested).not.toHaveBeenCalled()
-
-    ctx.session.writeChunk(quiet)
-    expect(onMicrophoneNeeded).toHaveBeenCalledOnce()
-    ctx.session.writeChunk(sound)
-    ctx.session.writeChunk(quiet)
-    ctx.session.writeChunk(quiet)
-    expect(onMicrophoneNeeded).toHaveBeenCalledTimes(2)
-
-    onMicrophoneNeeded.mockImplementationOnce(() => Promise.resolve(false))
-    ctx.session.writeChunk(sound)
-    ctx.session.writeChunk(quiet)
-    ctx.session.writeChunk(quiet)
-    expect(onMicrophoneNeeded).toHaveBeenCalledTimes(3)
-    await Promise.resolve()
-    ctx.session.writeChunk(quiet)
-    ctx.session.writeChunk(quiet)
-    expect(onMicrophoneNeeded).toHaveBeenCalledTimes(3)
-    await ctx.session.stop()
-  })
 })
 
 it('a fatal issue stops capture even if the page issue observer throws', async () => {

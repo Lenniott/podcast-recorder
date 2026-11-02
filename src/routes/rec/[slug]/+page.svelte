@@ -703,18 +703,6 @@
     }
   }
 
-  // Re-measure, then leave the current device if another one is actually sending audio.
-  async function switchToBestMic(options = { excludeCurrent: true }) {
-    const ranked = await audioEngine.assessMicrophones()
-    const skipCurrent = options.excludeCurrent !== false
-    const live = ranked.some(device => device.status === 'signal' && (!skipCurrent || device.deviceId !== selectedDeviceId))
-    if (!live) {
-      captureSession?.reportIssue({ code: 'no-signal', severity: 'warning', destination: 'capture', message: 'No microphone is sending a signal.' })
-      return false
-    }
-    return audioEngine.switchToBestMic(options)
-  }
-
   function initAudioEngine() {
     if (audioEngineReady) return Promise.resolve()
     if (!audioEngineInit) {
@@ -1047,8 +1035,7 @@
       onStopRequested: () => {
         if (sessionDestroyed || rollingAttempt || captureSession !== session) return
         void recordingSession.onLocalFailure()
-      },
-      onMicrophoneNeeded: () => switchToBestMic({ excludeCurrent: true })
+      }
     })
     resetTakeMarker()
 
