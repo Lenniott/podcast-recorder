@@ -51,23 +51,26 @@ returned by `getRoomBySlug` / `listRooms`, and `admit` still admits.
 `unlockGuests`. After this ticket, host and guest can both still join an
 old room. That is accepted.
 
-**Status:** ready-for-agent
+**Status:** implemented. See [current behavior and verification](../../../docs/implementation/dashboard-room-management.md).
 
-- [ ] `created_at` is never written after insert. `guest_lock_at` is a
+The acceptance list below is retained as the original design; naming
+and behavioral changes are recorded in that implementation note.
+
+- `created_at` is never written after insert. `guest_lock_at` is a
       separate nullable column.
-- [ ] A room older than 12 hours is still listed, still has its server
+- A room older than 12 hours is still listed, still has its server
       copies and durable content, and `admit` admits it.
-- [ ] Visiting or POSTing that room does not delete it.
-- [ ] No background cleanup deletes rooms.
-- [ ] Host can open it from the dashboard.
-- [ ] Tests that encoded "age deletes" now encode "age persists".
-- [ ] TDD on the seams above, through `admit` / `getRoomBySlug` /
+- Visiting or POSTing that room does not delete it.
+- No background cleanup deletes rooms.
+- Host can open it from the dashboard.
+- Tests that encoded "age deletes" now encode "age persists".
+- TDD on the seams above, through `admit` / `getRoomBySlug` /
       `listRooms` / the page load. Not through SQL text.
-- [ ] Coverage: legacy row (`guest_lock_at` null), row with a distinct
+- Coverage: legacy row (`guest_lock_at` null), row with a distinct
       `guest_lock_at`, unknown slug, old room still listed.
-- [ ] E2E: create a room, it stays on the dashboard, the host can open
+- E2E: create a room, it stays on the dashboard, the host can open
       it. Do not forge `created_at` from Playwright. Age is the unit seam.
-- [ ] Docs: CONTEXT.md **Research Eval Log** replaces "Rooms still
+- Docs: CONTEXT.md **Research Eval Log** replaces "Rooms still
       expire" with "Rooms stay until an explicit delete." CONTEXT.md
       **Usage Dashboard** says a room is not removed for being old.
       AGENTS.md gains one line: age does not delete a room; do not

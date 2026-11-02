@@ -71,25 +71,28 @@ The row stays "Guests locked" / "Open to guests". No per-guest roster.
 
 **Leaves:** bulk actions (06). Do not change `deleteRoom`.
 
-**Status:** ready-for-agent
+**Status:** implemented. See [current behavior and verification](../../../docs/implementation/dashboard-room-management.md).
 
-- [ ] Both env vars documented in the repo README with their defaults.
-- [ ] A guest with a long server copy and stale access cannot join. The
+The acceptance list below is retained as the original design; naming
+and behavioral changes are recorded in that implementation note.
+
+- Both env vars documented in the repo README with their defaults.
+- A guest with a long server copy and stale access cannot join. The
       room remains. The host can enter.
-- [ ] A short or missing server copy does not inactivity-lock.
-- [ ] Two guests: only the one who meets both conditions is refused.
-- [ ] Unlock clears it, through `admit` afterwards.
-- [ ] A successful join refreshes access. A refused join does not.
-- [ ] HTTP `admit` without `clientId` does not apply inactivity. The
+- A short or missing server copy does not inactivity-lock.
+- Two guests: only the one who meets both conditions is refused.
+- Unlock clears it, through `admit` afterwards.
+- A successful join refreshes access. A refused join does not.
+- HTTP `admit` without `clientId` does not apply inactivity. The
       socket join cannot skip `admit`.
-- [ ] TDD on the seams above.
-- [ ] Coverage: both boundaries, host exemption, unlock, missing access
+- TDD on the seams above.
+- Coverage: both boundaries, host exemption, unlock, missing access
       row, second guest.
-- [ ] E2E is not a stand-in for the clock. Playwright: a room the unit
+- E2E is not a stand-in for the clock. Playwright: a room the unit
       tests would call open still shows "Open to guests", and Unlock
       still leaves the created date unchanged. The refusal grid is the
       unit seam.
-- [ ] Docs: CONTEXT.md **Guest lock** lists both rules and says the
+- Docs: CONTEXT.md **Guest lock** lists both rules and says the
       inactivity rule is per browser `clientId` plus that guest's server
       copy, not per display name. Say that a long server copy with no
       recorded access is locked until Unlock.

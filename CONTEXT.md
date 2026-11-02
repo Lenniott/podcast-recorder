@@ -186,15 +186,23 @@ same as the create form) showing Research Assistant cost/usage across every
 room — running totals plus a per-room breakdown — and the **Custom
 Prompt** list editor. The per-room table has a search box that filters the
 loaded rooms by name or slug, a room-name link that enters that room, and
-each row's original created date. Each row also shows whether guests are
-locked, an **Unlock** control, and a **Delete** control. Delete is the
+each row's original created date. The **Room code** column shows the join
+password, or "Unavailable" for an older room whose plaintext code was not
+stored. These codes are only returned past the dashboard's site-password
+gate. Each row has a **Guest access** badge: **Guests locked** with a lock
+icon, or **Open to guests** with a check. The **Actions** column groups
+**Unlock** (only while guests are locked) with **Delete**, and remains
+visible while the table scrolls horizontally. Delete is the
 only way a room disappears: the room, its server audio, research entries,
 tab content, transcript, and annotations are removed. Local recordings
 on each computer are not. The host can select several rows. Select-all
 selects the rows the current search is showing, not rooms the search is
-hiding. **Unlock selected** unlocks that set. **Delete selected** confirms
+hiding. **Unlock selected** is enabled only when locked rooms are selected
+and unlocks only those rooms. **Delete selected** confirms
 once, then fully removes every selected room the same way the one-row
-delete does. An unknown slug is skipped and does not abort the rest.
+delete does. An unknown slug is skipped and named in the dashboard without
+aborting the rest. Explicit delete also removes that room's guest-access
+records.
 A guest-locked room stays listed. Not a separate page or route.
 _Avoid_: admin panel, token dashboard (ambiguous with session/auth tokens),
 usage page

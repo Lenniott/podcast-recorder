@@ -2,3 +2,4 @@ Tue 25 Aug 07:40am: ticket 3: resync duck and recording after WS reconnect so th
 Thu 10 Sep 01:36pm: cleared unused WaveformPanel dbLevel prop and RoomTabs .notes-toolbar CSS
 Wed 28 Oct 05:03pm: No-signal chunks ask for the next live mic after 3s; dropdown follows the switch.
 Wed 28 Oct 05:15pm: Removed unread mic muted field and the stale prolonged-silence note.
+Mon 2 Nov 03:48pm: Rebased dashboard room-management onto main; kept guest clientId on the password gate and pointed recording tests at getRoomBySlug.

@@ -1,11 +1,17 @@
 # Dashboard room management
 
-Work the **frontier**: the lowest-numbered ticket whose blockers are done.
-If you are told "work on the dashboard tickets", start at `issues/01` and
-continue only after that ticket's **Definition of done** is fully checked.
-One ticket at a time. Inside a ticket, one red → green slice at a time.
-Do not batch several tickets, and do not write the ticket's tests in a
-block before any implementation.
+**Status (2 November 2026): all six feature slices are implemented.**
+The acceptance notes below are the original design. Current interfaces and
+behavior are documented in `CONTEXT.md`, `AGENTS.md`, and
+[the implementation record](../../docs/implementation/dashboard-room-management.md).
+In particular, the shipped module is `guest-join.js`, guest access is stamped
+only after admission, and missing access is stale. Do not rebuild the old
+`guest-admission.js` interface or add a second gate from these design notes.
+
+
+The original delivery workflow was one ticket at a time, with a failing
+behavioral test before each implementation slice. Feature delivery is complete;
+use the current interfaces in the implementation record when fixing regressions.
 
 ## What this line is
 
