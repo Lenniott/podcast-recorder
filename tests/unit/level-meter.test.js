@@ -40,12 +40,21 @@ describe('createLevelMeter', () => {
     expect(states.at(-1).peakHoldDb).toBe(METER_MIN)
   })
 
-  it('reports clipping for near-full-scale peaks and clears it after 2 seconds', () => {
+  it('does not report clipping for peaks below full scale', () => {
+    vi.useFakeTimers()
+    const meter = createLevelMeter()
+    meter.handleLevel(0.1, 0.97)
+    expect(meter.state.peakHoldDb).toBeGreaterThan(-0.5)
+    expect(meter.state.isClipping).toBe(false)
+    meter.close()
+  })
+
+  it.each([1, 1.1])('reports full-scale or over-range peaks (%s) and clears after 2 seconds', peak => {
     vi.useFakeTimers()
     const states = []
     const meter = createLevelMeter({ onState: (state) => states.push(state) })
 
-    meter.handleLevel(0.1, 1)
+    meter.handleLevel(0.1, peak)
     expect(states.at(-1).isClipping).toBe(true)
 
     vi.advanceTimersByTime(2000)

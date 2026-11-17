@@ -51,9 +51,10 @@
               : "No microphone found"}</option
           >
         {:else}
-          {#each devices as d (d.deviceId)}
+          <!-- Browsers that hide device ids list each input with id "". -->
+          {#each devices as d, i (d.deviceId || `unnamed-${i}`)}
             <option value={d.deviceId}
-              >{d.label || `Microphone ${d.deviceId.slice(0, 8)}`}</option
+              >{d.label || `Microphone ${i + 1}`}</option
             >
           {/each}
         {/if}
@@ -71,9 +72,8 @@
       {/if}
       {#if micFallback}
         <p class="fallback-warn">
-          <AlertTriangle /> Previous microphone had no signal — switched to
-          <strong>{micFallbackName}</strong>. Recording continues. Reconnect it
-          or pick another above.
+          <AlertTriangle /> Microphone disconnected — recording continued on
+          <strong>{micFallbackName}</strong>.
         </p>
       {/if}
     </div>

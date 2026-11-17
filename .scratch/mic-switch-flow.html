@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mic levels over the switch</title>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<style>
+  :root {
+    --ink: #1c1915;
+    --muted: #5e584f;
+    --line: #d9d2c5;
+    --paper: #f4efe6;
+    --card: #fffdf8;
+    --yeti: #1f6b4a;
+    --web: #9a3412;
+    --floor: #8a5a12;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.4 "Iowan Old Style", Palatino, Georgia, serif;
+    padding: 24px 18px 48px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 26px; font-weight: 560; letter-spacing: -0.03em; margin: 0 0 6px; }
+  .lede { color: var(--muted); max-width: 70ch; margin: 0 0 16px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  button, input[type="range"] { font: inherit; }
+  button {
+    background: var(--card); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 999px; padding: 7px 12px; cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .scrub { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; }
+  .scrub input { flex: 1; accent-color: var(--ink); }
+  .scrub output { min-width: 5.5ch; font-variant-numeric: tabular-nums; }
+  .layout { display: grid; grid-template-columns: 1.4fr 0.8fr; gap: 16px; }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  svg { width: 100%; height: auto; display: block; }
+  .axis { fill: var(--muted); font-size: 11px; font-family: ui-sans-serif, sans-serif; }
+  .readout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 0; }
+  .readout div { min-width: 0; }
+  .readout dt { color: var(--muted); font-size: 13px; }
+  .readout dd { margin: 0; font-variant-numeric: tabular-nums; font-size: 18px; }
+  .selected { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 8px; }
+  .selected dd { font-size: 22px; }
+  .why { margin: 10px 0 0; color: var(--muted); font-size: 15px; }
+  .log { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .log li { padding: 3px 0; border-top: 1px solid var(--line); }
+  .log time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  .missing { display: none; color: var(--web); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Same room, four programs</h1>
+  <p class="lede">One quiet podcast mic and one webcam that never quite goes silent. The lines are a reconstruction of the 500&nbsp;ms probe and the 0.0001 floor, not a captured take. Drag the time, or switch program while it plays: only the decision changes.</p>
+  <div class="toolbar" role="group" aria-label="Program">
+    <button type="button" data-mode="today" aria-pressed="true">Current code</button>
+    <button type="button" data-mode="unplug">Unplug only</button>
+    <button type="button" data-mode="warn">Warn, don’t switch</button>
+    <button type="button" data-mode="before">Choose before the take</button>
+    <button type="button" id="play">Pause</button>
+  </div>
+  <div class="scrub">
+    <label for="time">Time</label>
+    <input id="time" type="range" min="0" max="6000" value="0" step="50">
+    <output id="clock">0.00s</output>
+  </div>
+  <div class="layout">
+    <div class="panel">
+      <svg id="chart" viewBox="0 0 640 250" role="img" aria-label="Microphone level in dBFS over six seconds"></svg>
+    </div>
+    <div class="panel">
+      <dl class="readout" id="readout"></dl>
+      <p class="why" id="why"></p>
+      <ol class="log" id="log"></ol>
+    </div>
+  </div>
+  <p class="missing" id="missing">GSAP did not load, so the clock will not run. The scrubber still moves the values.</p>
+</main>
+<script>
+const FLOOR = 0.0001
+const DURATION = 6
+const yeti = t => (t >= 4.5 && t < 5.35) ? 0.055 + 0.012 * Math.sin(t * 46) : 0.00002
+const webcam = t => 0.0032 + 0.0004 * Math.sin(t * 19)
+const db = rms => 20 * Math.log10(Math.max(rms, 1e-8))
+const fmt = rms => rms.toFixed(5)
+const mean = (fn, a, b) => {
+  let sum = 0, n = 0
+  for (let t = a; t <= b + 1e-9; t += 0.05) { sum += fn(t); n++ }
+  return sum / Math.max(1, n)
+}
+
+const YETI_PROBE = mean(yeti, 0.2, 0.7)
+const WEB_PROBE = mean(webcam, 0.7, 1.2)
+
+function decide(mode, t) {
+  const y = yeti(t)
+  const w = webcam(t)
+  const base = {
+    yeti: y, webcam: w,
+    probe: "—", probeRms: null, probeLabel: "—",
+    changes: 0, stored: "yeti-a", list: "yeti-a, webcam",
+    selected: "Yeti", track: "live", banner: "",
+    why: "Yeti is the saved device. Its track is live."
+  }
+  if (mode === "today") {
+    if (t < 0.2) return { ...base, why: "Opened Yeti. Nothing has been measured yet." }
+    if (t < 0.7) return {
+      ...base, probe: "Yeti", probeRms: mean(yeti, 0.2, t), probeLabel: "measuring",
+      why: "The probe is reading the stream already open. A quiet room stays under 0.0001."
+    }
+    if (t < 1.2) return {
+      ...base, probe: "Webcam", probeRms: mean(webcam, 0.7, t), probeLabel: "measuring",
+      changes: 1, list: "yeti-b, webcam",
+      why: "Opening the webcam for a look fired devicechange. The list now calls the same Yeti yeti-b."
+    }
+    return {
+      ...base, changes: 2, stored: "webcam", list: "yeti-b, webcam",
+      selected: "Webcam", banner: "Previous microphone had no signal",
+      probe: "done", probeRms: WEB_PROBE, probeLabel: WEB_PROBE > FLOOR ? "signal" : "no-signal",
+      why: `Yeti’s probe was ${fmt(YETI_PROBE)} (no-signal). Webcam’s was ${fmt(WEB_PROBE)} (signal). Stored id yeti-a is gone, so the signal mic wins. Yeti’s track never ended.`
+    }
+  }
+  if (mode === "unplug") {
+    return {
+      ...base,
+      why: t < 4.5
+        ? "No other mic is opened, so this program never makes a devicechange. The track stays live, and silence is not a reason to leave."
+        : "Speech arrived on the same stream. The file never changed device."
+    }
+  }
+  if (mode === "warn") {
+    const quiet = y > FLOOR ? 0 : Math.min(t, 4.5)
+    const warning = quiet >= 3
+    return {
+      ...base,
+      probe: warning ? "warning" : "meter",
+      probeRms: y,
+      probeLabel: warning ? `quiet ${quiet.toFixed(1)}s` : `${quiet.toFixed(1)}s under the floor`,
+      banner: warning ? "Yeti is quiet" : "",
+      why: warning
+        ? "The analyser on the recording stream has been under 0.0001 for 3 seconds. The input stays Yeti."
+        : y > FLOOR
+          ? "Speech crossed the floor. The warning clears. Still Yeti."
+          : "Counting quiet time on the stream being recorded. Other mics stay closed."
+    }
+  }
+  const recording = t >= 1.5
+  return {
+    ...base,
+    probe: recording ? "locked" : "mic step",
+    probeLabel: recording ? "take" : "listening",
+    why: recording
+      ? "Continue already locked Yeti. A later unplug could still replace it. This silence does not."
+      : "They are still on the mic step, hearing this meter. Nothing is probed in the background."
+  }
+}
+
+const eventsFor = {
+  today: [
+    [0, "Opened Yeti as yeti-a."],
+    [0.2, "Probe started on the live Yeti stream."],
+    [0.7, "Yeti probe 0.00002, no-signal. Opened Webcam. devicechange 1. List id is now yeti-b."],
+    [1.2, "Webcam probe 0.00320, signal. devicechange 2. yeti-a is missing. Switched to Webcam."],
+    [4.5, "Yeti finally gets speech. The recording input is already the webcam."]
+  ],
+  unplug: [
+    [0, "Opened Yeti. Other inputs stay closed."],
+    [1.2, "Current code would switch here. This program still sees a live Yeti track."],
+    [4.5, "Speech is on Yeti. Same device as at 0.00s."]
+  ],
+  warn: [
+    [0, "Opened Yeti. The meter is the recording analyser."],
+    [3, "Quiet for 3.0s. Warning only. Input unchanged."],
+    [4.5, "Speech crosses 0.0001. Warning clears."]
+  ],
+  before: [
+    [0, "Mic step. The meter is Yeti, and that is the choice."],
+    [1.5, "Continue. The take locks Yeti."],
+    [4.5, "Speech on the locked device."]
+  ]
+}
+
+const chart = document.getElementById("chart")
+const NS = "http://www.w3.org/2000/svg"
+function el(name, attrs) {
+  const node = document.createElementNS(NS, name)
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
+  return node
+}
+const plot = { x: 46, y: 16, w: 580, h: 190 }
+const xOf = t => plot.x + (t / DURATION) * plot.w
+const yOf = value => {
+  const d = Math.min(0, Math.max(-100, db(value)))
+  return plot.y + ((0 - d) / 100) * plot.h
+}
+function pathUntil(fn, t) {
+  let d = ""
+  for (let s = 0; s <= t + 1e-9; s += 0.05) {
+    d += (d ? "L" : "M") + xOf(s).toFixed(1) + " " + yOf(fn(s)).toFixed(1) + " "
+  }
+  return d
+}
+chart.append(
+  el("line", { x1: plot.x, y1: yOf(FLOOR), x2: plot.x + plot.w, y2: yOf(FLOOR), stroke: "#8a5a12", "stroke-dasharray": "4 4" }),
+  el("text", { x: plot.x + 4, y: yOf(FLOOR) - 4, class: "axis" }),
+  el("text", { x: 8, y: plot.y + 10, class: "axis" }),
+  el("text", { x: 8, y: plot.y + plot.h, class: "axis" }),
+  el("path", { id: "yeti-line", fill: "none", stroke: "#1f6b4a", "stroke-width": 2 }),
+  el("path", { id: "web-line", fill: "none", stroke: "#9a3412", "stroke-width": 2 }),
+  el("line", { id: "head", y1: plot.y, y2: plot.y + plot.h, stroke: "#1c1915" }),
+  el("line", { id: "mark", x1: xOf(1.2), x2: xOf(1.2), y1: plot.y, y2: plot.y + plot.h, stroke: "#9a3412", "stroke-dasharray": "2 3" })
+)
+chart.querySelectorAll(".axis")[0].textContent = "floor 0.0001  ·  −80 dBFS"
+chart.append(
+  el("circle", { cx: 48, cy: 232, r: 4, fill: "#1f6b4a" }),
+  el("text", { x: 58, y: 236, class: "axis" }),
+  el("circle", { cx: 130, cy: 232, r: 4, fill: "#9a3412" }),
+  el("text", { x: 140, y: 236, class: "axis" })
+)
+const labels = chart.querySelectorAll(".axis")
+labels[labels.length - 2].textContent = "Yeti, the saved mic"
+labels[labels.length - 1].textContent = "Webcam, always a little noise"
+chart.querySelectorAll(".axis")[1].textContent = "0 dB"
+chart.querySelectorAll(".axis")[2].textContent = "−100"
+
+const clock = { t: 0 }
+let mode = "today"
+let tween
+
+function paint(t) {
+  const s = decide(mode, t)
+  document.getElementById("yeti-line").setAttribute("d", pathUntil(yeti, t))
+  document.getElementById("web-line").setAttribute("d", pathUntil(webcam, t))
+  document.getElementById("head").setAttribute("x1", xOf(t))
+  document.getElementById("head").setAttribute("x2", xOf(t))
+  document.getElementById("clock").textContent = t.toFixed(2) + "s"
+  document.getElementById("time").value = String(Math.round(t * 1000))
+  const probe = s.probeRms == null ? "—" : `${fmt(s.probeRms)}  ${s.probeLabel}`
+  document.getElementById("readout").innerHTML = `
+    <div><dt>Yeti now</dt><dd>${fmt(s.yeti)}</dd></div>
+    <div><dt>Webcam now</dt><dd>${fmt(s.webcam)}</dd></div>
+    <div><dt>Probe</dt><dd>${s.probe}</dd></div>
+    <div><dt>Probe RMS</dt><dd>${probe}</dd></div>
+    <div><dt>devicechange</dt><dd>${s.changes}</dd></div>
+    <div><dt>Track</dt><dd>${s.track}</dd></div>
+    <div><dt>Stored id</dt><dd>${s.stored}</dd></div>
+    <div><dt>List</dt><dd>${s.list}</dd></div>
+    <div class="selected"><dt>Recording input</dt><dd>${s.selected}${s.banner ? " — " + s.banner : ""}</dd></div>`
+  document.getElementById("why").textContent = s.why
+  document.getElementById("log").innerHTML = eventsFor[mode]
+    .filter(([when]) => when <= t + 0.001)
+    .map(([when, text]) => `<li><time>${when.toFixed(2)}s</time>${text}</li>`)
+    .join("")
+}
+
+function setMode(next) {
+  mode = next
+  for (const button of document.querySelectorAll("[data-mode]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.mode === next))
+  }
+  paint(clock.t)
+}
+
+document.querySelectorAll("[data-mode]").forEach(button => {
+  button.addEventListener("click", () => setMode(button.dataset.mode))
+})
+document.getElementById("time").addEventListener("input", event => {
+  clock.t = Number(event.target.value) / 1000
+  if (tween) tween.pause()
+  document.getElementById("play").textContent = "Play"
+  paint(clock.t)
+})
+document.getElementById("play").addEventListener("click", () => {
+  if (!tween) return
+  if (tween.paused()) {
+    if (clock.t >= DURATION) { clock.t = 0; tween.restart() }
+    else tween.play()
+    document.getElementById("play").textContent = "Pause"
+  } else {
+    tween.pause()
+    document.getElementById("play").textContent = "Play"
+  }
+})
+
+paint(0)
+if (window.gsap && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  tween = gsap.to(clock, {
+    t: DURATION, duration: 12, ease: "none", onUpdate: () => paint(clock.t),
+    onComplete: () => { document.getElementById("play").textContent = "Play" }
+  })
+} else {
+  document.getElementById("play").textContent = "Play"
+  if (!window.gsap) document.getElementById("missing").style.display = "block"
+  else paint(1.4)
+}
+</script>
+</body>
+</html>

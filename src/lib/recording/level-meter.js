@@ -36,7 +36,9 @@ export function createLevelMeter({
       }, 2000)
     }
 
-    if (peakDbNow >= -0.5) {
+    // The red meter already warns about low headroom. Reserve CLIP for
+    // samples reaching the full-scale boundary used by the WAV encoder.
+    if (peak >= 1) {
       isClipping = true
       clearTimer(clipTimer)
       clipTimer = setTimer(() => {

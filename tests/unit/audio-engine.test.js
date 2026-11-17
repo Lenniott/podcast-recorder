@@ -186,52 +186,85 @@ describe('createAudioEngine', () => {
     }))
   })
 
-  it('fallback reconnect keeps the selected device when it is still available', async () => {
+  it('reopens the only listed device after its track ends without a fallback notice', async () => {
     installAudioGlobals()
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => createStream()) } })
+    const first = createStream('Mic 1')
+    const second = createStream('Mic 1')
+    const getUserMedia = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
     const { engine, calls } = createEngine()
 
     await engine.init()
     calls.setMicFallback.mockClear()
     calls.setSelectedDeviceId.mockClear()
-    await engine.switchToBestMic()
+    first.track.onended()
+    await engine.requestMicrophone()
 
     expect(calls.loadDevices).toHaveBeenCalledOnce()
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: { deviceId: { exact: 'mic-1' } } })
     expect(calls.setMicFallback).toHaveBeenCalledWith(false)
     expect(calls.setSelectedDeviceId).toHaveBeenCalledWith('mic-1')
+    expect(first.track.stop).toHaveBeenCalledOnce()
   })
 
-  it('fallback reconnect switches to another listed microphone when the selected one fails', async () => {
+  it('after the track ends, a failed open falls through to the next listed microphone', async () => {
     installAudioGlobals()
-    const getUserMedia = vi
-      .fn()
-      .mockResolvedValueOnce(createStream('Mic 1'))
-      .mockRejectedValueOnce(new Error('selected gone'))
-      .mockResolvedValueOnce(createStream('Backup Mic'))
+    const first = createStream('Mic 1')
+    const opened = []
+    const getUserMedia = vi.fn(async constraints => {
+      const id = constraints.audio.deviceId.exact
+      opened.push(id)
+      if (id === 'mic-2') throw new Error('open failed')
+      if (id === 'mic-3') return createStream('Backup Mic')
+      return first
+    })
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
     const { engine, calls } = createEngine({
+      devices: [
+        { deviceId: 'mic-1', label: 'Mic 1' },
+        { deviceId: 'mic-2', label: 'Missing Mic' },
+        { deviceId: 'mic-3', label: 'Backup Mic' }
+      ]
+    })
+
+    await engine.init()
+    first.track.onended()
+    expect(await engine.requestMicrophone()).toBe(true)
+
+    expect(opened).toEqual(['mic-1', 'mic-2', 'mic-3'])
+    expect(calls.setSelectedDeviceId).toHaveBeenCalledWith('mic-3')
+    expect(calls.setMicFallback).toHaveBeenCalledWith(true)
+    expect(calls.setMicFallbackName).toHaveBeenCalledWith('Backup Mic')
+    expect(first.track.stop).toHaveBeenCalledOnce()
+  })
+
+  it('a failed open of the selected device during init does not try another listed device', async () => {
+    installAudioGlobals()
+    const getUserMedia = vi.fn(async () => { throw new Error('selected gone') })
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+    const { engine } = createEngine({
       devices: [
         { deviceId: 'mic-1', label: 'Mic 1' },
         { deviceId: 'mic-2', label: 'Backup Mic' }
       ]
     })
 
-    await engine.init()
-    await engine.switchToBestMic()
-
-    expect(calls.setSelectedDeviceId).toHaveBeenCalledWith('mic-2')
-    expect(calls.setMicFallback).toHaveBeenCalledWith(true)
-    expect(calls.setMicFallbackName).toHaveBeenCalledWith('Backup Mic')
+    await expect(engine.init()).rejects.toThrow('selected gone')
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: { deviceId: { exact: 'mic-1' } } })
   })
 
-  it('reports no available mic when every listed input fails', async () => {
+  it('reports no available mic when reconnecting the only listed input fails', async () => {
     installAudioGlobals()
-    const getUserMedia = vi.fn().mockResolvedValueOnce(createStream('Mic 1')).mockRejectedValue(new Error('no input'))
+    const stream = createStream('Mic 1')
+    const getUserMedia = vi.fn().mockResolvedValueOnce(stream).mockRejectedValue(new Error('no input'))
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
     const { engine, calls } = createEngine()
     await engine.init()
-    expect(await engine.switchToBestMic()).toBe(false)
+    stream.track.onended()
+    expect(await engine.requestMicrophone()).toBe(false)
     expect(calls.gaps).toEqual([expect.objectContaining({ code: 'mic-disconnected' })])
+    expect(stream.track.stop).not.toHaveBeenCalled()
   })
 
   it('close stops tracks and closes the context', async () => {
@@ -302,8 +335,7 @@ it('asks once for a microphone while none is connected', async () => {
     expect(getUserMedia).toHaveBeenCalledTimes(1)
 
     stream.track.onended()
-    for (let i = 0; i < 10; i++) await Promise.resolve()
-    await engine.requestMicrophone()
+    await Promise.all(Array.from({ length: 10 }, () => engine.requestMicrophone()))
     expect(getUserMedia).toHaveBeenCalledTimes(2)
   } finally { vi.unstubAllGlobals() }
 })
@@ -341,24 +373,62 @@ it('keeps the working microphone connected when opening a replacement fails', as
   } finally { vi.unstubAllGlobals() }
 })
 
-it('refreshing the device list probes new inputs without switching away from a working mic', async () => {
-  vi.useFakeTimers()
+function busyError() {
+  return Object.assign(new Error('Could not start audio source'), { name: 'NotReadableError' })
+}
+
+it('on a device that holds one microphone at a time, releases the current one to switch', async () => {
+  installAudioGlobals()
+  const current = createStream('Phone mic')
+  const next = createStream('Headset')
+  const getUserMedia = vi.fn().mockResolvedValueOnce(current).mockRejectedValueOnce(busyError()).mockResolvedValueOnce(next)
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const harness = createEngine()
+    await harness.engine.init()
+    await harness.engine.changeMic('mic-2')
+    expect(current.track.stop).toHaveBeenCalledOnce()
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: { deviceId: { exact: 'mic-2' } } })
+    expect(harness.engine.micConnected).toBe(true)
+    expect(harness.selectedDeviceId).toBe('mic-2')
+    expect(harness.calls.gaps).toEqual([])
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('reopens the previous microphone when the released switch still cannot open the new one', async () => {
+  installAudioGlobals()
+  const current = createStream('Phone mic')
+  const reopened = createStream('Phone mic')
+  const getUserMedia = vi.fn().mockResolvedValueOnce(current)
+    .mockRejectedValueOnce(busyError()).mockRejectedValueOnce(busyError()).mockResolvedValueOnce(reopened)
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+  try {
+    const harness = createEngine()
+    await harness.engine.init()
+    await harness.engine.changeMic('mic-2')
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: { deviceId: { exact: 'mic-1' } } })
+    expect(reopened.track.stop).not.toHaveBeenCalled()
+    expect(harness.engine.micConnected).toBe(true)
+    expect(harness.selectedDeviceId).toBe('mic-1')
+    expect(harness.calls.gaps).toEqual([expect.objectContaining({ code: 'mic-disconnected' })])
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('refreshing the device list leaves a live track open when its id is no longer listed', async () => {
   installAudioGlobals()
   const current = createStream('Current')
-  const added = createStream('Added')
-  const getUserMedia = vi.fn().mockResolvedValueOnce(current).mockResolvedValue(added)
+  const getUserMedia = vi.fn(async () => current)
   vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
   try {
     const devices = [{ deviceId: 'mic-1', label: 'Current' }]
     const { engine, calls } = createEngine({ devices })
     await engine.init()
-    devices.push({ deviceId: 'mic-2', label: 'Added' })
-    const refreshed = engine.refreshMicrophones()
-    await vi.runAllTimersAsync()
-    await refreshed
+    devices.splice(0, devices.length, { deviceId: 'other-id', label: 'Renamed' }, { deviceId: 'mic-2', label: 'Added' })
+    await engine.refreshMicrophones()
+    expect(getUserMedia).toHaveBeenCalledTimes(1)
     expect(current.track.stop).not.toHaveBeenCalled()
     expect(calls.micConnected).toHaveBeenCalledTimes(1)
-    expect(added.track.stop).toHaveBeenCalledTimes(1)
+    expect(calls.setMicFallback).not.toHaveBeenCalled()
     expect(engine.micConnected).toBe(true)
-  } finally { vi.unstubAllGlobals(); vi.useRealTimers() }
+  } finally { vi.unstubAllGlobals() }
 })

@@ -1,9 +1,13 @@
-import { createMicrophoneManager, assessMicrophone, openMicrophone, watchMicrophoneDisconnect } from './microphones.js'
+import { createMicrophoneManager, openMicrophone, watchMicrophoneDisconnect } from './microphones.js'
+
+// getUserMedia's "device in use" errors: NotReadableError in Chrome and
+// Safari, AbortError in Firefox.
+const MIC_BUSY_ERRORS = new Set(['NotReadableError', 'AbortError'])
 
 /**
  * WebAudio graph + mic resilience: AudioContext/worklet/analyser/gain-node
- * setup, connecting to a specific input device, and automatically falling
- * back if the current mic disappears mid-session.
+ * setup, connecting to one listed input, and opening another listed device
+ * only after that track ends.
  *
  * Device-list UI state stays page-local for Svelte reactivity. This module
  * reads/writes it through injected accessors.
@@ -15,7 +19,6 @@ export function createAudioEngine({
   onChunk,
   onIssue,
   onMicConnected,
-  onMicRanking,
   onAudioState,
   loadDevices,
   getDevices,
@@ -47,15 +50,12 @@ export function createAudioEngine({
   let microphoneRequest = null
   const microphones = createMicrophoneManager({
     list: async () => { await loadDevices(); return getDevices() },
-    assess: device => assessMicrophone(device, { audioContext: audioCtx,
-      stream: device.deviceId === micDeviceId ? micStream : undefined }),
     switchMic,
     getCurrentId: () => micDeviceId,
-    isConnected: () => micConnected,
-    onRanking: ranked => onMicRanking?.(ranked)
+    isConnected: () => micConnected
   })
 
-  // Detection only reports the event. Both this path and callers use the same switch function.
+  // The track ended. Ask for another listed device; a quiet open track never gets here.
   function micEnded() {
     micConnected = false
     void requestMicrophone()
@@ -64,21 +64,58 @@ export function createAudioEngine({
   function requestMicrophone() {
     if (micConnected) return Promise.resolve(true)
     if (microphoneRequest) return microphoneRequest
-    microphoneRequest = switchToBestMic()
+    const attempt = reconnectMicrophone()
       .catch(error => {
+        if (micConnected || error?.message === 'Microphone switch was superseded') return micConnected
         report('mic-disconnected', 'Microphone reconnect failed.', error)
         return false
       })
-      .finally(() => { if (micConnected) microphoneRequest = null })
-    return microphoneRequest
+    microphoneRequest = attempt
+    attempt.finally(() => { if (microphoneRequest === attempt) microphoneRequest = null })
+    return attempt
+  }
+
+  function superseded(version) {
+    return closed || version !== switchVersion
+  }
+
+  function releaseMic() {
+    unwatchMic()
+    unwatchMic = () => {}
+    micSource?.disconnect()
+    micStream?.getTracks().forEach(track => track.stop())
+    micSource = null
+    micStream = null
+    micConnected = false
   }
 
   async function switchMic(deviceId) {
     if (!audioCtx || closed) throw new Error('Audio engine is not available')
     const version = ++switchVersion
-    // Keep the existing input until its replacement has opened successfully.
-    const nextStream = await openMicrophone(deviceId)
-    if (closed || version !== switchVersion) {
+    let nextStream
+    try {
+      // Keep the existing input until its replacement has opened successfully.
+      nextStream = await openMicrophone(deviceId)
+    } catch (error) {
+      if (!micStream || !MIC_BUSY_ERRORS.has(error?.name) || superseded(version)) throw error
+      // Phones and tablets hold one microphone at a time, so the open input
+      // has to go before another can start. The worklet records zeros meanwhile.
+      const previousId = micDeviceId
+      releaseMic()
+      try {
+        nextStream = await openMicrophone(deviceId)
+      } catch (retryError) {
+        if (!superseded(version)) {
+          try { connectStream(await openMicrophone(previousId), previousId, version) } catch {}
+        }
+        throw retryError
+      }
+    }
+    connectStream(nextStream, deviceId, version)
+  }
+
+  function connectStream(nextStream, deviceId, version) {
+    if (superseded(version)) {
       nextStream.getTracks().forEach(track => track.stop())
       throw new Error('Microphone switch was superseded')
     }
@@ -110,22 +147,24 @@ export function createAudioEngine({
     onMicConnected?.()
   }
 
-  async function switchToBestMic(options) {
+  async function reconnectMicrophone() {
+    if (micConnected) return true
     const previous = micDeviceId
-    const switched = await microphones.switchToBestMic(options)
-    if (!switched) {
-      report('mic-disconnected', 'No microphone could be connected.')
-      return false
+    const opened = await microphones.openNextListed()
+    if (!opened) {
+      if (!micConnected) report('mic-disconnected', 'No microphone could be connected.')
+      return micConnected
     }
-    setMicFallback(micDeviceId !== previous)
-    setMicFallbackName(micStream.getAudioTracks()[0]?.label || 'Microphone')
+    const moved = previous !== '' && micDeviceId !== previous
+    setMicFallback(moved)
+    if (moved) setMicFallbackName(micStream.getAudioTracks()[0]?.label || 'Microphone')
     return true
   }
 
   async function refreshMicrophones() {
-    const devices = await microphones.listMicrophones()
-    if (microphones.detectMicDisconnect(devices)) await switchToBestMic()
-    return microphones.assessMicrophones()
+    await microphones.listMicrophones()
+    if (micConnected) return
+    await requestMicrophone()
   }
 
   async function init() {
@@ -229,15 +268,13 @@ export function createAudioEngine({
       try { await switchMic(deviceId); setMicFallback(false) } catch (error) {
         setSelectedDeviceId(micDeviceId)
         report('mic-disconnected', 'Selected microphone could not be connected.', error)
+        if (!micConnected && !closed) await requestMicrophone()
       }
     },
     switchMic,
-    switchToBestMic,
     requestMicrophone,
     refreshMicrophones,
     listMicrophones: microphones.listMicrophones,
-    assessMicrophones: microphones.assessMicrophones,
-    detectMicDisconnect: microphones.detectMicDisconnect,
     ensureRunning,
     setGain,
     scheduleClapTone,

@@ -121,8 +121,8 @@
   let micPermission = 'prompt' // prompt | granted | denied
   let openingMic = false
   let openingMicDepth = 0
-  let micFallback = false      // true when we auto-fell-back to a different mic
-  let micFallbackName = ''     // label of the fallback device
+  let micFallback = false      // true after the open track ended and recording continued on another listed mic
+  let micFallbackName = ''     // label of that microphone
 
   // ─── Audio recording state ──────────────────────────────────────────
   let audioEngineReady = false
@@ -354,14 +354,9 @@
       if (captureSession) captureSession.reportIssue(issue)
       else handleRecordingIssue(issue)
     },
-    onMicRanking(ranked) {
-      console.info('[recording] Microphone assessment: signal evidence, not hardware quality')
-      console.table(ranked.map((mic, index) => ({ priority: index + 1, label: mic.label,
-        deviceId: mic.deviceId, status: mic.status, rms: mic.rms, peak: mic.peak,
-        sampleRate: mic.settings?.sampleRate, channels: mic.settings?.channelCount, error: mic.error })))
-    },
     onMicConnected() {
       injectReconnectMarker()
+      void loadDevices()
     },
     onAudioState(state) {
       audioState = state
@@ -652,9 +647,9 @@
   async function requestMicPermission() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(t => t.stop())
       micPermission = 'granted'
-      await loadDevices()
+      // iOS Safari only lists real device ids and labels while capturing.
+      try { await loadDevices() } finally { stream.getTracks().forEach(t => t.stop()) }
     } catch (e) {
       micPermission = 'denied'
     }
@@ -714,7 +709,6 @@
   async function initializeAudioEngine() {
     await audioEngine.init()
     audioEngineReady = true
-    void audioEngine.assessMicrophones().catch(error => handleRecordingIssue({ code: 'mic-assessment-failed', severity: 'warning', destination: 'capture', message: 'Could not assess microphones.', error }))
     const analyser = audioEngine.getAnalyserNode()
     writtenRing = createWrittenAudioRing(analyser.fftSize)
     audioEngine.setGain(gainValue)
@@ -1461,7 +1455,7 @@
       if (audioEngineReady) await audioEngine.refreshMicrophones()
       else await loadDevices()
     } catch (error) {
-      handleRecordingIssue({ code: 'mic-assessment-failed', severity: 'warning', destination: 'capture', message: 'Could not refresh microphones.', error })
+      handleRecordingIssue({ code: 'mic-list-failed', severity: 'warning', destination: 'capture', message: 'Could not refresh microphones.', error })
     }
   }
 
