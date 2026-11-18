@@ -120,3 +120,47 @@ test('active local recording warns before in-app navigation', async ({ page }) =
   expect(message).not.toContain('server copy')
   await expect(page).toHaveURL(roomUrl)
 })
+
+test('closing the tab during a recording asks the browser to confirm', async ({ page }) => {
+  await stubYouTubeApi(page)
+  const password = 'rec-close-tab'
+  await createRoom(page, { name: `E2E Rec Close Tab ${Date.now()}`, password })
+
+  await expect(page.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await page.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(page.getByRole('button', { name: 'Stop Recording' })).toBeVisible()
+
+  const dialog = page.waitForEvent('dialog')
+  await page.close({ runBeforeUnload: true })
+  const shown = await dialog
+  expect(shown.type()).toBe('beforeunload')
+  await shown.dismiss()
+  expect(page.isClosed()).toBe(false)
+})
+
+// The guest is the fixture page: a page opened with browser.newPage() closes
+// without surfacing a beforeunload dialog here, even when its handler blocks.
+test('a guest whose recording the host started is warned before closing the tab', async ({ browser, page: guest }) => {
+  const host = await browser.newPage()
+  await stubYouTubeApi(host)
+  const password = 'rec-guest-close'
+  const roomUrl = await createRoom(host, { name: `E2E Rec Guest Close ${Date.now()}`, password })
+
+  await stubYouTubeApi(guest)
+  await joinAsGuest(guest, roomUrl, { name: 'Alex', password })
+
+  await expect(host.getByRole('button', { name: 'Start Recording' })).toBeEnabled()
+  await host.getByRole('button', { name: 'Start Recording' }).click()
+  await expect(guest.getByRole('button', { name: 'Request to stop recording' })).toBeVisible()
+  await expect(guest.locator('.stats-bar .recording-stat')).toBeVisible()
+
+  const dialog = guest.waitForEvent('dialog')
+  await guest.close({ runBeforeUnload: true })
+  const shown = await dialog
+  expect(shown.type()).toBe('beforeunload')
+  await shown.dismiss()
+  expect(guest.isClosed()).toBe(false)
+
+  await guest.close()
+  await host.close()
+})
