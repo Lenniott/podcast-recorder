@@ -48,6 +48,13 @@
       {onChangeMic}
       {onGainInput}
     />
+    <div class="mobile-note" data-testid="mobile-recording-note">
+      <p class="mobile-note-title">Recording on a phone or tablet?</p>
+      <ul>
+        <li>Keep this tab open and on screen. Switching apps or locking the screen pauses the mic.</li>
+        <li>Join the call (Teams, WhatsApp, Zoom…) on a different device. A call on this one takes over its microphone.</li>
+      </ul>
+    </div>
     <button type="button" class="btn-primary btn-block" data-room-continue onclick={continueToRoom} disabled={loadingRoom} aria-busy={loadingRoom}>
       {loadingRoom ? 'Loading room...' : 'Continue to room'}
     </button>
@@ -92,5 +99,35 @@
 
   .btn-block {
     margin-top: 16px;
+  }
+
+  /* Touch-first devices only: a narrow desktop window has no such limits. */
+  .mobile-note {
+    display: none;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+
+  @media (pointer: coarse) {
+    .mobile-note {
+      display: block;
+    }
+  }
+
+  .mobile-note-title {
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+
+  .mobile-note ul {
+    margin: 0;
+    padding-left: 18px;
   }
 </style>
