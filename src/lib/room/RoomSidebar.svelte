@@ -1,5 +1,12 @@
 <script>
-  import { ChevronLeft, ChevronRight, Download02, Mic } from "$lib/icons";
+  import {
+    ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronUp,
+    Download02,
+    Mic,
+  } from "$lib/icons";
   import RoomDetailsPanel from "./RoomDetailsPanel.svelte";
   import MicPanel from "../recording/MicPanel.svelte";
   import WaveformPanel from "../recording/WaveformPanel.svelte";
@@ -8,6 +15,10 @@
   import ServerCopyFilesModal from "../server-copy/ServerCopyFilesModal.svelte";
 
   export let collapsed = false;
+  // Narrow viewport: the sidebar becomes the room's persistent top header,
+  // and `collapsed` means "one row of record controls" rather than "72px
+  // column". Same components and bindings either way.
+  export let mobile = false;
 
   export let roomName;
   export let slug;
@@ -57,9 +68,9 @@
   let filesModalOpen = false;
 </script>
 
-<aside class="room-sidebar" class:collapsed>
+<aside class="room-sidebar" class:collapsed class:mobile>
   <div class="room-sidebar-header">
-    {#if !collapsed}
+    {#if !collapsed || mobile}
       <div class="room-sidebar-header-name">
         <span class="room-sidebar-header-icon"><Mic /></span>
         {roomName}
@@ -70,10 +81,25 @@
         type="button"
         class="btn-ghost btn-icon btn-sm collapse-toggle"
         on:click={() => (collapsed = !collapsed)}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={mobile ? !collapsed : undefined}
+        aria-label={mobile
+          ? collapsed
+            ? "Show recording controls"
+            : "Hide recording controls"
+          : collapsed
+            ? "Expand sidebar"
+            : "Collapse sidebar"}
+        title={mobile
+          ? collapsed
+            ? "Show recording controls"
+            : "Hide recording controls"
+          : collapsed
+            ? "Expand sidebar"
+            : "Collapse sidebar"}
       >
-        {#if collapsed}
+        {#if mobile}
+          {#if collapsed}<ChevronDown />{:else}<ChevronUp />{/if}
+        {:else if collapsed}
           <ChevronRight />
         {:else}
           <ChevronLeft />
@@ -82,7 +108,7 @@
     </div>
   </div>
 
-  <div class="record-controls-container">
+  <div class="record-controls-container" class:mobile-strip={mobile && collapsed}>
     {#if !collapsed}
       <section class="sidebar-section">
         <MicPanel
@@ -131,6 +157,7 @@
         {formatTime}
         {formatBytes}
         compact={collapsed}
+        inline={mobile && collapsed}
       />
       {#if !collapsed}
         <LocalCopyList
@@ -245,5 +272,33 @@
     font-size: 12px;
     font-weight: 400;
     color: var(--muted);
+  }
+
+  .room-sidebar.mobile {
+    gap: 10px;
+    padding: 10px 12px;
+    max-height: 60dvh;
+    border-width: 0 0 1px;
+  }
+  .room-sidebar.mobile .room-sidebar-header-name {
+    min-width: 0;
+    font-weight: 600;
+  }
+  .room-sidebar.mobile.collapsed .header-actions {
+    margin-left: auto;
+    width: auto;
+  }
+  .room-sidebar.mobile .record-controls-container {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  .record-controls-container.mobile-strip {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  .record-controls-container.mobile-strip .room-visualization {
+    flex: 1;
+    min-width: 0;
   }
 </style>
